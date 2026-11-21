@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "kanban",
+      "credentials": [{ "accessKey": "change-me", "secretKey": "change-me-long-random" }],
+      "actions": ["Read", "Write", "List", "Tagging", "Admin"]
+    }
+  ]
+}

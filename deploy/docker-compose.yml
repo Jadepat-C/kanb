@@ -1,0 +1,92 @@
+# Kanban stack for the home server.  Suggested location: /srv/appdata/docker/kanban/docker-compose.yml
+# Data lives under /srv/appdata/kanban/ so the btrfs snapshots pick it up.
+#
+# Only the app is published, and only on the Tailscale IP. Postgres and SeaweedFS have NO published
+# ports: they are reachable solely on the internal `kanban-net` network. Files are streamed through
+# the app after a permission check, so the object store is never exposed (unlike kan.bn's public S3).
+#
+# Names are deliberately distinct from any other stack on the host.
+
+services:
+  app:
+    # Built on the main PC and shipped with `docker save | ssh ... docker load` (see README), so:
+    #  - pull_policy never: your update script's `compose pull` must not look for it on Docker Hub
+    #  - diun.enable false: Diun watches by default and would query Docker Hub for it daily
+    image: kanban:latest
+    pull_policy: never
+    labels:
+      diun.enable: "false"
+    container_name: kanban-app
+    env_file:
+      - /srv/appdata/docker/kanban/secrets/app.env
+    environment:
+      S3_ENDPOINT: http://kanban-s3:8333
+      S3_BUCKET: kanban
+      COOKIE_SECURE: "true"
+      MAX_UPLOAD_MB: "50"
+    ports:
+      - "100.64.12.34:3040:8080"   # Tailscale only; VPS nginx proxies here
+    depends_on:
+      db:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+    networks: [kanban-net]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+        reservations: { memory: 32M }
+    restart: unless-stopped
+    logging: &logging
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  db:
+    image: postgres:18-alpine
+    container_name: kanban-db
+    env_file:
+      - /srv/appdata/docker/kanban/secrets/db.env   # POSTGRES_PASSWORD=...
+    environment:
+      POSTGRES_USER: kanban
+      POSTGRES_DB: kanban
+    volumes:
+      # postgres 18 images keep data in /var/lib/postgresql/<major>/docker
+      - /srv/appdata/kanban/postgres:/var/lib/postgresql:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kanban -d kanban"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [kanban-net]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 384M }
+        reservations: { memory: 64M }
+    restart: unless-stopped
+    logging: *logging
+
+  s3:
+    image: chrislusf/seaweedfs:4.52
+    container_name: kanban-s3
+    command: >-
+      server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+      -master.volumeSizeLimitMB=256 -volume.max=0
+    volumes:
+      - /srv/appdata/kanban/seaweedfs:/data:Z
+      - /srv/appdata/docker/kanban/secrets/seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro,Z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks: [kanban-net]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 384M }
+    restart: unless-stopped
+    logging: *logging
+
+networks:
+  kanban-net:
+    name: kanban-net

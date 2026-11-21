@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "kanban",
+      "credentials": [{ "accessKey": "devaccesskey", "secretKey": "devsecretkey" }],
+      "actions": ["Read", "Write", "List", "Tagging", "Admin"]
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+@import '@fontsource/ibm-plex-sans-thai/400.css';
+@import '@fontsource/ibm-plex-sans-thai/500.css';
+@import '@fontsource/ibm-plex-sans-thai/600.css';
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* IBM Plex Sans Thai covers both Thai and Latin, so mixed text shares one rhythm */
+  --font-sans: 'IBM Plex Sans Thai', ui-sans-serif, system-ui, sans-serif;
+  --color-accent: #4f46e5;
+}
+
+:root {
+  --bg: #f4f4f5;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --column: #ebebee;
+  --border: #e4e4e7;
+  --text: #18181b;
+  --muted: #71717a;
+  color-scheme: light;
+}
+.dark {
+  --bg: #0c0c0e;
+  --surface: #18181b;
+  --surface-2: #1f1f23;
+  --column: #141417;
+  --border: #2e2e33;
+  --text: #f4f4f5;
+  --muted: #a1a1aa;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* Thai has tall vowel/tone marks; give lines a little more room */
+  line-height: 1.55;
+}
+
+@utility bg-surface { background-color: var(--surface); }
+@utility bg-surface-2 { background-color: var(--surface-2); }
+@utility bg-app { background-color: var(--bg); }
+@utility bg-column { background-color: var(--column); }
+@utility border-line { border-color: var(--border); }
+@utility text-muted { color: var(--muted); }
+
+/* markdown body */
+.md {
+  overflow-wrap: anywhere;
+}
+.md img {
+  border-radius: 6px;
+  max-height: 480px;
+}
+.md li:has(> input[type='checkbox']) {
+  list-style: none;
+  margin-left: -1.25em;
+}
+.md input[type='checkbox'] {
+  margin-right: 0.4em;
+  vertical-align: middle;
+  accent-color: var(--color-accent);
+}
+.md-compact p,
+.md-compact ul,
+.md-compact ol {
+  margin: 0.25em 0;
+}
+
+/* CodeMirror */
+.cm-editor {
+  font-size: 14px;
+  border-radius: 8px;
+}
+.cm-editor.cm-focused {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+.cm-scroller {
+  font-family: ui-monospace, 'IBM Plex Mono', 'IBM Plex Sans Thai', monospace;
+}
+
+/* thin scrollbars on the board */
+.scroll-thin {
+  scrollbar-width: thin;
+}
+
+/* cmdk */
+[cmdk-item][data-selected='true'] {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}

@@ -1,0 +1,157 @@
+export type Theme = 'light' | 'dark' | 'system'
+export type Locale = 'en' | 'th'
+
+export interface User {
+  id: string
+  username: string
+  display_name: string
+  email: string | null
+  is_super_admin: boolean
+  can_create_boards: boolean
+  is_active: boolean
+  locale: Locale
+  theme: Theme
+  avatar_color: string
+  created_at: string
+}
+
+export interface UserBrief {
+  id: string
+  username: string
+  display_name: string
+  avatar_color: string
+}
+
+export interface BoardListItem {
+  id: string
+  name: string
+  description: string
+  color: string
+  updated_at: string
+  is_member: boolean
+  card_count: number
+  member_count: number
+}
+
+export interface Board {
+  id: string
+  name: string
+  description: string
+  color: string
+  created_at: string
+  updated_at: string
+}
+
+export interface List {
+  id: string
+  name: string
+  position: string
+  color: string | null
+  folded: boolean
+  wip_limit: number | null
+}
+
+export type CardStatus = 'normal' | 'blocked' | 'ready'
+
+export interface CardSummary {
+  id: string
+  list_id: string
+  number: number
+  title: string
+  position: string
+  priority: number
+  status: CardStatus
+  color: string | null
+  due_at: string | null
+  updated_at: string
+  label_ids: string[]
+  assignee_ids: string[]
+  comment_count: number
+  attachment_count: number
+  excerpt: string
+  checklist_total: number
+  checklist_done: number
+}
+
+export interface Label {
+  id: string
+  name: string
+  color: string
+}
+
+export interface Member {
+  user_id: string
+  username: string
+  display_name: string
+  avatar_color: string
+  role_id: string
+}
+
+export interface Role {
+  id: string
+  name: string
+  permissions: string[]
+  is_owner: boolean
+}
+
+export interface BoardDetail {
+  board: Board
+  my_permissions: string[]
+  my_role_id: string | null
+  all_permissions: string[]
+  lists: List[]
+  cards: CardSummary[]
+  labels: Label[]
+  members: Member[]
+  roles: Role[]
+}
+
+export interface Card {
+  id: string
+  board_id: string
+  list_id: string
+  number: number
+  title: string
+  description: string
+  priority: number
+  status: CardStatus
+  color: string | null
+  due_at: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  label_ids: string[]
+  assignee_ids: string[]
+}
+
+export interface Attachment {
+  id: string
+  filename: string
+  content_type: string
+  size: number
+  is_inline: boolean
+  uploaded_by: string | null
+  created_at: string
+}
+
+export interface CardDetail {
+  card: Card
+  attachments: Attachment[]
+}
+
+export type TimelineItem =
+  | { type: 'comment'; id: string; author_id: string | null; body: string; created_at: string; edited: boolean }
+  | { type: 'event'; id: number; actor_id: string | null; kind: string; data: Record<string, unknown>; created_at: string }
+
+export interface SearchResult {
+  boards: { id: string; name: string; color: string }[]
+  cards: {
+    id: string
+    board_id: string
+    board_name: string
+    list_name: string
+    number: number
+    title: string
+    snippet: string
+  }[]
+}

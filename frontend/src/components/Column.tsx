@@ -1,0 +1,251 @@
+import { useDroppable } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import clsx from 'clsx'
+import { ChevronsLeftRight, ChevronsRightLeft, Gauge, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useState, type FormEvent } from 'react'
+import { useTranslation } from 'react-i18next'
+import { api } from '../lib/api'
+import type { BoardHelpers } from '../lib/board'
+import type { CardSummary, List } from '../lib/types'
+import { CardTile, STATUS_COLOR } from './CardTile'
+import { toastError } from './toast'
+import { Button, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from './ui'
+
+export function Column({
+  list,
+  cards,
+  totalCount,
+  b,
+  boardId,
+  onOpen,
+  dragDisabled,
+}: {
+  list: List
+  cards: CardSummary[]
+  totalCount: number
+  b: BoardHelpers
+  boardId: string
+  onOpen: (id: string) => void
+  dragDisabled: boolean
+}) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const canManage = b.can('lists.manage')
+  const sortable = useSortable({ id: `list:${list.id}`, data: { type: 'list' }, disabled: !canManage })
+  const drop = useDroppable({ id: `drop:${list.id}`, data: { type: 'drop', listId: list.id } })
+  const [adding, setAdding] = useState<null | 'top' | 'bottom'>(null)
+  const [renaming, setRenaming] = useState(false)
+
+  const update = useMutation({
+    mutationFn: (p: Partial<List>) => api.patch(`/lists/${list.id}`, p),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
+    onError: toastError,
+  })
+  const remove = useMutation({
+    mutationFn: () => api.del(`/lists/${list.id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
+    onError: toastError,
+  })
+
+  const style = { transform: CSS.Translate.toString(sortable.transform), transition: sortable.transition }
+  const over = list.wip_limit != null && totalCount > list.wip_limit
+  const counts = { ready: 0, blocked: 0, normal: 0 } as Record<string, number>
+  cards.forEach((c) => counts[c.status]++)
+
+  if (list.folded) {
+    return (
+      <div
+        ref={(el) => {
+          sortable.setNodeRef(el)
+          drop.setNodeRef(el)
+        }}
+        style={style}
+        className={clsx(
+          'flex w-10 shrink-0 cursor-pointer flex-col items-center gap-2 rounded-xl bg-column py-3',
+          drop.isOver && 'ring-2 ring-accent',
+        )}
+        onClick={() => update.mutate({ folded: false })}
+        title={t('board.unfold')}
+        {...sortable.attributes}
+        {...sortable.listeners}
+      >
+        <ChevronsLeftRight size={14} className="text-muted" />
+        <span className="text-xs text-muted">{totalCount}</span>
+        <span className="text-sm font-medium [writing-mode:vertical-rl]">{list.name}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      ref={sortable.setNodeRef}
+      style={style}
+      className={clsx('flex max-h-full w-[288px] shrink-0 flex-col rounded-xl bg-column', sortable.isDragging && 'opacity-50')}
+    >
+      <div className="px-2 pt-2" {...sortable.attributes} {...sortable.listeners}>
+        <div className={clsx('flex items-center gap-1 px-1', canManage && 'cursor-grab')}>
+          {list.color && <span className="h-2.5 w-2.5 rounded-full" style={{ background: list.color }} />}
+          {renaming ? (
+            <form
+              className="flex-1"
+              onSubmit={(e: FormEvent<HTMLFormElement>) => {
+                e.preventDefault()
+                const v = new FormData(e.currentTarget).get('name') as string
+                if (v.trim()) update.mutate({ name: v.trim() })
+                setRenaming(false)
+              }}
+            >
+              <input
+                name="name"
+                defaultValue={list.name}
+                autoFocus
+                onBlur={(e) => e.currentTarget.form?.requestSubmit()}
+                onKeyDown={(e) => e.key === 'Escape' && setRenaming(false)}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="w-full rounded border border-line bg-surface px-1.5 py-0.5 text-sm font-semibold outline-none"
+              />
+            </form>
+          ) : (
+            <h3 className="flex-1 truncate text-sm font-semibold" onDoubleClick={() => canManage && setRenaming(true)}>
+              {list.name}
+            </h3>
+          )}
+          <span className={clsx('rounded px-1.5 text-xs', over ? 'bg-red-500/15 font-semibold text-red-600' : 'text-muted')}>
+            {totalCount}
+            {list.wip_limit != null && `/${list.wip_limit}`}
+          </span>
+          {b.can('cards.create') && (
+            <button
+              className="rounded p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+              onClick={() => setAdding('top')}
+              onPointerDown={(e) => e.stopPropagation()}
+              title={t('board.addCard')}
+            >
+              <Plus size={15} />
+            </button>
+          )}
+          <Menu>
+            <MenuTrigger asChild>
+              <button
+                className="rounded p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <MoreHorizontal size={15} />
+              </button>
+            </MenuTrigger>
+            <MenuContent>
+              <MenuItem onSelect={() => update.mutate({ folded: true })}>
+                <ChevronsRightLeft size={14} /> {t('board.fold')}
+              </MenuItem>
+              {canManage && (
+                <>
+                  <MenuItem onSelect={() => setRenaming(true)}>
+                    <Pencil size={14} /> {t('common.rename')}
+                  </MenuItem>
+                  <MenuItem
+                    onSelect={() => {
+                      const v = prompt(t('board.wipPrompt'), list.wip_limit?.toString() ?? '')
+                      if (v === null) return
+                      const n = parseInt(v, 10)
+                      update.mutate({ wip_limit: Number.isFinite(n) && n > 0 ? n : null })
+                    }}
+                  >
+                    <Gauge size={14} /> {t('board.wipLimit')}
+                  </MenuItem>
+                  <MenuSeparator />
+                  <MenuItem danger onSelect={() => confirm(t('common.confirmDelete')) && remove.mutate()}>
+                    <Trash2 size={14} /> {t('board.deleteList')}
+                  </MenuItem>
+                </>
+              )}
+            </MenuContent>
+          </Menu>
+        </div>
+        {/* Odoo-style status progress bar */}
+        {cards.length > 0 && (
+          <div className="mx-1 mt-2 flex h-1 overflow-hidden rounded-full bg-black/5 dark:bg-white/10">
+            {(['ready', 'blocked', 'normal'] as const).map((s) =>
+              counts[s] ? (
+                <div
+                  key={s}
+                  title={`${t(`card.status_${s}`)}: ${counts[s]}`}
+                  style={{ width: `${(counts[s] / cards.length) * 100}%`, background: STATUS_COLOR[s] }}
+                />
+              ) : null,
+            )}
+          </div>
+        )}
+      </div>
+
+      <div
+        ref={drop.setNodeRef}
+        className={clsx('scroll-thin flex min-h-12 flex-1 flex-col gap-2 overflow-y-auto p-2', drop.isOver && 'rounded-lg bg-accent/5')}
+      >
+        {adding === 'top' && <QuickAdd listId={list.id} boardId={boardId} at="top" onDone={() => setAdding(null)} />}
+        <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
+          {cards.map((c) => (
+            <CardTile key={c.id} card={c} b={b} onOpen={onOpen} disabled={dragDisabled} />
+          ))}
+        </SortableContext>
+        {adding === 'bottom' && <QuickAdd listId={list.id} boardId={boardId} at="bottom" onDone={() => setAdding(null)} />}
+      </div>
+      {b.can('cards.create') && adding !== 'bottom' && (
+        <button
+          onClick={() => setAdding('bottom')}
+          className="m-2 mt-0 flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+        >
+          <Plus size={15} /> {t('board.addCard')}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function QuickAdd({ listId, boardId, at, onDone }: { listId: string; boardId: string; at: 'top' | 'bottom'; onDone: () => void }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const [title, setTitle] = useState('')
+  const m = useMutation({
+    mutationFn: (title: string) => api.post(`/lists/${listId}/cards`, { title, at }),
+    onSuccess: () => {
+      setTitle('')
+      qc.invalidateQueries({ queryKey: ['board', boardId] })
+    },
+    onError: toastError,
+  })
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (title.trim()) m.mutate(title.trim())
+      }}
+      className="space-y-2"
+    >
+      <textarea
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        autoFocus
+        rows={2}
+        placeholder={t('board.cardTitle')}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            e.currentTarget.form?.requestSubmit()
+          }
+          if (e.key === 'Escape') onDone()
+        }}
+        className="w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-sm shadow-sm outline-none focus:ring-2 focus:ring-accent/60"
+      />
+      <div className="flex gap-2">
+        <Button variant="primary" size="sm" disabled={m.isPending}>
+          {t('common.add')}
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={onDone}>
+          {t('common.cancel')}
+        </Button>
+      </div>
+    </form>
+  )
+}
