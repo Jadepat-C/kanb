@@ -162,9 +162,9 @@ export function Boards() {
             <LogOut size={14} /> {t('settings.leave')}
           </MItem>
         )}
-        {b.can_delete && (
+        {(b.can_archive || b.can_delete) && <MSep M={CTX} />}
+        {b.can_archive && (
           <>
-            <MSep M={CTX} />
             {isArchived ? (
               <MItem M={CTX} onSelect={() => run.mutate({ f: () => api.post(`/boards/${b.id}/restore`), msg: t('toast.boardRestored', { name: b.name }) })}>
                 <ArchiveRestore size={14} /> {t('archive.restore')}
@@ -174,6 +174,10 @@ export function Boards() {
                 <Archive size={14} /> {t('archive.archiveBoard')}
               </MItem>
             )}
+          </>
+        )}
+        {b.can_delete && (
+          <>
             <MItem M={CTX} danger onSelect={() => setConfirm({ kind: 'purge', board: b })}>
               <Trash2 size={14} /> {t('archive.deleteForever')}
             </MItem>
@@ -265,15 +269,15 @@ export function Boards() {
                       <span className="text-xs text-muted">
                         {t('archive.archivedAgo', { when: fmtRelative(b.archived_at!) })}
                       </span>
-                      {b.can_delete && (
-                        <>
+                      {b.can_archive && (
                           <Button size="sm" className="ml-auto" onClick={() => run.mutate({ f: () => api.post(`/boards/${b.id}/restore`), msg: t('toast.boardRestored', { name: b.name }) })}>
                             <ArchiveRestore size={13} /> {t('archive.restore')}
                           </Button>
-                          <Button size="sm" variant="danger" onClick={() => setConfirm({ kind: 'purge', board: b })}>
+                      )}
+                      {b.can_delete && (
+                          <Button size="sm" variant="danger" className={b.can_archive ? '' : 'ml-auto'} onClick={() => setConfirm({ kind: 'purge', board: b })}>
                             <Trash2 size={13} />
                           </Button>
-                        </>
                       )}
                     </div>
                   </div>

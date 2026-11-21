@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Camera, Trash2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { NotificationPrefs } from '../components/ContactPoints'
+import { TwoFactorSection } from '../components/TwoFactor'
 import { toast, toastError, toastSuccess } from '../components/toast'
 import { Avatar, Button, ColorPicker, Field, Input } from '../components/ui'
 import { api, upload } from '../lib/api'
@@ -83,6 +85,8 @@ export function Profile() {
           {t('common.save')}
         </Button>
       </form>
+      <NotificationPrefs me={me} />
+      <TwoFactorSection me={me} />
     </div>
   )
 }

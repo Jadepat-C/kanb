@@ -196,3 +196,19 @@ export function ColorPicker({ value, onChange, allowNone }: { value: string | nu
     </div>
   )
 }
+
+/** On/off switch. */
+export function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-40 cursor-pointer ${checked ? 'bg-accent' : 'bg-zinc-300 dark:bg-zinc-600'}`}
+    >
+      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${checked ? 'left-4.5' : 'left-0.5'}`} />
+    </button>
+  )
+}

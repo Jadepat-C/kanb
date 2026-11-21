@@ -53,7 +53,21 @@ fn default_security() -> String {
 pub async fn load(state: &AppState) -> AppResult<SmtpSettings> {
     let row: Option<(serde_json::Value,)> =
         sqlx::query_as("SELECT value FROM app_settings WHERE key = $1").bind(KEY).fetch_optional(&state.db).await?;
-    Ok(row.and_then(|(v,)| serde_json::from_value(v).ok()).unwrap_or_default())
+    let mut s: SmtpSettings = row.and_then(|(v,)| serde_json::from_value(v).ok()).unwrap_or_default();
+    if let Some(redirect) = state.config.mail_redirect.as_deref() {
+        // dev/test safety valve: everything goes to the local catcher, whatever the saved settings say
+        let (host, port) = redirect.rsplit_once(':').unwrap_or((redirect, "1025"));
+        s.enabled = true;
+        s.host = host.into();
+        s.port = port.parse().unwrap_or(1025);
+        s.security = "none".into();
+        s.username.clear();
+        s.password.clear();
+        if s.from_email.is_empty() {
+            s.from_email = "kanban@localhost".into();
+        }
+    }
+    Ok(s)
 }
 
 /// Usable for sending right now?

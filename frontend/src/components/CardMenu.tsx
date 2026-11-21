@@ -6,6 +6,7 @@ import {
   CircleDot,
   Copy,
   CopyPlus,
+  LayoutTemplate,
   ExternalLink,
   Link2,
   Palette,
@@ -17,7 +18,7 @@ import {
   UserCheck,
 } from 'lucide-react'
 import { ConfirmDialog } from './ConfirmDialog'
-import { ask } from './dialogs'
+import { ask, askText } from './dialogs'
 import { useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
@@ -122,6 +123,20 @@ export function CardContextMenu({
             <CopyPlus size={14} /> {t('menu.duplicate')}
           </MItem>
         )}
+        {can('cards.create') && b && (
+          <MItem
+            M={M}
+            onSelect={async () => {
+              const name = await askText({ title: t('templates.saveAs'), label: t('templates.name'), defaultValue: card.title, confirmLabel: t('common.save') })
+              if (name === null) return
+              run.mutate(() =>
+                api.post(`/cards/${card.id}/save-template`, { name }).then(() => toastSuccess(t('templates.saved', { name: name || card.title }))),
+              )
+            }}
+          >
+            <LayoutTemplate size={14} /> {t('templates.saveAs')}
+          </MItem>
+        )}
         <MItem
           M={M}
           onSelect={() =>
@@ -142,7 +157,7 @@ export function CardContextMenu({
           <Copy size={14} /> {t('menu.copyTitle')}
         </MItem>
 
-        {(data || can('cards.edit')) && <MSep M={M} />}
+        {(data || can('cards.edit') || can('cards.due')) && <MSep M={M} />}
         {data && card.list_id && can('cards.move') && (
           <MSub M={M} icon={<ArrowRightLeft size={14} />} label={t('menu.moveTo')}>
             {data.lists.map((l) => (
@@ -157,7 +172,7 @@ export function CardContextMenu({
             ))}
           </MSub>
         )}
-        {data && can('cards.edit') && (
+        {data && can('cards.status') && (
           <MSub M={M} icon={<CircleDot size={14} />} label={t('card.status')}>
             {data.statuses.map((s) => (
               <MItem key={s.id} M={M} checked={card.status_id === s.id} onSelect={() => patch({ status_id: s.id })}>
@@ -181,7 +196,7 @@ export function CardContextMenu({
             ))}
           </MSub>
         )}
-        {can('cards.edit') && (
+        {can('cards.due') && (
           <MSub M={M} icon={<CalendarClock size={14} />} label={t('card.due')}>
             <MItem M={M} onSelect={() => patch({ due_at: dueIn(0, card.due_at) })}>
               {t('menu.today')}
@@ -205,7 +220,7 @@ export function CardContextMenu({
             )}
           </MSub>
         )}
-        {data && can('cards.edit') && data.labels.length > 0 && (
+        {data && can('cards.labels') && data.labels.length > 0 && (
           <MSub M={M} icon={<Tag size={14} />} label={t('card.labels')}>
             {data.labels.map((l) => (
               <MItem
@@ -221,7 +236,7 @@ export function CardContextMenu({
             ))}
           </MSub>
         )}
-        {data && can('cards.edit') && isMember && (
+        {data && can('cards.assign') && isMember && (
           <MItem M={M} onSelect={() => setIds('assignees', toggle(card.assignee_ids ?? [], me!.id))}>
             <UserCheck size={14} /> {mine ? t('menu.unassignMe') : t('menu.assignMe')}
           </MItem>
@@ -241,16 +256,18 @@ export function CardContextMenu({
             </div>
           </MSub>
         )}
-        {can('cards.delete') && (
+        {(can('cards.archive') || can('cards.delete')) && <MSep M={M} />}
+        {can('cards.archive') && (
           <>
-            <MSep M={M} />
             <MItem M={M} danger onSelect={async () => (await ask({ title: t('card.archive'), message: t('card.archiveConfirm'), confirmLabel: t('card.archive') })) && run.mutate(() => api.del(`/cards/${card.id}`).then(() => toastSuccess(t('toast.archived', { title: card.title }))))}>
               <Archive size={14} /> {t('card.archive')}
             </MItem>
-            <MItem M={M} danger onSelect={() => setPurging(true)}>
-              <Trash2 size={14} /> {t('archive.deleteForever')}
-            </MItem>
           </>
+        )}
+        {can('cards.delete') && (
+          <MItem M={M} danger onSelect={() => setPurging(true)}>
+            <Trash2 size={14} /> {t('archive.deleteForever')}
+          </MItem>
         )}
       </ContextMenu>
       {purging && (

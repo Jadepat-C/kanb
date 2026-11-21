@@ -202,3 +202,17 @@ body {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
 }
+
+/* @mention suggestions */
+.cm-tooltip.cm-tooltip-autocomplete {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+  overflow: hidden;
+}
+.cm-tooltip.cm-tooltip-autocomplete > ul { font-family: var(--font-sans); max-height: 14em; }
+.cm-tooltip.cm-tooltip-autocomplete > ul > li { padding: 4px 10px; color: var(--text); }
+.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] { background: color-mix(in srgb, var(--color-accent) 18%, transparent); color: var(--text); }
+.cm-tooltip-autocomplete .cm-completionDetail { color: var(--muted); font-style: normal; margin-left: 8px; }
+.cm-tooltip-autocomplete .cm-completionMatchedText { text-decoration: none; font-weight: 600; }

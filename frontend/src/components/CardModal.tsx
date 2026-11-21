@@ -175,6 +175,7 @@ export function CardModal({
                 <div className="min-w-0 space-y-6">
                   <Section icon={<FileText size={15} />} title={t('card.description')}>
                     <DescriptionEditor
+                      mentions={b.data!.members}
                       cardId={cardId}
                       value={card.description}
                       canEdit={canEdit}
@@ -417,6 +418,7 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
           <Avatar name={label(me)} color={me.avatar_color} src={avatarUrl(me.avatar_id)} size={30} />
           <div className="min-w-0 flex-1 space-y-2">
             <LiveEditor
+              mentions={b.data!.members}
               ref={composer}
               value=""
               upload={uploader}
@@ -462,7 +464,7 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
                   </span>
                 </div>
                 {editing === i.id ? (
-                  <CommentEdit body={i.body} upload={uploader} onCancel={() => setEditing(null)} onSave={(body) => edit.mutate({ id: i.id, body })} />
+                  <CommentEdit mentions={b.data!.members} body={i.body} upload={uploader} onCancel={() => setEditing(null)} onSave={(body) => edit.mutate({ id: i.id, body })} />
                 ) : (
                   <Markdown source={i.body} />
                 )}
@@ -538,6 +540,10 @@ function Sidebar({
   const card = detail.card
   const data = b.data!
   const canEdit = b.can('cards.edit')
+  const canStatus = b.can('cards.status')
+  const canAssign = b.can('cards.assign')
+  const canLabels = b.can('cards.labels')
+  const canDue = b.can('cards.due')
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['card', cardId] })
     qc.invalidateQueries({ queryKey: ['timeline', cardId] })
@@ -588,7 +594,7 @@ function Sidebar({
           {data.statuses.map((s) => (
             <button
               key={s.id}
-              disabled={!canEdit}
+              disabled={!canStatus}
               onClick={() => patch({ status_id: card.status_id === s.id ? null : s.id })}
               className={clsx(
                 'flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs enabled:cursor-pointer',
@@ -618,7 +624,7 @@ function Sidebar({
               </span>
             ) : null
           })}
-          {canEdit && (
+          {canAssign && (
             <Popover trigger={<button className="rounded-full p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"><Plus size={15} /></button>}>
               <div className="max-h-64 space-y-0.5 overflow-y-auto">
                 {data.members.map((m) => (
@@ -648,7 +654,7 @@ function Sidebar({
               </span>
             ) : null
           })}
-          {canEdit && (
+          {canLabels && (
             <Popover trigger={<button className="rounded-full p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"><Plus size={15} /></button>}>
               <LabelPicker
                 labels={data.labels}
@@ -666,7 +672,7 @@ function Sidebar({
         <div className="flex gap-1">
           <Input
             type="datetime-local"
-            disabled={!canEdit}
+            disabled={!canDue}
             defaultValue={dueLocal}
             key={dueLocal}
             onBlur={(e) => {
@@ -676,7 +682,7 @@ function Sidebar({
             }}
             className="h-8 text-xs"
           />
-          {card.due_at && canEdit && (
+          {card.due_at && canDue && (
             <Button variant="ghost" size="sm" onClick={() => patch({ due_at: null })} title={t('common.clear')}>
               <X size={14} />
             </Button>
@@ -699,14 +705,18 @@ function Sidebar({
         </div>
       </div>
 
-      {b.can('cards.delete') && (
+      {(b.can('cards.archive') || b.can('cards.delete')) && (
         <div className="space-y-1.5">
-          <Button variant="outline" size="sm" className="w-full" onClick={async () => (await ask({ title: t('card.archive'), message: t('card.archiveConfirm'), confirmLabel: t('card.archive') })) && archive.mutate()}>
-            <Archive size={14} /> {t('card.archive')}
-          </Button>
+          {b.can('cards.archive') && (
+            <Button variant="outline" size="sm" className="w-full" onClick={async () => (await ask({ title: t('card.archive'), message: t('card.archiveConfirm'), confirmLabel: t('card.archive') })) && archive.mutate()}>
+              <Archive size={14} /> {t('card.archive')}
+            </Button>
+          )}
+          {b.can('cards.delete') && (
           <Button variant="outline" size="sm" className="w-full text-red-600" onClick={() => setPurging(true)}>
             <Trash2 size={14} /> {t('archive.deleteForever')}
           </Button>
+          )}
         </div>
       )}
       {purging && (
@@ -811,12 +821,14 @@ function toLocalInput(iso: string) {
 
 /** Description: always-on live-preview editor with debounced autosave (the server folds consecutive edits into one log entry). */
 function DescriptionEditor({
+  mentions,
   cardId,
   value,
   canEdit,
   upload,
   onSaved,
 }: {
+  mentions: { username: string; display_name: string }[]
   cardId: string
   value: string
   canEdit: boolean
@@ -889,6 +901,7 @@ function DescriptionEditor({
 
   return (
     <LiveEditor
+      mentions={mentions}
       value={value}
       readOnly={!canEdit}
       upload={upload}
@@ -908,7 +921,19 @@ function DescriptionEditor({
   )
 }
 
-function CommentEdit({ body, upload, onSave, onCancel }: { body: string; upload: Uploader; onSave: (b: string) => void; onCancel: () => void }) {
+function CommentEdit({
+  body,
+  upload,
+  onSave,
+  onCancel,
+  mentions,
+}: {
+  body: string
+  upload: Uploader
+  onSave: (b: string) => void
+  onCancel: () => void
+  mentions: { username: string; display_name: string }[]
+}) {
   const { t } = useTranslation()
   const ref = useRef<LiveEditorHandle>(null)
   const save = () => {
@@ -917,7 +942,7 @@ function CommentEdit({ body, upload, onSave, onCancel }: { body: string; upload:
   }
   return (
     <div className="space-y-2">
-      <LiveEditor ref={ref} value={body} upload={upload} autoFocus onSubmit={save} onEscape={() => (onCancel(), true)} minHeight={44} />
+      <LiveEditor ref={ref} mentions={mentions} value={body} upload={upload} autoFocus onSubmit={save} onEscape={() => (onCancel(), true)} minHeight={44} />
       <div className="flex gap-2">
         <Button variant="primary" size="sm" onClick={save}>
           {t('common.save')}

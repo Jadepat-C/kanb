@@ -139,6 +139,8 @@ pub struct CreateCard {
     at: Option<String>,
     /// e.g. when created from the calendar
     due_at: Option<DateTime<Utc>>,
+    /// start from a card template (title/description fall back to the template's)
+    template_id: Option<Uuid>,
 }
 
 pub async fn create_card(
@@ -149,10 +151,21 @@ pub async fn create_card(
 ) -> AppResult<Json<CardSummary>> {
     let board_id = board_of_list(&state.db, list_id).await?;
     board_access(&state.db, &u, board_id).await?.require(perms::CARDS_CREATE)?;
-    let title = r.title.trim();
+    let tpl = match r.template_id {
+        Some(tid) => {
+            let (tb, t) = crate::templates::get(&state.db, tid).await?;
+            if tb != board_id {
+                return Err(AppError::BadRequest("invalid_template"));
+            }
+            Some(t)
+        }
+        None => None,
+    };
+    let title = if r.title.trim().is_empty() { tpl.as_ref().map(|t| t.title.trim()).unwrap_or("") } else { r.title.trim() };
     if title.is_empty() {
         return Err(AppError::BadRequest("title_required"));
     }
+    let description = if r.description.is_empty() { tpl.as_ref().map(|t| t.description.clone()).unwrap_or_default() } else { r.description.clone() };
     let mut tx = state.db.begin().await?;
     let (number,): (i32,) = sqlx::query_as("UPDATE boards SET card_seq = card_seq + 1, updated_at = now() WHERE id = $1 RETURNING card_seq")
         .bind(board_id)
@@ -170,21 +183,33 @@ pub async fn create_card(
     let pos = position_at(&keys, index);
     let id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, created_by, due_at, status_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
-                 (SELECT id FROM board_statuses WHERE board_id = $2 ORDER BY position, name LIMIT 1))",
+        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, created_by, due_at, priority, status_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+                 COALESCE($11, (SELECT id FROM board_statuses WHERE board_id = $2 ORDER BY position, name LIMIT 1)))",
     )
     .bind(id)
     .bind(board_id)
     .bind(list_id)
     .bind(number)
     .bind(title)
-    .bind(&r.description)
+    .bind(&description)
     .bind(pos)
     .bind(u.id)
     .bind(r.due_at)
+    .bind(tpl.as_ref().map(|t| t.priority).unwrap_or(0))
+    .bind(tpl.as_ref().and_then(|t| t.status_id))
     .execute(&mut *tx)
     .await?;
+    if let Some(t) = &tpl {
+        sqlx::query(
+            "INSERT INTO card_labels (card_id, label_id) SELECT $1, l.id FROM labels l WHERE l.board_id = $2 AND l.id = ANY($3)",
+        )
+        .bind(id)
+        .bind(board_id)
+        .bind(&t.label_ids)
+        .execute(&mut *tx)
+        .await?;
+    }
     let (list_name,): (String,) = sqlx::query_as("SELECT name FROM lists WHERE id = $1").bind(list_id).fetch_one(&mut *tx).await?;
     log_event(&mut tx, id, board_id, u.id, "created", json!({ "list": list_name })).await?;
     tx.commit().await?;
@@ -298,7 +323,17 @@ pub async fn update_card(
     Json(r): Json<UpdateCard>,
 ) -> AppResult<Json<CardSummary>> {
     let board_id = board_of_card(&state.db, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_EDIT)?;
+    // each kind of change has its own permission
+    let access = board_access(&state.db, &u, board_id).await?;
+    if r.title.is_some() || r.description.is_some() || r.priority.is_some() || r.color.is_some() {
+        access.require(perms::CARDS_EDIT)?;
+    }
+    if r.status_id.is_some() {
+        access.require(perms::CARDS_STATUS)?;
+    }
+    if r.due_at.is_some() {
+        access.require(perms::CARDS_DUE)?;
+    }
     if r.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
         return Err(AppError::BadRequest("title_required"));
     }
@@ -315,6 +350,7 @@ pub async fn update_card(
             return Err(AppError::BadRequest("invalid_status"));
         }
     }
+    let r_description = r.description.clone(); // kept for @mention notifications after the update
     let mut tx = state.db.begin().await?;
     let old: CardRow =
         sqlx::query_as("SELECT title, description, priority, status_id, color, due_at FROM cards WHERE id = $1 FOR UPDATE")
@@ -394,6 +430,13 @@ pub async fn update_card(
     tx.commit().await?;
     touch_board(&state, board_id).await?;
     state.hub.notify(board_id, "card", Some(id), u.id);
+    if let Some(d) = &r_description {
+        let new: std::collections::HashSet<String> =
+            crate::notify::mentions(d).difference(&crate::notify::mentions(&old.description)).cloned().collect();
+        let mentioned = crate::notify::members_by_username(&state, board_id, &new, u.id).await?;
+        let data = json!({ "snippet": crate::notify::snippet(d), "where": "description" });
+        crate::notify::send(&state, &mentioned, "mentioned", board_id, Some(id), Some(u.id), data).await;
+    }
     let card = load_card_summaries(&state.db, board_id, Some(id)).await?.pop().ok_or(AppError::NotFound)?;
     Ok(Json(card))
 }
@@ -460,7 +503,7 @@ pub async fn archive_card(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Value>> {
     let board_id = board_of_card(&state.db, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_DELETE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_ARCHIVE)?;
     let mut tx = state.db.begin().await?;
     sqlx::query("UPDATE cards SET archived_at = now() WHERE id = $1").bind(id).execute(&mut *tx).await?;
     log_event(&mut tx, id, board_id, u.id, "archived", json!({})).await?;
@@ -483,7 +526,7 @@ pub async fn set_labels(
     Json(r): Json<IdsReq>,
 ) -> AppResult<Json<Value>> {
     let board_id = board_of_card(&state.db, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_EDIT)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_LABELS)?;
     let mut tx = state.db.begin().await?;
     let valid: Vec<(Uuid, String)> = sqlx::query_as("SELECT id, name FROM labels WHERE board_id = $1")
         .bind(board_id)
@@ -516,7 +559,7 @@ pub async fn set_assignees(
     Json(r): Json<IdsReq>,
 ) -> AppResult<Json<Value>> {
     let board_id = board_of_card(&state.db, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_EDIT)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_ASSIGN)?;
     let mut tx = state.db.begin().await?;
     let valid: Vec<(Uuid, String)> = sqlx::query_as(
         "SELECT u.id, u.display_name || ' · @' || u.username FROM board_members m JOIN users u ON u.id = m.user_id WHERE m.board_id = $1",
@@ -529,6 +572,7 @@ pub async fn set_assignees(
     let current: Vec<Uuid> = current.into_iter().map(|c| c.0).collect();
     let wanted: Vec<Uuid> = r.ids.into_iter().filter(|i| valid.iter().any(|v| v.0 == *i)).collect();
     let name = |l: &Uuid| valid.iter().find(|v| v.0 == *l).map(|v| v.1.clone()).unwrap_or_default();
+    let added_ids: Vec<Uuid> = wanted.iter().filter(|w| !current.contains(w)).copied().collect();
     let added: Vec<String> = wanted.iter().filter(|w| !current.contains(w)).map(name).collect();
     let removed: Vec<String> = current.iter().filter(|c| !wanted.contains(c)).map(name).collect();
     sqlx::query("DELETE FROM card_assignees WHERE card_id = $1").bind(id).execute(&mut *tx).await?;
@@ -541,6 +585,7 @@ pub async fn set_assignees(
         log_event(&mut tx, id, board_id, u.id, "assignees", json!({ "added": added, "removed": removed })).await?;
     }
     tx.commit().await?;
+    crate::notify::send(&state, &added_ids, "assigned", board_id, Some(id), Some(u.id), json!({})).await;
     state.hub.notify(board_id, "card", Some(id), u.id);
     Ok(Json(json!({ "ok": true })))
 }
@@ -656,6 +701,20 @@ pub async fn create_comment(
         .execute(&state.db)
         .await?;
     state.hub.notify(board_id, "comment", Some(card_id), u.id);
+    let mentioned = crate::notify::members_by_username(&state, board_id, &crate::notify::mentions(&r.body), u.id).await?;
+    let data = json!({ "snippet": crate::notify::snippet(&r.body), "where": "comment" });
+    crate::board_contacts::comment(&state, board_id, card_id, u.id, crate::notify::snippet(&r.body));
+    crate::notify::send(&state, &mentioned, "mentioned", board_id, Some(card_id), Some(u.id), data.clone()).await;
+    // assignees + whoever created the card (people already @mentioned get just the mention)
+    let watchers: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT user_id FROM card_assignees WHERE card_id = $1
+         UNION SELECT created_by FROM cards WHERE id = $1 AND created_by IS NOT NULL",
+    )
+    .bind(card_id)
+    .fetch_all(&state.db)
+    .await?;
+    let watchers: Vec<Uuid> = watchers.into_iter().map(|w| w.0).filter(|w| !mentioned.contains(w)).collect();
+    crate::notify::send(&state, &watchers, "commented", board_id, Some(card_id), Some(u.id), data).await;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -684,12 +743,18 @@ pub async fn update_comment(
     if r.body.trim().is_empty() {
         return Err(AppError::BadRequest("comment_empty"));
     }
+    let (old_body,): (String,) = sqlx::query_as("SELECT body FROM comments WHERE id = $1").bind(id).fetch_one(&state.db).await?;
     sqlx::query("UPDATE comments SET body = $2, updated_at = now() WHERE id = $1")
         .bind(id)
         .bind(r.body.trim_end())
         .execute(&state.db)
         .await?;
     state.hub.notify(board_id, "comment", Some(card_id), u.id);
+    let new: std::collections::HashSet<String> =
+        crate::notify::mentions(&r.body).difference(&crate::notify::mentions(&old_body)).cloned().collect();
+    let mentioned = crate::notify::members_by_username(&state, board_id, &new, u.id).await?;
+    let data = json!({ "snippet": crate::notify::snippet(&r.body), "where": "comment" });
+    crate::notify::send(&state, &mentioned, "mentioned", board_id, Some(card_id), Some(u.id), data).await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -755,7 +820,7 @@ pub async fn calendar(
         "SELECT c.id, c.board_id, b.name AS board_name, b.color AS board_color, l.name AS list_name, c.number, c.title,
                 c.due_at, c.priority, s.name AS status_name, s.color AS status_color,
                 COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{}') AS assignee_ids,
-                ($1 OR COALESCE(r.is_owner OR 'cards.edit' = ANY(r.permissions), false)) AS can_edit
+                ($1 OR COALESCE(r.is_owner OR 'cards.due' = ANY(r.permissions), false)) AS can_edit
          FROM cards c
          JOIN boards b ON b.id = c.board_id
          JOIN lists l ON l.id = c.list_id
@@ -877,7 +942,7 @@ pub async fn restore_card(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Value>> {
     let board_id = crate::perms::board_of_card_any(&state.db, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_DELETE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_ARCHIVE)?;
     let mut tx = state.db.begin().await?;
     let (list_id,): (Uuid,) = sqlx::query_as("SELECT list_id FROM cards WHERE id = $1 AND archived_at IS NOT NULL")
         .bind(id)

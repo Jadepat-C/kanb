@@ -1,3 +1,4 @@
+import { autocompletion, type CompletionContext } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { Compartment, EditorSelection, EditorState, Prec } from '@codemirror/state'
@@ -149,6 +150,8 @@ export const LiveEditor = forwardRef<
     toolbar?: boolean
     toolbarExtra?: ReactNode
     className?: string
+    /** people that can be @mentioned (board members) */
+    mentions?: { username: string; display_name: string }[]
   }
 >(function LiveEditor(props, ref) {
   const { t } = useTranslation()
@@ -211,6 +214,24 @@ export const LiveEditor = forwardRef<
           drawSelection(),
           EditorView.lineWrapping,
           markdown({ base: markdownLanguage }), // GFM; Enter continues lists, Backspace removes markers
+          // @mention suggestions (listed first so its Enter/Escape win over the editor's own keys)
+          autocompletion({
+            override: [
+              (ctx: CompletionContext) => {
+                const people = propsRef.current.mentions
+                if (!people?.length) return null
+                const m = ctx.matchBefore(/(?:^|[\s(])@[\p{L}\p{N}._-]*$/u)
+                if (!m) return null
+                const from = m.from + m.text.indexOf('@')
+                return {
+                  from,
+                  options: people.map((p) => ({ label: `@${p.username}`, detail: p.display_name, apply: `@${p.username} ` })),
+                  validFor: /^@[\p{L}\p{N}._-]*$/u,
+                }
+              },
+            ],
+            icons: false,
+          }),
           livePreview,
           liveTables,
           readOnlyLinks,

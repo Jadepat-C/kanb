@@ -14,6 +14,8 @@ export interface User {
   avatar_color: string
   must_change_password: boolean
   avatar_id: string | null
+  notify_email: boolean
+  totp_enabled: boolean
   created_at: string
 }
 
@@ -37,6 +39,7 @@ export interface BoardListItem {
   owners: { id: string; display_name: string; username: string; avatar_color: string; avatar_id: string | null }[]
   archived_at: string | null
   can_manage: boolean
+  can_archive: boolean
   can_delete: boolean
 }
 
@@ -107,17 +110,38 @@ export interface Role {
   is_owner: boolean
 }
 
+export interface CardTemplate {
+  id: string
+  name: string
+  title: string
+  description: string
+  priority: number
+  status_id: string | null
+  label_ids: string[]
+  due_in_days: number | null
+  updated_at: string
+}
+
+/** Due date for a card made from a template: today + N days at 09:00 local. */
+export function templateDue(t: Pick<CardTemplate, 'due_in_days'>): string | null {
+  if (t.due_in_days == null) return null
+  const d = new Date()
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + t.due_in_days, 9, 0).toISOString()
+}
+
 export interface BoardDetail {
   board: Board
   my_permissions: string[]
   my_role_id: string | null
   all_permissions: string[]
+  permission_groups?: [string, string[]][]
   lists: List[]
   cards: CardSummary[]
   labels: Label[]
   statuses: Status[]
   members: Member[]
   roles: Role[]
+  templates: CardTemplate[]
 }
 
 export interface Card {

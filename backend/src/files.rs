@@ -294,7 +294,8 @@ pub async fn purge_card_rows(
         let (used,): (bool,) = sqlx::query_as(
             "SELECT EXISTS (SELECT 1 FROM cards WHERE board_id = $1 AND id <> $2 AND strpos(description, $3) > 0)
                  OR EXISTS (SELECT 1 FROM comments cm JOIN cards c ON c.id = cm.card_id
-                            WHERE c.board_id = $1 AND cm.card_id <> $2 AND strpos(cm.body, $3) > 0)",
+                            WHERE c.board_id = $1 AND cm.card_id <> $2 AND strpos(cm.body, $3) > 0)
+                 OR EXISTS (SELECT 1 FROM card_templates t WHERE t.board_id = $1 AND strpos(t.description, $3) > 0)",
         )
         .bind(board_id)
         .bind(card_id)

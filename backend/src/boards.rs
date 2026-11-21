@@ -41,6 +41,7 @@ pub struct BoardListItem {
     owners: serde_json::Value,
     archived_at: Option<DateTime<Utc>>,
     can_manage: bool,
+    can_archive: bool,
     can_delete: bool,
 }
 
@@ -71,6 +72,8 @@ pub async fn list_boards(
                 b.archived_at,
                 ($2 OR COALESCE((SELECT r.is_owner OR 'board.manage' = ANY(r.permissions) FROM board_members m
                                  JOIN board_roles r ON r.id = m.role_id WHERE m.board_id = b.id AND m.user_id = $1), false)) AS can_manage,
+                ($2 OR COALESCE((SELECT r.is_owner OR 'board.archive' = ANY(r.permissions) FROM board_members m
+                                 JOIN board_roles r ON r.id = m.role_id WHERE m.board_id = b.id AND m.user_id = $1), false)) AS can_archive,
                 ($2 OR COALESCE((SELECT r.is_owner OR 'board.delete' = ANY(r.permissions) FROM board_members m
                                  JOIN board_roles r ON r.id = m.role_id WHERE m.board_id = b.id AND m.user_id = $1), false)) AS can_delete
          FROM boards b
@@ -250,12 +253,15 @@ pub struct BoardDetail {
     my_permissions: Vec<String>,
     my_role_id: Option<Uuid>,
     all_permissions: Vec<&'static str>,
+    /// [(topic, [permission…])] for the role editor
+    permission_groups: Vec<(&'static str, Vec<&'static str>)>,
     lists: Vec<List>,
     cards: Vec<CardSummary>,
     labels: Vec<Label>,
     statuses: Vec<Status>,
     members: Vec<Member>,
     roles: Vec<Role>,
+    templates: Vec<crate::templates::Template>,
 }
 
 pub async fn get_board(
@@ -304,12 +310,14 @@ pub async fn get_board(
         my_permissions: access.granted(),
         my_role_id: access.role_id,
         all_permissions: perms::ALL.to_vec(),
+        permission_groups: perms::GROUPS.iter().map(|(g, p)| (*g, p.to_vec())).collect(),
         lists,
         cards,
         labels,
         statuses,
         members,
         roles,
+        templates: crate::templates::for_board(db, id).await?,
     }))
 }
 
@@ -350,7 +358,7 @@ pub async fn delete_board(
     CurrentUser(u): CurrentUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
-    board_access(&state.db, &u, id).await?.require(perms::BOARD_DELETE)?;
+    board_access(&state.db, &u, id).await?.require(perms::BOARD_ARCHIVE)?;
     sqlx::query("UPDATE boards SET archived_at = now() WHERE id = $1").bind(id).execute(&state.db).await?;
     state.hub.notify(id, "board_deleted", None, u.id);
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -361,7 +369,7 @@ pub async fn restore_board(
     CurrentUser(u): CurrentUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
-    crate::perms::board_access_incl_archived(&state.db, &u, id).await?.require(perms::BOARD_DELETE)?;
+    crate::perms::board_access_incl_archived(&state.db, &u, id).await?.require(perms::BOARD_ARCHIVE)?;
     sqlx::query("UPDATE boards SET archived_at = NULL, updated_at = now() WHERE id = $1").bind(id).execute(&state.db).await?;
     state.hub.notify(id, "board", None, u.id);
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -395,7 +403,7 @@ pub async fn create_list(
     Path(board_id): Path<Uuid>,
     Json(r): Json<CreateList>,
 ) -> AppResult<Json<List>> {
-    board_access(&state.db, &u, board_id).await?.require(perms::LISTS_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::LISTS_CREATE)?;
     let name = r.name.trim();
     if name.is_empty() {
         return Err(AppError::BadRequest("name_required"));
@@ -440,7 +448,7 @@ pub async fn update_list(
     Json(r): Json<UpdateList>,
 ) -> AppResult<Json<List>> {
     let board_id = board_of_list(&state.db, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::LISTS_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::LISTS_EDIT)?;
     let mut tx = state.db.begin().await?;
     let new_pos = match r.index {
         Some(index) => {
@@ -487,7 +495,7 @@ pub async fn delete_list(
 ) -> AppResult<Json<serde_json::Value>> {
     let board_id = crate::perms::board_of_list_any(&state.db, id).await?;
     let access = board_access(&state.db, &u, board_id).await?;
-    access.require(perms::LISTS_MANAGE)?;
+    access.require(perms::LISTS_DELETE)?;
     let mut tx = state.db.begin().await?;
     let cards: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM cards WHERE list_id = $1").bind(id).fetch_all(&mut *tx).await?;
     if !cards.is_empty() {
@@ -513,7 +521,7 @@ pub async fn archive_list(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
     let board_id = board_of_list(&state.db, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::LISTS_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::LISTS_ARCHIVE)?;
     sqlx::query("UPDATE lists SET archived_at = now() WHERE id = $1").bind(id).execute(&state.db).await?;
     touch_board(&state, board_id).await?;
     state.hub.notify(board_id, "list", None, u.id);
@@ -527,7 +535,7 @@ pub async fn restore_list(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
     let board_id = crate::perms::board_of_list_any(&state.db, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::LISTS_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::LISTS_ARCHIVE)?;
     let mut tx = state.db.begin().await?;
     let last: Option<(String,)> = sqlx::query_as(
         r#"SELECT position FROM lists WHERE board_id = $1 AND archived_at IS NULL ORDER BY position COLLATE "C" DESC LIMIT 1 FOR UPDATE"#,
@@ -687,7 +695,7 @@ pub async fn create_status(
     Path(board_id): Path<Uuid>,
     Json(r): Json<StatusReq>,
 ) -> AppResult<Json<Status>> {
-    board_access(&state.db, &u, board_id).await?.require(perms::BOARD_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::STATUSES_MANAGE)?;
     let name = r.name.unwrap_or_default().trim().to_string();
     if name.is_empty() {
         return Err(AppError::BadRequest("name_required"));
@@ -715,7 +723,7 @@ pub async fn update_status(
 ) -> AppResult<Json<Status>> {
     let (board_id,): (Uuid,) =
         sqlx::query_as("SELECT board_id FROM board_statuses WHERE id = $1").bind(id).fetch_one(&state.db).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::BOARD_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::STATUSES_MANAGE)?;
     let mut tx = state.db.begin().await?;
     if let Some(index) = r.index {
         // renumber all statuses with this one at `index`
@@ -752,7 +760,7 @@ pub async fn delete_status(
 ) -> AppResult<Json<serde_json::Value>> {
     let (board_id,): (Uuid,) =
         sqlx::query_as("SELECT board_id FROM board_statuses WHERE id = $1").bind(id).fetch_one(&state.db).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::BOARD_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::STATUSES_MANAGE)?;
     // cards using it fall back to "no status" (FK ON DELETE SET NULL)
     sqlx::query("DELETE FROM board_statuses WHERE id = $1").bind(id).execute(&state.db).await?;
     state.hub.notify(board_id, "status", None, u.id);
@@ -835,7 +843,7 @@ pub async fn create_role(
     Path(board_id): Path<Uuid>,
     Json(r): Json<RoleReq>,
 ) -> AppResult<Json<Role>> {
-    board_access(&state.db, &u, board_id).await?.require(perms::MEMBERS_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::ROLES_MANAGE)?;
     let name = r.name.unwrap_or_default().trim().to_string();
     if name.is_empty() {
         return Err(AppError::BadRequest("name_required"));
@@ -867,7 +875,7 @@ pub async fn update_role(
     Json(r): Json<RoleReq>,
 ) -> AppResult<Json<Role>> {
     let (board_id, is_owner) = role_board(&state, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::MEMBERS_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::ROLES_MANAGE)?;
     if is_owner && r.permissions.is_some() {
         return Err(AppError::BadRequest("owner_role_fixed"));
     }
@@ -891,7 +899,7 @@ pub async fn delete_role(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
     let (board_id, is_owner) = role_board(&state, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::MEMBERS_MANAGE)?;
+    board_access(&state.db, &u, board_id).await?.require(perms::ROLES_MANAGE)?;
     if is_owner {
         return Err(AppError::BadRequest("owner_role_fixed"));
     }

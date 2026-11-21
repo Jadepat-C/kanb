@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router'
 import { Button, Field, Input } from '../components/ui'
-import { api } from '../lib/api'
+import { ApiError, api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { errorText, setLocale } from '../lib/i18n'
 import { isDark, setTheme } from '../lib/prefs'
@@ -21,6 +21,10 @@ export function Login() {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [, force] = useState(0)
+  // step 2 when the account uses an authenticator app
+  const [ticket, setTicket] = useState<string | null>(null)
+  const [code, setCode] = useState('')
+  const [useRecovery, setUseRecovery] = useState(false)
   const options = useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ email_enabled: boolean }>('/auth/options') })
 
   if (me) return <Navigate to="/" replace />
@@ -31,11 +35,23 @@ export function Login() {
     setBusy(true)
     setErr('')
     try {
-      const u = await api.post<User>('/auth/login', { username, password })
-      qc.setQueryData(['me'], u)
+      const r = ticket
+        ? await api.post<User>('/auth/login/code', { ticket, code })
+        : await api.post<User | { totp_required: true; ticket: string }>('/auth/login', { username, password })
+      if ('totp_required' in r) {
+        setTicket(r.ticket)
+        setCode('')
+        return
+      }
+      qc.setQueryData(['me'], r)
       nav(from, { replace: true })
     } catch (e) {
       setErr(errorText(e))
+      // the code step expired (5 minutes / 5 tries): back to the password
+      if (ticket && e instanceof ApiError && e.code === 'totp_expired') {
+        setTicket(null)
+        setPassword('')
+      }
     } finally {
       setBusy(false)
     }
@@ -66,17 +82,55 @@ export function Login() {
             <p className="text-sm text-muted">{t('auth.welcome')}</p>
           </div>
         </div>
-        <Field label={t('auth.usernameOrEmail')}>
-          <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" required />
-        </Field>
-        <Field label={t('auth.password')}>
-          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
-        </Field>
-        {err && <p className="text-sm text-red-600">{err}</p>}
-        <Button variant="primary" className="w-full" disabled={busy}>
-          {t('auth.signIn')}
-        </Button>
-        {options.data?.email_enabled && (
+        {ticket ? (
+          <>
+            <p className="text-sm">{useRecovery ? t('twofa.loginRecoveryHint') : t('twofa.loginHint')}</p>
+            <Field label={useRecovery ? t('twofa.recoveryCode') : t('twofa.code')}>
+              {useRecovery ? (
+                <Input key="rc" value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" placeholder="xxxx-xxxx" className="font-mono" required />
+              ) : (
+                <Input
+                  key="otp"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  placeholder="123456"
+                  className="text-center font-mono text-lg tracking-[0.4em]"
+                  required
+                />
+              )}
+            </Field>
+            {err && <p className="text-sm text-red-600">{err}</p>}
+            <Button variant="primary" className="w-full" disabled={busy || (!useRecovery && code.length !== 6)}>
+              {t('twofa.verify')}
+            </Button>
+            <div className="flex justify-between text-sm">
+              <button type="button" className="text-accent hover:underline cursor-pointer" onClick={() => (setUseRecovery(!useRecovery), setCode(''), setErr(''))}>
+                {useRecovery ? t('twofa.useApp') : t('twofa.useRecovery')}
+              </button>
+              <button type="button" className="text-muted hover:underline cursor-pointer" onClick={() => (setTicket(null), setPassword(''), setErr(''), setUseRecovery(false))}>
+                {t('common.back')}
+              </button>
+            </div>
+            <p className="text-xs text-muted">{t('twofa.lostPhone')}</p>
+          </>
+        ) : (
+          <>
+            <Field label={t('auth.usernameOrEmail')}>
+              <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" required />
+            </Field>
+            <Field label={t('auth.password')}>
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+            </Field>
+            {err && <p className="text-sm text-red-600">{err}</p>}
+            <Button variant="primary" className="w-full" disabled={busy}>
+              {t('auth.signIn')}
+            </Button>
+          </>
+        )}
+        {!ticket && options.data?.email_enabled && (
           <Link to="/forgot-password" className="block text-center text-sm text-accent hover:underline">
             {t('auth.forgot')}
           </Link>

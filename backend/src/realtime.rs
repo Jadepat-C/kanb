@@ -43,12 +43,15 @@ pub struct Viewer {
 pub enum Out {
     Change { board_id: Uuid, kind: &'static str, card_id: Option<Uuid>, actor_id: Uuid },
     Presence { board_id: Uuid, viewers: Vec<Viewer> },
+    /// "you have a new notification" (sent on the per-user socket only)
+    Notify { user_id: Uuid },
 }
 
 impl Out {
-    fn board(&self) -> Uuid {
+    fn board(&self) -> Option<Uuid> {
         match self {
-            Out::Change { board_id, .. } | Out::Presence { board_id, .. } => *board_id,
+            Out::Change { board_id, .. } | Out::Presence { board_id, .. } => Some(*board_id),
+            Out::Notify { .. } => None,
         }
     }
 }
@@ -72,6 +75,10 @@ pub struct Hub {
 impl Hub {
     pub fn new() -> Self {
         Hub { tx: broadcast::channel(512).0, presence: Arc::default() }
+    }
+
+    pub fn notify_user(&self, user_id: Uuid) {
+        let _ = self.tx.send(Out::Notify { user_id });
     }
 
     pub fn notify(&self, board_id: Uuid, kind: &'static str, card_id: Option<Uuid>, actor_id: Uuid) {
@@ -133,7 +140,7 @@ async fn pump(mut socket: WebSocket, hub: Hub, board_id: Uuid, user: User) {
     loop {
         tokio::select! {
             ev = rx.recv() => match ev {
-                Ok(ev) if ev.board() == board_id => {
+                Ok(ev) if ev.board() == Some(board_id) => {
                     let text = serde_json::to_string(&ev).unwrap_or_default();
                     if socket.send(Message::Text(text.into())).await.is_err() { break; }
                 }
@@ -160,4 +167,26 @@ async fn pump(mut socket: WebSocket, hub: Hub, board_id: Uuid, user: User) {
         }
     }
     hub.remove(board_id, conn);
+}
+
+/// Per-user socket: pushes a ping whenever the user gets a notification (the browser then refetches).
+pub async fn user_ws(State(state): State<AppState>, CurrentUser(user): CurrentUser, ws: WebSocketUpgrade) -> Response {
+    let mut rx = state.hub.tx.subscribe();
+    ws.on_upgrade(move |mut socket| async move {
+        loop {
+            tokio::select! {
+                ev = rx.recv() => match ev {
+                    Ok(Out::Notify { user_id }) if user_id == user.id => {
+                        if socket.send(Message::Text(r#"{"type":"notify"}"#.into())).await.is_err() { break; }
+                    }
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                },
+                msg = socket.recv() => match msg {
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
+                },
+            }
+        }
+    })
 }

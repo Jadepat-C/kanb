@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import type { BoardDetail, BoardListItem, CardSummary } from '../lib/types'
+import { templateDue, type BoardDetail, type BoardListItem, type CardSummary } from '../lib/types'
 import { toastError, toastSuccess } from './toast'
 import { Button, Dialog, Field, Input } from './ui'
 
@@ -34,6 +34,7 @@ export function NewCardDialog({
   const [date, setDate] = useState(d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : '')
   const [time, setTime] = useState(d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : '09:00')
   const [openAfter, setOpenAfter] = useState(false)
+  const [templateId, setTemplateId] = useState('')
   const [busy, setBusy] = useState(false)
 
   const boards = useQuery({ queryKey: ['boards'], queryFn: () => api.get<BoardListItem[]>('/boards'), enabled: !preset.boardId })
@@ -49,11 +50,12 @@ export function NewCardDialog({
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!title.trim() || !listId) return
+    if ((!title.trim() && !templateId) || !listId) return
     setBusy(true)
     try {
-      const due_at = date ? new Date(`${date}T${time || '09:00'}`).toISOString() : null
-      const card = await api.post<CardSummary>(`/lists/${listId}/cards`, { title: title.trim(), due_at })
+      const tpl = board.data?.templates.find((x) => x.id === templateId)
+      const due_at = date ? new Date(`${date}T${time || '09:00'}`).toISOString() : tpl ? templateDue(tpl) : null
+      const card = await api.post<CardSummary>(`/lists/${listId}/cards`, { title: title.trim(), due_at, template_id: tpl?.id })
       qc.invalidateQueries({ queryKey: ['board', boardId] })
       qc.invalidateQueries({ queryKey: ['calendar'] })
       toastSuccess(t('toast.cardCreated', { title: card.title }))
@@ -81,8 +83,26 @@ export function NewCardDialog({
             </select>
           </Field>
         )}
+        {!!board.data?.templates.length && (
+          <Field label={t('templates.template')}>
+            <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm">
+              <option value="">{t('templates.none')}</option>
+              {board.data.templates.map((tp) => (
+                <option key={tp.id} value={tp.id}>
+                  {tp.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label={t('common.name')}>
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t('board.cardTitle')} autoFocus required />
+          <Input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={board.data?.templates.find((x) => x.id === templateId)?.title ?? t('board.cardTitle')}
+            autoFocus
+            required={!templateId}
+          />
         </Field>
         <Field label={t('card.column')}>
           <select value={listId} onChange={(e) => setListId(e.target.value)} disabled={!lists.length} className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm">
@@ -110,7 +130,7 @@ export function NewCardDialog({
           <Button type="button" variant="ghost" onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button variant="primary" disabled={busy || !title.trim() || !listId || !canCreate}>
+          <Button variant="primary" disabled={busy || (!title.trim() && !templateId) || !listId || !canCreate}>
             {t('common.create')}
           </Button>
         </div>

@@ -35,6 +35,16 @@ pub struct Config {
     #[arg(long, env = "S3_REGION", default_value = "us-east-1")]
     pub s3_region: String,
 
+    /// Development/testing only: deliver ALL email to this plain-SMTP host:port (e.g. Mailpit at 127.0.0.1:51025)
+    /// instead of the SMTP server configured in the app, so tests can never email real people.
+    #[arg(long, env = "MAIL_REDIRECT")]
+    pub mail_redirect: Option<String>,
+
+    /// Development/testing only: send ALL contact-point requests (Discord, Slack, …) to this base URL instead,
+    /// keeping the path; the real target goes in an `X-Original-Url` header.
+    #[arg(long, env = "WEBHOOK_REDIRECT")]
+    pub webhook_redirect: Option<String>,
+
     #[arg(long, env = "MAX_UPLOAD_MB", default_value_t = 50)]
     pub max_upload_mb: usize,
 }

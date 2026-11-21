@@ -38,11 +38,15 @@ pub struct User {
     pub avatar_color: String,
     pub must_change_password: bool,
     pub avatar_id: Option<Uuid>,
+    pub notify_email: bool,
+    /// two-factor sign-in (authenticator app) is on
+    pub totp_enabled: bool,
     pub created_at: DateTime<Utc>,
 }
 
 pub const USER_COLUMNS: &str = "id, username, display_name, email, is_super_admin, can_create_boards, \
-     is_active, locale, theme, avatar_color, must_change_password, avatar_id, created_at";
+     is_active, locale, theme, avatar_color, must_change_password, avatar_id, notify_email, \
+     (totp_enabled_at IS NOT NULL) AS totp_enabled, created_at";
 
 /// How a user's name is shown in history: "Name · @username"; deleted accounts read "[Deleted User] Name (username)".
 /// Use with the users table aliased as `u`.
@@ -212,11 +216,11 @@ pub async fn login(
     headers: HeaderMap,
     jar: CookieJar,
     Json(req): Json<LoginReq>,
-) -> AppResult<(CookieJar, Json<User>)> {
-    let row: Option<(Uuid, Option<String>, bool)> =
+) -> AppResult<(CookieJar, Json<serde_json::Value>)> {
+    let row: Option<(Uuid, Option<String>, bool, bool)> =
         // usernames can't contain '@', so anything with '@' is looked up as an email
         sqlx::query_as(
-            "SELECT id, password_hash, is_active FROM users
+            "SELECT id, password_hash, is_active, totp_enabled_at IS NOT NULL FROM users
              WHERE deleted_at IS NULL
                AND CASE WHEN strpos($1, '@') > 0 THEN lower(email) = lower($1) ELSE lower(username) = lower($1) END",
         )
@@ -225,7 +229,7 @@ pub async fn login(
             .await?;
     let password = req.password.clone();
     let ok = match &row {
-        Some((_, Some(hash), true)) => {
+        Some((_, Some(hash), true, _)) => {
             let hash = hash.clone();
             tokio::task::spawn_blocking(move || verify_password(&password, &hash))
                 .await
@@ -241,7 +245,18 @@ pub async fn login(
         tracing::warn!(username = %req.username, "failed login");
         return Err(AppError::BadRequest("invalid_credentials"));
     }
-    let user_id = row.unwrap().0;
+    let (user_id, _, _, totp_on) = row.unwrap();
+    if totp_on {
+        // step 2: the authenticator code (POST /auth/login/code with this ticket)
+        let ticket = crate::twofa::start_challenge(&state, user_id).await?;
+        return Ok((jar, Json(serde_json::json!({ "totp_required": true, "ticket": ticket }))));
+    }
+    let (jar, Json(user)) = start_session(&state, user_id, &headers, jar).await?;
+    Ok((jar, Json(serde_json::to_value(user).map_err(|e| anyhow::anyhow!(e))?)))
+}
+
+/// Signs the user in: new session row + cookie.
+pub async fn start_session(state: &AppState, user_id: Uuid, headers: &HeaderMap, jar: CookieJar) -> AppResult<(CookieJar, Json<User>)> {
     let token = new_token();
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).map(|s| s.chars().take(300).collect::<String>());
     sqlx::query("INSERT INTO sessions (token_hash, user_id, user_agent, expires_at) VALUES ($1, $2, $3, now() + make_interval(days => $4))")
@@ -293,6 +308,7 @@ pub struct UpdateMe {
     locale: Option<String>,
     theme: Option<String>,
     avatar_color: Option<String>,
+    notify_email: Option<bool>,
 }
 
 pub async fn update_me(
@@ -321,7 +337,7 @@ pub async fn update_me(
     }
     let user: User = sqlx::query_as(sqlf!(
         "UPDATE users SET display_name = COALESCE($2, display_name), email = CASE WHEN $7 THEN $3 ELSE email END, \
-         locale = COALESCE($4, locale), theme = COALESCE($5, theme), avatar_color = COALESCE($6, avatar_color), \
+         locale = COALESCE($4, locale), theme = COALESCE($5, theme), avatar_color = COALESCE($6, avatar_color), notify_email = COALESCE($8, notify_email), \
          updated_at = now() WHERE id = $1 RETURNING {USER_COLUMNS}"
     ))
     .bind(u.id)
@@ -331,6 +347,7 @@ pub async fn update_me(
     .bind(req.theme)
     .bind(req.avatar_color)
     .bind(email.is_some())
+    .bind(req.notify_email)
     .fetch_one(&state.db)
     .await?;
     Ok(Json(user))

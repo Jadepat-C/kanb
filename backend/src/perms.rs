@@ -9,29 +9,71 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-pub const BOARD_MANAGE: &str = "board.manage";
-pub const BOARD_DELETE: &str = "board.delete";
-pub const MEMBERS_MANAGE: &str = "members.manage";
-pub const LISTS_MANAGE: &str = "lists.manage";
+// Board setup
+pub const BOARD_MANAGE: &str = "board.manage"; // name, description, colour
+pub const BOARD_ARCHIVE: &str = "board.archive"; // archive / restore the board
+pub const BOARD_DELETE: &str = "board.delete"; // delete permanently
+pub const STATUSES_MANAGE: &str = "statuses.manage";
 pub const LABELS_MANAGE: &str = "labels.manage";
-pub const CARDS_CREATE: &str = "cards.create";
-pub const CARDS_EDIT: &str = "cards.edit";
-pub const CARDS_MOVE: &str = "cards.move";
-pub const CARDS_DELETE: &str = "cards.delete";
+pub const TEMPLATES_MANAGE: &str = "templates.manage";
+pub const NOTIFICATIONS_MANAGE: &str = "notifications.manage"; // board chat/push channels
+// Members & roles
+pub const MEMBERS_MANAGE: &str = "members.manage"; // add / remove members, change their role
+pub const ROLES_MANAGE: &str = "roles.manage"; // create / edit / delete roles
+// Columns
+pub const LISTS_CREATE: &str = "lists.create";
+pub const LISTS_EDIT: &str = "lists.edit"; // rename, reorder, fold, colour
+pub const LISTS_ARCHIVE: &str = "lists.archive"; // archive / restore
+pub const LISTS_DELETE: &str = "lists.delete"; // delete permanently (+ cards.delete when it has cards)
+// Cards
+pub const CARDS_CREATE: &str = "cards.create"; // new, duplicate, from template
+pub const CARDS_EDIT: &str = "cards.edit"; // title, description, priority, colour
+pub const CARDS_STATUS: &str = "cards.status";
+pub const CARDS_DUE: &str = "cards.due";
+pub const CARDS_ASSIGN: &str = "cards.assign";
+pub const CARDS_LABELS: &str = "cards.labels";
+pub const CARDS_MOVE: &str = "cards.move"; // drag between / within columns, sort a column
+pub const CARDS_ARCHIVE: &str = "cards.archive"; // archive / restore
+pub const CARDS_DELETE: &str = "cards.delete"; // delete permanently
+// Comments
 pub const COMMENTS_CREATE: &str = "comments.create";
 pub const COMMENTS_MODERATE: &str = "comments.moderate";
+// Attachments
 pub const ATTACHMENTS_UPLOAD: &str = "attachments.upload";
 pub const ATTACHMENTS_DELETE: &str = "attachments.delete";
 
+/// Permissions by topic, in display order (the role editor shows these groups).
+pub const GROUPS: &[(&str, &[&str])] = &[
+    ("board", &[BOARD_MANAGE, STATUSES_MANAGE, LABELS_MANAGE, TEMPLATES_MANAGE, NOTIFICATIONS_MANAGE, BOARD_ARCHIVE, BOARD_DELETE]),
+    ("members", &[MEMBERS_MANAGE, ROLES_MANAGE]),
+    ("lists", &[LISTS_CREATE, LISTS_EDIT, LISTS_ARCHIVE, LISTS_DELETE]),
+    ("cards", &[CARDS_CREATE, CARDS_EDIT, CARDS_STATUS, CARDS_DUE, CARDS_ASSIGN, CARDS_LABELS, CARDS_MOVE, CARDS_ARCHIVE, CARDS_DELETE]),
+    ("comments", &[COMMENTS_CREATE, COMMENTS_MODERATE]),
+    ("attachments", &[ATTACHMENTS_UPLOAD, ATTACHMENTS_DELETE]),
+];
+
 pub const ALL: &[&str] = &[
     BOARD_MANAGE,
+    STATUSES_MANAGE,
+    LABELS_MANAGE,
+    TEMPLATES_MANAGE,
+    NOTIFICATIONS_MANAGE,
+    BOARD_ARCHIVE,
     BOARD_DELETE,
     MEMBERS_MANAGE,
-    LISTS_MANAGE,
-    LABELS_MANAGE,
+    ROLES_MANAGE,
+    LISTS_CREATE,
+    LISTS_EDIT,
+    LISTS_ARCHIVE,
+    LISTS_DELETE,
     CARDS_CREATE,
     CARDS_EDIT,
+    CARDS_STATUS,
+    CARDS_DUE,
+    CARDS_ASSIGN,
+    CARDS_LABELS,
     CARDS_MOVE,
+    CARDS_ARCHIVE,
     CARDS_DELETE,
     COMMENTS_CREATE,
     COMMENTS_MODERATE,
@@ -49,9 +91,15 @@ pub fn default_roles() -> Vec<(&'static str, bool, Vec<&'static str>)> {
             false,
             vec![
                 LABELS_MANAGE,
+                TEMPLATES_MANAGE,
                 CARDS_CREATE,
                 CARDS_EDIT,
+                CARDS_STATUS,
+                CARDS_DUE,
+                CARDS_ASSIGN,
+                CARDS_LABELS,
                 CARDS_MOVE,
+                CARDS_ARCHIVE,
                 CARDS_DELETE,
                 COMMENTS_CREATE,
                 ATTACHMENTS_UPLOAD,
@@ -141,4 +189,18 @@ pub async fn board_of_card(db: &PgPool, card_id: Uuid) -> AppResult<Uuid> {
 pub async fn board_of_card_any(db: &PgPool, card_id: Uuid) -> AppResult<Uuid> {
     let (b,): (Uuid,) = sqlx::query_as("SELECT board_id FROM cards WHERE id = $1").bind(card_id).fetch_one(db).await?;
     Ok(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn groups_cover_every_permission_once() {
+        let mut grouped: Vec<&str> = GROUPS.iter().flat_map(|(_, p)| p.iter().copied()).collect();
+        let mut all = ALL.to_vec();
+        grouped.sort();
+        all.sort();
+        assert_eq!(grouped, all);
+    }
 }

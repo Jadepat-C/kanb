@@ -3,12 +3,12 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Archive, ArrowDownUp, ChevronsLeftRight, ChevronsRightLeft, Gauge, GripVertical, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Archive, ArrowDownUp, LayoutTemplate, ChevronsLeftRight, ChevronsRightLeft, Gauge, GripVertical, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { BoardHelpers, Viewer } from '../lib/board'
-import type { CardSummary, List } from '../lib/types'
+import { templateDue, type CardSummary, type CardTemplate, type List } from '../lib/types'
 import { CardTile } from './CardTile'
 import { ask, askText } from './dialogs'
 import { toastError, toastSuccess } from './toast'
@@ -36,7 +36,7 @@ export function Column({
 }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const canManage = b.can('lists.manage')
+  const canManage = b.can('lists.edit')
   const sortable = useSortable({ id: `list:${list.id}`, data: { type: 'list' }, disabled: !canManage })
   const drop = useDroppable({ id: `drop:${list.id}`, data: { type: 'drop', listId: list.id } })
   const [adding, setAdding] = useState<null | 'top' | 'bottom'>(null)
@@ -64,6 +64,15 @@ export function Column({
       qc.invalidateQueries({ queryKey: ['board', boardId] })
       qc.invalidateQueries({ queryKey: ['archived-lists', boardId] })
       toastSuccess(t('toast.columnArchived', { name: list.name }))
+    },
+    onError: toastError,
+  })
+  const fromTemplate = useMutation({
+    mutationFn: (tp: CardTemplate) => api.post<CardSummary>(`/lists/${list.id}/cards`, { title: '', template_id: tp.id, due_at: templateDue(tp) }),
+    onSuccess: (c) => {
+      qc.invalidateQueries({ queryKey: ['board', boardId] })
+      toastSuccess(t('toast.cardCreated', { title: c.title }))
+      onOpen(c.id) // open it right away so it can be renamed / filled in
     },
     onError: toastError,
   })
@@ -108,6 +117,15 @@ export function Column({
           <MItem M={M} onSelect={() => (list.folded ? update.mutate({ folded: false }) : undefined, setAdding('bottom'))}>
             <Plus size={14} /> {t('menu.newCardBottom')}
           </MItem>
+          {!!b.data?.templates.length && (
+            <MSub M={M} icon={<LayoutTemplate size={14} />} label={t('templates.newFrom')}>
+              {b.data.templates.map((tp) => (
+                <MItem key={tp.id} M={M} onSelect={() => fromTemplate.mutate(tp)}>
+                  {tp.name}
+                </MItem>
+              ))}
+            </MSub>
+          )}
           <MSep M={M} />
         </>
       )}
@@ -141,10 +159,16 @@ export function Column({
           <MItem M={M} onSelect={setWip}>
             <Gauge size={14} /> {t('board.wipLimit')}
           </MItem>
-          <MSep M={M} />
-          <MItem M={M} onSelect={() => archive.mutate()}>
-            <Archive size={14} /> {t('column.archive')}
-          </MItem>
+        </>
+      )}
+      {(b.can('lists.archive') || b.can('lists.delete')) && <MSep M={M} />}
+      {b.can('lists.archive') && (
+        <MItem M={M} onSelect={() => archive.mutate()}>
+          <Archive size={14} /> {t('column.archive')}
+        </MItem>
+      )}
+      {b.can('lists.delete') && (
+        <>
           {(totalCount === 0 || b.can('cards.delete')) && (
             <MItem M={M} danger onSelect={confirmDelete}>
               <Trash2 size={14} /> {t('board.deleteList')}

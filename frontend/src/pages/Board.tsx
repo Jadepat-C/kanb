@@ -84,6 +84,15 @@ export function BoardPage() {
   useEffect(() => {
     report({ card_id: openCard, editing: !!openCard && editing })
   }, [openCard, editing, report])
+  // opening a card counts as reading its notifications
+  const qcN = useQueryClient()
+  useEffect(() => {
+    if (!openCard) return
+    const qc = qcN
+    const unread = qc.getQueryData<{ items: { card_id: string | null; read_at: string | null }[] }>(['notifications'])
+    if (unread && !unread.items.some((n) => n.card_id === openCard && !n.read_at)) return
+    api.post('/notifications/read', { card_id: openCard }).then(() => qc.invalidateQueries({ queryKey: ['notifications'] }), () => {})
+  }, [openCard, qcN])
   // other people here (one entry per person; their open card / editing state merged across tabs)
   const others = useMemo(() => {
     const m = new Map<string, Viewer>()
@@ -193,7 +202,7 @@ export function BoardPage() {
       color: c.status_id ? b.statuses.get(c.status_id)?.color : null,
       sub: data?.lists.find((l) => l.id === c.list_id)?.name,
       priority: c.priority,
-      canMove: b.can('cards.edit'),
+      canMove: b.can('cards.due'),
     })
     const cards = (data?.cards ?? []).filter((c) => ids.has(c.id))
     return { dated: cards.filter((c) => c.due_at).map(toItem), undated: cards.filter((c) => !c.due_at).map(toItem) }
@@ -436,7 +445,7 @@ export function BoardPage() {
             items={calItems.dated}
             unscheduled={calItems.undated}
             onOpen={openCardId}
-            onMove={b.can('cards.edit') ? (id, due) => changeDue.mutate({ id, due }) : undefined}
+            onMove={b.can('cards.due') ? (id, due) => changeDue.mutate({ id, due }) : undefined}
             onCreate={
               b.can('cards.create') && data.lists.length
                 ? (due, title) => createOnDay.mutateAsync({ list: (data.lists.find((l) => !l.folded) ?? data.lists[0]).id, title, due })
@@ -511,7 +520,7 @@ export function BoardPage() {
               )
             })}
           </SortableContext>
-          {b.can('lists.manage') && <AddList boardId={boardId} />}
+          {b.can('lists.create') && <AddList boardId={boardId} />}
         </div>
         <DragOverlay dropAnimation={null}>{activeCard ? <CardGhost card={activeCard} b={b} /> : null}</DragOverlay>
       </DndContext>

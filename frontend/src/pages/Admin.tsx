@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Copy, Dices, Eye, EyeOff, KeyRound, Mail, Pencil, Plus, Search, Send, Trash2, Users } from 'lucide-react'
+import { Bell, Copy, Dices, Eye, EyeOff, KeyRound, Mail, Pencil, Plus, Search, Send, ShieldCheck, ShieldOff, Trash2, Users } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Navigate, useSearchParams } from 'react-router'
+import { NotificationsAdminTab } from '../components/ContactPoints'
+import { ask } from '../components/dialogs'
 import { toast, toastError, toastSuccess } from '../components/toast'
-import { Avatar, Button, Dialog, Field, Input, Spinner } from '../components/ui'
+import { Avatar, Button, Dialog, Field, Input, Spinner, Toggle } from '../components/ui'
 import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { generatePassword } from '../lib/password'
@@ -21,12 +23,12 @@ export function Admin() {
   const { t } = useTranslation()
   const { data: me } = useMe()
   const [sp, setSp] = useSearchParams()
-  const tab = sp.get('tab') === 'email' ? 'email' : 'users'
+  const tab = sp.get('tab') === 'email' ? 'email' : sp.get('tab') === 'notifications' ? 'notifications' : 'users'
   if (!me?.is_super_admin) return <Navigate to="/" replace />
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
       <div className="mb-5 flex items-center gap-1 border-b border-line">
-        {(['users', 'email'] as const).map((k) => (
+        {(['users', 'email', 'notifications'] as const).map((k) => (
           <button
             key={k}
             onClick={() => setSp(k === 'users' ? {} : { tab: k })}
@@ -35,12 +37,12 @@ export function Admin() {
               tab === k ? 'border-accent text-[var(--text)]' : 'border-transparent text-muted hover:text-[var(--text)]',
             )}
           >
-            {k === 'users' ? <Users size={15} /> : <Mail size={15} />}
-            {t(k === 'users' ? 'admin.title' : 'email.title')}
+            {k === 'users' ? <Users size={15} /> : k === 'email' ? <Mail size={15} /> : <Bell size={15} />}
+            {t(k === 'users' ? 'admin.title' : k === 'email' ? 'email.title' : 'notifications.title')}
           </button>
         ))}
       </div>
-      {tab === 'users' ? <UsersTab me={me} /> : <EmailTab me={me} />}
+      {tab === 'users' ? <UsersTab me={me} /> : tab === 'email' ? <EmailTab me={me} /> : <NotificationsAdminTab />}
     </div>
   )
 }
@@ -105,6 +107,11 @@ function UsersTab({ me }: { me: User }) {
                               {t('admin.mustChange')}
                             </span>
                           )}
+                          {u.totp_enabled && (
+                            <span title={t('twofa.on')} className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-green-500/15 px-1.5 py-px align-middle text-[10px] font-medium text-green-700 dark:text-green-400">
+                              <ShieldCheck size={10} /> 2FA
+                            </span>
+                          )}
                         </div>
                         <div className="truncate text-xs text-muted">
                           @{u.username}
@@ -131,6 +138,20 @@ function UsersTab({ me }: { me: User }) {
                       <IconBtn title={t('admin.resetPassword')} onClick={() => setResetting(u)}>
                         <KeyRound size={15} />
                       </IconBtn>
+                      {u.totp_enabled && (
+                        <IconBtn
+                          title={t('twofa.adminReset')}
+                          onClick={async () => {
+                            if (!(await ask({ title: t('twofa.adminReset'), message: t('twofa.adminResetMsg', { name: label(u) }), confirmLabel: t('twofa.adminResetBtn'), danger: true }))) return
+                            api.del(`/admin/users/${u.id}/2fa`).then(() => {
+                              qc.invalidateQueries({ queryKey: ['admin-users'] })
+                              toastSuccess(t('twofa.adminResetDone', { name: label(u) }))
+                            }, toastError)
+                          }}
+                        >
+                          <ShieldOff size={15} />
+                        </IconBtn>
+                      )}
                       {u.id !== me.id && (
                         <IconBtn title={t('admin.deleteUser')} danger onClick={() => setDeleting(u)}>
                           <Trash2 size={15} />
@@ -171,21 +192,6 @@ function IconBtn({ title, onClick, danger, children }: { title: string; onClick:
       )}
     >
       {children}
-    </button>
-  )
-}
-
-function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-40 cursor-pointer ${checked ? 'bg-accent' : 'bg-zinc-300 dark:bg-zinc-600'}`}
-    >
-      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${checked ? 'left-4.5' : 'left-0.5'}`} />
     </button>
   )
 }

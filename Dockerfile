@@ -18,7 +18,7 @@ COPY backend/ ./
 RUN touch src/main.rs && cargo build --release
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata wget && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home kanban
 COPY --from=api /src/target/release/kanban /usr/local/bin/kanban
 COPY --from=web /web/dist /srv/web

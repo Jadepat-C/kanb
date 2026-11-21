@@ -12,10 +12,15 @@ mod config;
 mod error;
 mod files;
 mod mail;
+mod notify;
 mod perms;
 mod position;
 mod realtime;
 mod search;
+mod board_contacts;
+mod contacts;
+mod templates;
+mod twofa;
 mod tutorial;
 
 use std::{net::SocketAddr, sync::Arc};
@@ -71,6 +76,12 @@ enum Cmd {
         /// UI language (en or th), also used for the tutorial board
         #[arg(long, default_value = "en")]
         locale: String,
+    },
+    /// Turn off two-factor sign-in for a user (lost phone); they sign in with the password and can set it up again.
+    #[command(name = "reset-2fa")]
+    Reset2fa {
+        #[arg(long)]
+        username: String,
     },
     /// Reset a user's password (same password input as create-admin).
     SetPassword {
@@ -132,6 +143,18 @@ async fn main() -> anyhow::Result<()> {
             println!("password updated for {username}");
             Ok(())
         }
+        Cmd::Reset2fa { username } => {
+            let res = sqlx::query(
+                "UPDATE users SET totp_secret = NULL, totp_pending_secret = NULL, totp_enabled_at = NULL, totp_last_step = NULL,
+                        totp_recovery = '{}' WHERE lower(username) = lower($1) AND deleted_at IS NULL",
+            )
+            .bind(&username)
+            .execute(&db)
+            .await?;
+            anyhow::ensure!(res.rows_affected() == 1, "no such user: {username}");
+            println!("two-factor sign-in turned off for {username}");
+            Ok(())
+        }
         Cmd::Serve => serve(db, config).await,
     }
 }
@@ -150,11 +173,14 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         store,
         hub: realtime::Hub::new(),
     };
+    notify::spawn_due_job(state.clone());
+    board_contacts::spawn_dispatch(state.clone());
     let upload_limit = config.max_upload_mb * 1024 * 1024 + 1024 * 1024;
 
     let api = Router::new()
         .route("/health", get(health))
         .route("/auth/login", post(auth::login))
+        .route("/auth/login/code", post(twofa::login_code))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/options", get(auth::options))
         .route("/auth/forgot", post(auth::forgot))
@@ -164,6 +190,13 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/admin/email/test", post(mail::test))
         .route("/me", get(auth::me).patch(auth::update_me))
         .route("/me/password", post(auth::change_password))
+        .route("/me/contact-points", get(contacts::list).post(contacts::create))
+        .route("/me/contact-points/test", post(contacts::test))
+        .route("/me/contact-points/{id}", patch(contacts::update).delete(contacts::delete))
+        .route("/me/2fa/setup", post(twofa::setup))
+        .route("/me/2fa/enable", post(twofa::enable))
+        .route("/me/2fa/disable", post(twofa::disable))
+        .route("/me/2fa/recovery", post(twofa::regenerate_codes))
         .route("/me/tutorial", post(tutorial::create_for_me))
         .route("/me/avatar", post(avatars::upload).delete(avatars::remove).layer(DefaultBodyLimit::max(11 * 1024 * 1024)))
         .route("/avatars/{id}", get(avatars::serve))
@@ -173,6 +206,8 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/admin/users/{id}/delete-preview", get(admin::delete_preview))
         .route("/admin/users/{id}/send-reset", post(admin::send_reset))
         .route("/admin/users/{id}/password", post(admin::reset_password))
+        .route("/admin/users/{id}/2fa", axum::routing::delete(twofa::admin_reset))
+        .route("/admin/notifications", get(contacts::admin_get).put(contacts::admin_save))
         .route("/boards", get(boards::list_boards).post(boards::create_board))
         .route("/boards/{id}", get(boards::get_board).patch(boards::update_board).delete(boards::delete_board))
         .route("/boards/{id}/ws", get(realtime::board_ws))
@@ -183,6 +218,12 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/boards/{id}/labels", post(boards::create_label))
         .route("/boards/{id}/roles", post(boards::create_role))
         .route("/boards/{id}/statuses", post(boards::create_status))
+        .route("/boards/{id}/templates", post(templates::create))
+        .route("/boards/{id}/contact-points", get(board_contacts::list).post(board_contacts::create))
+        .route("/boards/{id}/contact-points/test", post(board_contacts::test))
+        .route("/board-contact-points/{id}", patch(board_contacts::update).delete(board_contacts::delete))
+        .route("/templates/{id}", patch(templates::update).delete(templates::delete))
+        .route("/cards/{id}/save-template", post(templates::from_card))
         .route("/statuses/{id}", patch(boards::update_status).delete(boards::delete_status))
         .route("/lists/{id}/sort", post(boards::sort_list))
         .route("/lists/{id}/archive", post(boards::archive_list))
@@ -212,6 +253,9 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/files/{id}", get(files::download))
         .route("/attachments/{id}", axum::routing::delete(files::delete_attachment))
         .route("/search", get(search::search))
+        .route("/notifications", get(notify::list))
+        .route("/notifications/read", post(notify::mark_read))
+        .route("/notifications/ws", get(realtime::user_ws))
         .route("/calendar", get(cards::calendar))
         .layer(middleware::from_fn_with_state(state.clone(), auth::csrf_guard))
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")));

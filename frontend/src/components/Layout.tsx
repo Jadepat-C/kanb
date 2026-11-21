@@ -6,6 +6,7 @@ import { api } from '../lib/api'
 import { useMe, useUpdatePrefs } from '../lib/auth'
 import type { Locale, Theme } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
+import { NotificationBell } from './NotificationBell'
 import { SearchPalette } from './SearchPalette'
 import { Avatar, Button, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from './ui'
 
@@ -52,6 +53,7 @@ export function Layout() {
         <div className="flex flex-1 justify-center">
           <SearchPalette />
         </div>
+        <NotificationBell />
         <Button
           variant="ghost"
           size="sm"
