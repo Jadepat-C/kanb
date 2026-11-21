@@ -36,7 +36,7 @@ fn category(kind: &str) -> Option<&'static str> {
         "moved" => "card_moved",
         "status" => "status",
         "assignees" => "assigned",
-        "title" | "description" | "priority" | "color" | "due" | "labels" => "card_updated",
+        "title" | "description" | "priority" | "color" | "due" | "start" | "labels" | "dependencies" => "card_updated",
         "attachment_added" | "attachment_removed" => "attachments",
         "archived" | "restored" => "archived",
         _ => return None,
@@ -304,6 +304,21 @@ fn phrase(th: bool, kind: &str, d: &Value) -> Vec<String> {
             Some(t) => vec![tr(format!("Due: {}", fmt_date(false, t)), format!("กำหนดส่ง: {}", fmt_date(true, t)))],
             None => vec![tr("Due date removed".into(), "ลบกำหนดส่ง".into())],
         },
+        "start" => match d.get("to").and_then(|v| v.as_str()).and_then(|v| v.parse::<DateTime<Utc>>().ok()) {
+            Some(t) => vec![tr(format!("Start: {}", fmt_date(false, t)), format!("เริ่ม: {}", fmt_date(true, t)))],
+            None => vec![tr("Start date removed".into(), "ลบวันเริ่ม".into())],
+        },
+        "dependencies" => {
+            let (add, rem) = (list("added"), list("removed"));
+            let mut v = Vec::new();
+            if !add.is_empty() {
+                v.push(tr(format!("Now waits for: {add}"), format!("รอ: {add}")));
+            }
+            if !rem.is_empty() {
+                v.push(tr(format!("No longer waits for: {rem}"), format!("ไม่ต้องรอ: {rem}")));
+            }
+            v
+        }
         "archived" => vec![tr("Archived".into(), "เก็บเข้าที่เก็บ".into())],
         "restored" => vec![tr("Restored from the archive".into(), "กู้คืนจากที่เก็บ".into())],
         "attachment_added" => vec![tr(format!("Attached {}", s("filename")), format!("แนบไฟล์ {}", s("filename")))],

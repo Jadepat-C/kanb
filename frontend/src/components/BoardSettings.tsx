@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Bell, ChevronRight, Columns3, LayoutTemplate, MessageSquare, Paperclip, Pencil, Plus, Search, Settings2, SquareStack, Trash2, Users } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronRight, Columns3, LayoutTemplate, MessageSquare, Paperclip, Pencil, Plus, Search, Settings2, SquareStack, Trash2, Users } from 'lucide-react'
 import { Stars } from './CardTile'
 import { boardScope, ContactPointList } from './ContactPoints'
+import { SaveBoardTemplate } from './SaveBoardTemplate'
 import { LiveEditor } from './editor/LiveEditor'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ask, askText } from './dialogs'
@@ -45,11 +46,10 @@ export function BoardSettings({
               key={k}
               onClick={() => setTab(k)}
               className={clsx(
-                'flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-left text-sm cursor-pointer',
+                'shrink-0 rounded-md px-3 py-1.5 text-left text-sm cursor-pointer',
                 tab === k ? 'bg-black/5 font-medium dark:bg-white/10' : 'text-muted hover:bg-black/5 dark:hover:bg-white/5',
               )}
             >
-              {k === 'notifications' && <Bell size={13} />}
               {t(`settings.${k}`)}
             </button>
           ))}
@@ -78,6 +78,8 @@ function useRefresh(boardId: string) {
 }
 
 function General({ b, boardId, onClose }: { b: BoardHelpers; boardId: string; onClose: () => void }) {
+  const { data: me } = useMe()
+  const [savingTpl, setSavingTpl] = useState(false)
   const { t } = useTranslation()
   const nav = useNavigate()
   const refresh = useRefresh(boardId)
@@ -115,6 +117,15 @@ function General({ b, boardId, onClose }: { b: BoardHelpers; boardId: string; on
         <Button variant="primary" onClick={() => save.mutate()} disabled={save.isPending}>
           {t('common.save')}
         </Button>
+      )}
+      {(me?.can_create_boards || me?.is_super_admin) && (
+        <div className="space-y-2 border-t border-line pt-4">
+          <Button onClick={() => setSavingTpl(true)}>
+            <LayoutTemplate size={14} /> {t('boardTemplates.saveBoard')}
+          </Button>
+          <p className="text-xs text-muted">{t('boardTemplates.saveBoardHint')}</p>
+          {savingTpl && <SaveBoardTemplate boardId={boardId} boardName={board.name} onClose={() => setSavingTpl(false)} />}
+        </div>
       )}
       {(b.can('board.archive') || b.can('board.delete')) && (
         <div className="space-y-2 border-t border-line pt-4">
@@ -768,7 +779,7 @@ function Templates({ b, boardId }: { b: BoardHelpers; boardId: string }) {
   )
 }
 
-function TemplateEditor({ b, boardId, template, onClose }: { b: BoardHelpers; boardId: string; template: CardTemplate | null; onClose: () => void }) {
+export function TemplateEditor({ b, boardId, template, onClose }: { b: BoardHelpers; boardId: string; template: CardTemplate | null; onClose: () => void }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const data = b.data!

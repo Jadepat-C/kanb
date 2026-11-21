@@ -16,13 +16,14 @@ import {
 import { arrayMove, horizontalListSortingStrategy, SortableContext, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { CalendarDays, Check, Columns3, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
+import { CalendarDays, ChartGantt, Check, Columns3, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams, useSearchParams } from 'react-router'
 import { BoardSettings } from '../components/BoardSettings'
 import { Calendar, type CalItem } from '../components/Calendar'
+import { Gantt } from '../components/Gantt'
 import { CardContextMenu } from '../components/CardMenu'
 import { ContextMenu, CTX, MItem } from '../components/menu'
 import { NewCardDialog, type NewCardPreset } from '../components/NewCardDialog'
@@ -35,7 +36,7 @@ import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { groupCards, useBoard, useBoardSocket, type ChangeEvent, type Viewer } from '../lib/board'
 import { errorText } from '../lib/i18n'
-import type { CardSummary } from '../lib/types'
+import type { BoardDetail, CardSummary } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
 
 type Columns = Record<string, string[]>
@@ -45,7 +46,7 @@ export function BoardPage() {
   const { t } = useTranslation()
   const [sp, setSp] = useSearchParams()
   const openCard = sp.get('card')
-  const view = sp.get('view') === 'calendar' ? 'calendar' : 'board'
+  const view = sp.get('view') === 'calendar' ? 'calendar' : sp.get('view') === 'gantt' ? 'gantt' : 'board'
   const openCardId = (cid: string) => {
     sp.set('card', cid)
     setSp(sp)
@@ -186,6 +187,25 @@ export function BoardPage() {
     onError: toastError,
     onSettled: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
   })
+  // Gantt: dates and links change the cached board first, so bars don't jump back while saving
+  const patchCache = (id: string, f: (c: CardSummary) => CardSummary) =>
+    qc.setQueryData<BoardDetail>(['board', boardId], (d) => d && { ...d, cards: d.cards.map((c) => (c.id === id ? f(c) : c)) })
+  const changeDates = useMutation({
+    mutationFn: (p: { id: string; dates: { start_at?: string | null; due_at?: string | null } }) => api.patch(`/cards/${p.id}`, p.dates),
+    onMutate: (p) => patchCache(p.id, (c) => ({ ...c, ...p.dates })),
+    onError: toastError,
+    onSettled: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
+  })
+  const link = useMutation({
+    mutationFn: (p: { id: string; ids: string[] }) => api.put(`/cards/${p.id}/dependencies`, { ids: p.ids }),
+    onMutate: (p) => patchCache(p.id, (c) => ({ ...c, depends_on: p.ids })),
+    onError: toastError,
+    onSettled: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
+  })
+  const ganttCards = useMemo(
+    () => (data?.lists ?? []).flatMap((l) => (visible[l.id] ?? []).map((id) => cardsById.get(id)).filter((c): c is CardSummary => !!c)),
+    [data, visible, cardsById],
+  )
   const createOnDay = useMutation({
     mutationFn: (p: { list: string; title: string; due: string }) => api.post(`/lists/${p.list}/cards`, { title: p.title, due_at: p.due }),
     onError: toastError,
@@ -410,7 +430,7 @@ export function BoardPage() {
         )}
         <div className="ml-auto flex items-center gap-2">
           <div className="flex rounded-md border border-line p-0.5">
-            {(['board', 'calendar'] as const).map((v) => (
+            {(['board', 'calendar', 'gantt'] as const).map((v) => (
               <button
                 key={v}
                 onClick={() => {
@@ -423,7 +443,7 @@ export function BoardPage() {
                   view === v ? 'bg-accent text-white' : 'text-muted hover:bg-black/5 dark:hover:bg-white/10',
                 )}
               >
-                {v === 'board' ? <Columns3 size={13} /> : <CalendarDays size={13} />}
+                {v === 'board' ? <Columns3 size={13} /> : v === 'calendar' ? <CalendarDays size={13} /> : <ChartGantt size={13} />}
                 <span className="hidden sm:inline">{t(`calendar.${v}`)}</span>
               </button>
             ))}
@@ -439,7 +459,38 @@ export function BoardPage() {
         </div>
       </div>
 
-      {view === 'calendar' ? (
+      {view === 'gantt' ? (
+        <div className="min-h-0 flex-1 pt-2">
+          <Gantt
+            cards={ganttCards}
+            allCards={data.cards}
+            lists={data.lists}
+            statuses={b.statuses}
+            onOpen={openCardId}
+            onDates={b.can('cards.due') ? (id, dates) => changeDates.mutate({ id, dates }) : undefined}
+            onLink={
+              b.can('cards.dependencies')
+                ? (id, dep) => {
+                    const c = cardsById.get(id)
+                    if (c && !c.depends_on.includes(dep)) link.mutate({ id, ids: [...c.depends_on, dep] })
+                  }
+                : undefined
+            }
+            toolbar={
+              b.can('cards.create') && (
+                <Button size="sm" variant="primary" onClick={() => setNewCard({ boardId, due: null })}>
+                  <Plus size={14} /> {t('menu.newCard')}
+                </Button>
+              )
+            }
+            itemMenu={(c, trigger) => (
+              <CardContextMenu card={{ ...c, board_id: boardId }} b={b} onOpen={() => openCardId(c.id)} onNew={() => setNewCard({ boardId, listId: c.list_id, due: c.due_at })}>
+                {trigger}
+              </CardContextMenu>
+            )}
+          />
+        </div>
+      ) : view === 'calendar' ? (
         <div className="min-h-0 flex-1">
           <Calendar
             items={calItems.dated}

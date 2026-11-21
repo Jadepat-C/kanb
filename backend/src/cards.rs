@@ -28,9 +28,12 @@ pub struct CardSummary {
     pub priority: i16,
     pub status_id: Option<Uuid>,
     pub color: Option<String>,
+    pub start_at: Option<DateTime<Utc>>,
     pub due_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     pub label_ids: Vec<Uuid>,
+    /// cards this one waits for (finish-to-start)
+    pub depends_on: Vec<Uuid>,
     pub assignee_ids: Vec<Uuid>,
     pub comment_count: i64,
     pub attachment_count: i64,
@@ -48,7 +51,8 @@ pub struct CardSummary {
 const DN: &str = crate::auth::DISPLAY_NAME_SQL;
 
 const SUMMARY_SELECT: &str = r#"
-SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status_id, c.color, c.due_at, c.updated_at, c.description,
+SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status_id, c.color, c.start_at, c.due_at, c.updated_at, c.description,
+  COALESCE((SELECT array_agg(d.depends_on) FROM card_dependencies d JOIN cards x ON x.id = d.depends_on AND x.archived_at IS NULL WHERE d.card_id = c.id), '{}') AS depends_on,
   COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{}') AS label_ids,
   COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{}') AS assignee_ids,
   (SELECT count(*) FROM comments WHERE card_id = c.id AND deleted_at IS NULL) AS comment_count,
@@ -231,6 +235,7 @@ pub struct Card {
     priority: i16,
     status_id: Option<Uuid>,
     color: Option<String>,
+    start_at: Option<DateTime<Utc>>,
     due_at: Option<DateTime<Utc>>,
     created_by: Option<Uuid>,
     #[sqlx(default)]
@@ -269,7 +274,7 @@ pub async fn get_card(
     let board_id = board_of_card(&state.db, id).await?;
     board_access(&state.db, &u, board_id).await?;
     let card: Card = sqlx::query_as(sqlf!(
-        "SELECT c.id, c.board_id, c.list_id, c.number, c.title, c.description, c.priority, c.status_id, c.color, c.due_at,
+        "SELECT c.id, c.board_id, c.list_id, c.number, c.title, c.description, c.priority, c.status_id, c.color, c.start_at, c.due_at,
                 c.created_by, (SELECT {DN} FROM users u WHERE u.id = c.created_by) AS created_by_name, c.created_at, c.updated_at,
                 COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{{}}') AS label_ids,
                 COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{{}}') AS assignee_ids
@@ -304,6 +309,8 @@ pub struct UpdateCard {
     color: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
     due_at: Option<Option<DateTime<Utc>>>,
+    #[serde(default, deserialize_with = "double_option")]
+    start_at: Option<Option<DateTime<Utc>>>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -314,6 +321,7 @@ struct CardRow {
     status_id: Option<Uuid>,
     color: Option<String>,
     due_at: Option<DateTime<Utc>>,
+    start_at: Option<DateTime<Utc>>,
 }
 
 pub async fn update_card(
@@ -331,7 +339,7 @@ pub async fn update_card(
     if r.status_id.is_some() {
         access.require(perms::CARDS_STATUS)?;
     }
-    if r.due_at.is_some() {
+    if r.due_at.is_some() || r.start_at.is_some() {
         access.require(perms::CARDS_DUE)?;
     }
     if r.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
@@ -353,7 +361,7 @@ pub async fn update_card(
     let r_description = r.description.clone(); // kept for @mention notifications after the update
     let mut tx = state.db.begin().await?;
     let old: CardRow =
-        sqlx::query_as("SELECT title, description, priority, status_id, color, due_at FROM cards WHERE id = $1 FOR UPDATE")
+        sqlx::query_as("SELECT title, description, priority, status_id, color, due_at, start_at FROM cards WHERE id = $1 FOR UPDATE")
             .bind(id)
             .fetch_one(&mut *tx)
             .await?;
@@ -406,12 +414,25 @@ pub async fn update_card(
     {
         log_event(&mut tx, id, board_id, u.id, "due", json!({ "from": old.due_at, "to": d })).await?;
     }
+    if let Some(d) = &r.start_at
+        && *d != old.start_at
+    {
+        log_event(&mut tx, id, board_id, u.id, "start", json!({ "from": old.start_at, "to": d })).await?;
+    }
+    // a card can't start after it's due
+    let (start, due) = (r.start_at.unwrap_or(old.start_at), r.due_at.unwrap_or(old.due_at));
+    if let (Some(s), Some(d)) = (start, due)
+        && s > d
+    {
+        return Err(AppError::BadRequest("start_after_due"));
+    }
     sqlx::query(
         "UPDATE cards SET title = COALESCE($2, title), description = COALESCE($3, description),
             priority = COALESCE($4, priority),
             status_id = CASE WHEN $10 THEN $5 ELSE status_id END,
             color = CASE WHEN $6 THEN $7 ELSE color END,
             due_at = CASE WHEN $8 THEN $9 ELSE due_at END,
+            start_at = CASE WHEN $11 THEN $12 ELSE start_at END,
             updated_at = now()
          WHERE id = $1",
     )
@@ -425,6 +446,8 @@ pub async fn update_card(
     .bind(r.due_at.is_some())
     .bind(r.due_at.flatten())
     .bind(r.status_id.is_some())
+    .bind(r.start_at.is_some())
+    .bind(r.start_at.flatten())
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -874,8 +897,8 @@ pub async fn duplicate_card(
         .await?;
     let new_id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, priority, status_id, color, due_at, created_by)
-         SELECT $2, board_id, list_id, $3, $4, description, $5, priority, status_id, color, due_at, $6 FROM cards WHERE id = $1",
+        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, priority, status_id, color, start_at, due_at, created_by)
+         SELECT $2, board_id, list_id, $3, $4, description, $5, priority, status_id, color, start_at, due_at, $6 FROM cards WHERE id = $1",
     )
     .bind(id)
     .bind(new_id)
@@ -983,4 +1006,77 @@ pub async fn purge_card(
     tracing::info!(card = %id, user = %u.username, files = n, "card permanently deleted");
     state.hub.notify(board_id, "card", Some(id), u.id);
     Ok(Json(json!({ "ok": true, "files_deleted": n })))
+}
+
+// ---------- dependencies (Gantt) ----------
+
+#[derive(Deserialize)]
+pub struct DepsReq {
+    /// cards this card waits for (replaces the current list)
+    ids: Vec<Uuid>,
+}
+
+/// Sets which cards this one depends on (finish-to-start). Same board only; loops are refused.
+pub async fn set_dependencies(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(r): Json<DepsReq>,
+) -> AppResult<Json<Value>> {
+    let board_id = board_of_card(&state.db, id).await?;
+    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_DEPENDENCIES)?;
+    let mut wanted: Vec<Uuid> = r.ids.into_iter().filter(|x| *x != id).collect();
+    wanted.sort();
+    wanted.dedup();
+    if wanted.len() > 50 {
+        return Err(AppError::BadRequest("too_many_dependencies"));
+    }
+    let mut tx = state.db.begin().await?;
+    // serialize dependency edits on this board so two concurrent edits can't build a loop together
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 7))").bind(board_id).execute(&mut *tx).await?;
+    let same_board: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM cards WHERE board_id = $1 AND id = ANY($2)").bind(board_id).bind(&wanted).fetch_all(&mut *tx).await?;
+    if same_board.len() != wanted.len() {
+        return Err(AppError::BadRequest("invalid_dependency"));
+    }
+    // loop check: does any new prerequisite (directly or indirectly) already wait for this card?
+    let (cycle,): (bool,) = sqlx::query_as(
+        "WITH RECURSIVE up(id) AS (
+             SELECT depends_on FROM card_dependencies WHERE card_id = ANY($2)
+             UNION SELECT d.depends_on FROM card_dependencies d JOIN up ON d.card_id = up.id
+         ) SELECT EXISTS (SELECT 1 FROM up WHERE id = $1)",
+    )
+    .bind(id)
+    .bind(&wanted)
+    .fetch_one(&mut *tx)
+    .await?;
+    if cycle {
+        return Err(AppError::BadRequest("dependency_cycle"));
+    }
+    let current: Vec<(Uuid,)> = sqlx::query_as("SELECT depends_on FROM card_dependencies WHERE card_id = $1").bind(id).fetch_all(&mut *tx).await?;
+    let current: Vec<Uuid> = current.into_iter().map(|c| c.0).collect();
+    let added: Vec<Uuid> = wanted.iter().filter(|w| !current.contains(w)).copied().collect();
+    let removed: Vec<Uuid> = current.iter().filter(|c| !wanted.contains(c)).copied().collect();
+    sqlx::query("DELETE FROM card_dependencies WHERE card_id = $1 AND depends_on = ANY($2)").bind(id).bind(&removed).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO card_dependencies (card_id, depends_on, created_by) SELECT $1, unnest($2::uuid[]), $3 ON CONFLICT DO NOTHING")
+        .bind(id)
+        .bind(&added)
+        .bind(u.id)
+        .execute(&mut *tx)
+        .await?;
+    if !added.is_empty() || !removed.is_empty() {
+        let mut names: Vec<Vec<String>> = Vec::new();
+        for ids in [&added, &removed] {
+            let rows: Vec<(String,)> = sqlx::query_as("SELECT '#' || number || ' ' || title FROM cards WHERE id = ANY($1) ORDER BY number")
+                .bind(ids)
+                .fetch_all(&mut *tx)
+                .await?;
+            names.push(rows.into_iter().map(|r| r.0).collect());
+        }
+        let (a, rm) = (&names[0], &names[1]);
+        log_event(&mut tx, id, board_id, u.id, "dependencies", json!({ "added": a, "removed": rm })).await?;
+    }
+    tx.commit().await?;
+    touch_board(&state, board_id).await?;
+    state.hub.notify(board_id, "card", Some(id), u.id);
+    Ok(Json(json!({ "depends_on": wanted })))
 }

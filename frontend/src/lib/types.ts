@@ -27,6 +27,26 @@ export interface UserBrief {
   avatar_id: string | null
 }
 
+export interface BoardTemplateData {
+  lists: { name: string; color?: string | null; wip_limit?: number | null }[]
+  statuses: { name: string; color: string }[]
+  labels: { name: string; color: string }[]
+  card_templates: { name: string; title: string; description?: string; priority?: number; status?: string | null; labels?: string[]; due_in_days?: number | null }[]
+  cards: { list: number; title: string; description?: string; priority?: number; status?: string | null; labels?: string[]; color?: string | null }[]
+}
+
+export interface BoardTemplate {
+  id: string
+  name: string
+  description: string
+  color: string
+  author: string | null
+  updated_at: string
+  can_edit: boolean
+  counts: { lists: number; statuses: number; labels: number; card_templates: number; cards: number }
+  data: BoardTemplateData
+}
+
 export interface BoardListItem {
   id: string
   name: string
@@ -77,10 +97,13 @@ export interface CardSummary {
   priority: number
   status_id: string | null
   color: string | null
+  start_at: string | null
   due_at: string | null
   updated_at: string
   label_ids: string[]
   assignee_ids: string[]
+  /** cards this one waits for (finish-to-start) */
+  depends_on: string[]
   comment_count: number
   attachment_count: number
   excerpt: string
@@ -154,6 +177,7 @@ export interface Card {
   priority: number
   status_id: string | null
   color: string | null
+  start_at: string | null
   due_at: string | null
   created_by: string | null
   created_by_name?: string | null

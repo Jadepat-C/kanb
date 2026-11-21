@@ -1,7 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import clsx from 'clsx'
-import { CalendarClock, CheckSquare, MessageSquare, Paperclip, Star } from 'lucide-react'
+import { CalendarClock, CheckSquare, Link2, MessageSquare, Paperclip, Star } from 'lucide-react'
 import { HoverCard } from 'radix-ui'
 import { memo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -60,6 +60,12 @@ function TileBody({ card, b }: { card: CardSummary; b: BoardHelpers }) {
           <span className={clsx('inline-flex items-center gap-0.5', isOverdue(card) && 'rounded bg-red-500/15 px-1 text-red-600')}>
             <CalendarClock size={11} />
             {fmtDate(card.due_at)}
+          </span>
+        )}
+        {card.depends_on?.length > 0 && (
+          <span className="inline-flex items-center gap-0.5" title={t('deps.waitsForN', { count: card.depends_on.length })}>
+            <Link2 size={11} />
+            {card.depends_on.length}
           </span>
         )}
         {card.checklist_total > 0 && (

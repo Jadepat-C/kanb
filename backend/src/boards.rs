@@ -101,6 +101,8 @@ pub struct CreateBoard {
     color: Option<String>,
     /// Initial column names; defaults are created when omitted.
     lists: Option<Vec<String>>,
+    /// start from a board template (its columns replace `lists`)
+    template_id: Option<Uuid>,
 }
 
 pub async fn create_board(
@@ -115,9 +117,19 @@ pub async fn create_board(
     if name.is_empty() {
         return Err(AppError::BadRequest("name_required"));
     }
+    let template = match r.template_id {
+        Some(id) => Some(crate::board_templates::load_data(&state, id).await?),
+        None => None,
+    };
     let mut tx = state.db.begin().await?;
-    let names = r.lists.unwrap_or_else(|| vec!["To Do".into(), "In Progress".into(), "Done".into()]);
-    let (board, _, _) = insert_board(&mut tx, Some(u.id), u.id, &u.locale, name, r.description.trim(), r.color.as_deref(), &names).await?;
+    let names = match &template {
+        Some(t) => t.lists.iter().map(|l| l.name.clone()).collect(),
+        None => r.lists.unwrap_or_else(|| vec!["To Do".into(), "In Progress".into(), "Done".into()]),
+    };
+    let (board, list_ids, status_ids) = insert_board(&mut tx, Some(u.id), u.id, &u.locale, name, r.description.trim(), r.color.as_deref(), &names).await?;
+    if let Some(t) = &template {
+        crate::board_templates::apply(&mut tx, board.id, u.id, &list_ids, &status_ids, t).await?;
+    }
     tx.commit().await?;
     Ok(Json(board))
 }

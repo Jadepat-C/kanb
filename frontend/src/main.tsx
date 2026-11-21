@@ -13,6 +13,7 @@ import { Admin } from './pages/Admin'
 import { ForceChangePassword, ForgotPassword, ResetPassword } from './pages/AuthPages'
 import { BoardPage } from './pages/Board'
 import { CalendarPage } from './pages/CalendarPage'
+import { TemplatesPage } from './pages/Templates'
 import { Boards } from './pages/Boards'
 import { Login } from './pages/Login'
 import { Profile } from './pages/Profile'
@@ -52,6 +53,7 @@ const router = createBrowserRouter([
       { path: '/', element: <Boards /> },
       { path: '/b/:boardId', element: <BoardPage /> },
       { path: '/calendar', element: <CalendarPage /> },
+      { path: '/templates', element: <TemplatesPage /> },
       { path: '/admin', element: <Admin /> },
       { path: '/profile', element: <Profile /> },
       { path: '*', element: <Navigate to="/" replace /> },

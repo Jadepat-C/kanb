@@ -29,7 +29,8 @@ pub const LISTS_DELETE: &str = "lists.delete"; // delete permanently (+ cards.de
 pub const CARDS_CREATE: &str = "cards.create"; // new, duplicate, from template
 pub const CARDS_EDIT: &str = "cards.edit"; // title, description, priority, colour
 pub const CARDS_STATUS: &str = "cards.status";
-pub const CARDS_DUE: &str = "cards.due";
+pub const CARDS_DUE: &str = "cards.due"; // start and due dates
+pub const CARDS_DEPENDENCIES: &str = "cards.dependencies";
 pub const CARDS_ASSIGN: &str = "cards.assign";
 pub const CARDS_LABELS: &str = "cards.labels";
 pub const CARDS_MOVE: &str = "cards.move"; // drag between / within columns, sort a column
@@ -47,7 +48,7 @@ pub const GROUPS: &[(&str, &[&str])] = &[
     ("board", &[BOARD_MANAGE, STATUSES_MANAGE, LABELS_MANAGE, TEMPLATES_MANAGE, NOTIFICATIONS_MANAGE, BOARD_ARCHIVE, BOARD_DELETE]),
     ("members", &[MEMBERS_MANAGE, ROLES_MANAGE]),
     ("lists", &[LISTS_CREATE, LISTS_EDIT, LISTS_ARCHIVE, LISTS_DELETE]),
-    ("cards", &[CARDS_CREATE, CARDS_EDIT, CARDS_STATUS, CARDS_DUE, CARDS_ASSIGN, CARDS_LABELS, CARDS_MOVE, CARDS_ARCHIVE, CARDS_DELETE]),
+    ("cards", &[CARDS_CREATE, CARDS_EDIT, CARDS_STATUS, CARDS_DUE, CARDS_DEPENDENCIES, CARDS_ASSIGN, CARDS_LABELS, CARDS_MOVE, CARDS_ARCHIVE, CARDS_DELETE]),
     ("comments", &[COMMENTS_CREATE, COMMENTS_MODERATE]),
     ("attachments", &[ATTACHMENTS_UPLOAD, ATTACHMENTS_DELETE]),
 ];
@@ -70,6 +71,7 @@ pub const ALL: &[&str] = &[
     CARDS_EDIT,
     CARDS_STATUS,
     CARDS_DUE,
+    CARDS_DEPENDENCIES,
     CARDS_ASSIGN,
     CARDS_LABELS,
     CARDS_MOVE,
@@ -96,6 +98,7 @@ pub fn default_roles() -> Vec<(&'static str, bool, Vec<&'static str>)> {
                 CARDS_EDIT,
                 CARDS_STATUS,
                 CARDS_DUE,
+                CARDS_DEPENDENCIES,
                 CARDS_ASSIGN,
                 CARDS_LABELS,
                 CARDS_MOVE,

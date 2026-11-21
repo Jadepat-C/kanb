@@ -21,12 +21,13 @@ import {
 import { Dialog as RDialog } from 'radix-ui'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router'
 import { api, fileUrl, upload } from '../lib/api'
 import { useMe } from '../lib/auth'
 import type { BoardHelpers, Viewer } from '../lib/board'
 import { fmtDate, fmtRelative, fmtSize } from '../lib/prefs'
 import { avatarUrl, label } from '../lib/user'
-import type { Attachment, CardDetail, Label, TimelineItem } from '../lib/types'
+import type { Attachment, CardDetail, CardSummary, Label, TimelineItem } from '../lib/types'
 import { Stars } from './CardTile'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ask } from './dialogs'
@@ -509,7 +510,10 @@ function EventText({ kind, data }: { kind: string; data: Record<string, unknown>
       return <>{t('event.priority', { from: '★'.repeat(Number(d.from)) || '0', to: '★'.repeat(Number(d.to)) || '0' })}</>
     case 'due':
       return <>{d.to ? t('event.due', { to: fmtDate(d.to, true) }) : t('event.dueCleared')}</>
+    case 'start':
+      return <>{d.to ? t('event.start', { to: fmtDate(d.to, true) }) : t('event.startCleared')}</>
     case 'labels':
+    case 'dependencies':
     case 'assignees': {
       const parts = [
         d.added?.length ? t('event.added', { items: d.added.join(', ') }) : '',
@@ -571,6 +575,7 @@ function Sidebar({
   const toggle = (arr: string[], id: string) => (arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id])
   const [purging, setPurging] = useState(false)
   const dueLocal = card.due_at ? toLocalInput(card.due_at) : ''
+  const startLocal = card.start_at ? toLocalInput(card.start_at) : ''
 
   return (
     <aside className="space-y-4 text-sm">
@@ -668,6 +673,29 @@ function Sidebar({
         </div>
       </Prop>
 
+      <Prop label={t('card.start')}>
+        <div className="flex gap-1">
+          <Input
+            type="datetime-local"
+            disabled={!canDue}
+            defaultValue={startLocal}
+            key={startLocal}
+            max={dueLocal || undefined}
+            onBlur={(e) => {
+              const v = e.currentTarget.value
+              const iso = v ? new Date(v).toISOString() : null
+              if ((iso ?? '') !== (card.start_at ? new Date(card.start_at).toISOString() : '')) patch({ start_at: iso })
+            }}
+            className="h-8 text-xs"
+          />
+          {card.start_at && canDue && (
+            <Button variant="ghost" size="sm" onClick={() => patch({ start_at: null })} title={t('common.clear')}>
+              <X size={14} />
+            </Button>
+          )}
+        </div>
+      </Prop>
+
       <Prop label={t('card.due')}>
         <div className="flex gap-1">
           <Input
@@ -689,6 +717,8 @@ function Sidebar({
           )}
         </div>
       </Prop>
+
+      <Dependencies cardId={cardId} b={b} />
 
       <Prop label={t('card.color')}>
         <ColorPicker value={card.color} allowNone onChange={(color) => canEdit && patch({ color })} />
@@ -952,5 +982,88 @@ function CommentEdit({
         </Button>
       </div>
     </div>
+  )
+}
+
+/** "Waits for" (this card can't start until those finish) and "Blocking" (cards waiting for this one). */
+function Dependencies({ cardId, b }: { cardId: string; b: BoardHelpers }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const [, setSp] = useSearchParams()
+  const [q, setQ] = useState('')
+  const data = b.data!
+  const byId = new Map(data.cards.map((c) => [c.id, c]))
+  const me = byId.get(cardId)
+  const waits = (me?.depends_on ?? []).map((id) => byId.get(id)).filter((c): c is CardSummary => !!c)
+  const blocking = data.cards.filter((c) => c.depends_on.includes(cardId))
+  const can = b.can('cards.dependencies')
+  if (!me || (!can && waits.length === 0 && blocking.length === 0)) return null
+  // everything that (directly or indirectly) waits for this card: picking one of those would make a loop
+  const downstream = new Set<string>([cardId])
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const c of data.cards) if (!downstream.has(c.id) && c.depends_on.some((d) => downstream.has(d))) (downstream.add(c.id), (grew = true))
+  }
+  const candidates = data.cards
+    .filter((c) => !downstream.has(c.id) && !me.depends_on.includes(c.id))
+    .filter((c) => !q.trim() || `#${c.number} ${c.title}`.toLowerCase().includes(q.trim().toLowerCase()))
+    .sort((x, y) => x.number - y.number)
+    .slice(0, 50)
+  const put = (target: string, ids: string[]) =>
+    api.put(`/cards/${target}/dependencies`, { ids }).then(() => {
+      qc.invalidateQueries({ queryKey: ['board', data.board.id] })
+      qc.invalidateQueries({ queryKey: ['timeline', target] })
+    }, toastError)
+  const open = (id: string) => setSp((sp) => (sp.set('card', id), sp))
+  const chip = (c: CardSummary, onRemove?: () => void) => (
+    <span key={c.id} className="flex max-w-full items-center gap-1 rounded-md border border-line py-0.5 pl-1.5 pr-0.5 text-xs">
+      <button onClick={() => open(c.id)} className="min-w-0 truncate hover:underline cursor-pointer" title={`#${c.number} ${c.title}`}>
+        <span className="text-muted">#{c.number}</span> {c.title}
+      </button>
+      {onRemove && (
+        <button onClick={onRemove} title={t('common.remove')} className="shrink-0 rounded p-0.5 text-muted hover:text-red-600 cursor-pointer">
+          <X size={12} />
+        </button>
+      )}
+    </span>
+  )
+  return (
+    <>
+      <Prop label={t('deps.waitsFor')}>
+        <div className="flex flex-wrap items-center gap-1">
+          {waits.map((c) => chip(c, can ? () => put(cardId, me.depends_on.filter((x) => x !== c.id)) : undefined))}
+          {waits.length === 0 && <span className="text-xs text-muted">{t('deps.none')}</span>}
+          {can && (
+            <Popover
+              trigger={
+                <button className="rounded-md border border-dashed border-line px-1.5 py-0.5 text-xs text-muted hover:text-[var(--text)] cursor-pointer">
+                  <Plus size={12} className="inline" /> {t('deps.add')}
+                </button>
+              }
+            >
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('deps.search')} className="mb-1 h-8 text-xs" autoFocus />
+              <div className="max-h-60 overflow-y-auto">
+                {candidates.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => (put(cardId, [...me.depends_on, c.id]), setQ(''))}
+                    className="block w-full truncate rounded px-2 py-1 text-left text-xs hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+                  >
+                    <span className="text-muted">#{c.number}</span> {c.title}
+                  </button>
+                ))}
+                {candidates.length === 0 && <p className="p-2 text-xs text-muted">{t('search.noResults')}</p>}
+              </div>
+              <p className="mt-1 border-t border-line pt-1 text-[10px] text-muted">{t('deps.loopHint')}</p>
+            </Popover>
+          )}
+        </div>
+      </Prop>
+      {blocking.length > 0 && (
+        <Prop label={t('deps.blocking')}>
+          <div className="flex flex-wrap gap-1">{blocking.map((c) => chip(c, can ? () => put(c.id, c.depends_on.filter((x) => x !== cardId)) : undefined))}</div>
+        </Prop>
+      )}
+    </>
   )
 }

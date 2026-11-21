@@ -30,7 +30,7 @@ import { Avatar, Button, ColorPicker, Dialog, Field, Input, PALETTE, Spinner } f
 import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { fmtRelative } from '../lib/prefs'
-import type { Board, BoardListItem } from '../lib/types'
+import type { Board, BoardListItem, BoardTemplate } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
 
 type Confirm = { kind: 'archive' | 'purge' | 'leave'; board: BoardListItem } | null
@@ -365,7 +365,7 @@ function BoardTile({ b }: { b: BoardListItem }) {
   )
 }
 
-function CreateBoard({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+export function CreateBoard({ open, onOpenChange, templateId }: { open: boolean; onOpenChange: (o: boolean) => void; templateId?: string }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const nav = useNavigate()
@@ -373,6 +373,26 @@ function CreateBoard({ open, onOpenChange }: { open: boolean; onOpenChange: (o: 
   const [description, setDescription] = useState('')
   const [color, setColor] = useState<string | null>('#6366f1')
   const [lists, setLists] = useState(t('boards.defaultLists'))
+  const templates = useQuery({ queryKey: ['board-templates'], queryFn: () => api.get<BoardTemplate[]>('/board-templates'), enabled: open })
+  const [tplId, setTplId] = useState(templateId ?? '')
+  const tpl = templates.data?.find((x) => x.id === tplId)
+  // a template brings its own colour and description unless the user typed something
+  const [touched, setTouched] = useState({ description: false, color: false })
+  const pick = (id: string) => {
+    setTplId(id)
+    const x = templates.data?.find((y) => y.id === id)
+    if (x && !touched.color) setColor(x.color)
+    if (x && !touched.description) setDescription(x.description)
+  }
+  const prefilled = useRef(false)
+  if (templateId && !prefilled.current && templates.data) {
+    prefilled.current = true
+    const x = templates.data.find((y) => y.id === templateId)
+    if (x) {
+      setColor(x.color)
+      setDescription(x.description)
+    }
+  }
   const m = useMutation({
     mutationFn: () =>
       api.post<Board>('/boards', {
@@ -380,6 +400,7 @@ function CreateBoard({ open, onOpenChange }: { open: boolean; onOpenChange: (o: 
         description,
         color,
         lists: lists.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+        template_id: tplId || undefined,
       }),
     onSuccess: (b) => {
       qc.invalidateQueries({ queryKey: ['boards'] })
@@ -399,14 +420,40 @@ function CreateBoard({ open, onOpenChange }: { open: boolean; onOpenChange: (o: 
         <Field label={t('common.name')}>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('boards.namePlaceholder')} autoFocus required />
         </Field>
+        {!!templates.data?.length && (
+          <Field label={t('boardTemplates.template')}>
+            <select value={tplId} onChange={(e) => pick(e.target.value)} className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm">
+              <option value="">{t('boardTemplates.blank')}</option>
+              {templates.data.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label={t('common.description')}>
-          <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+          <Input value={description} onChange={(e) => (setDescription(e.target.value), setTouched({ ...touched, description: true }))} />
         </Field>
-        <Field label={t('boards.listsLabel')}>
-          <Input value={lists} onChange={(e) => setLists(e.target.value)} />
-        </Field>
+        {tpl ? (
+          <p className="rounded-md bg-black/[0.03] px-3 py-2 text-xs text-muted dark:bg-white/5">
+            {t('boardTemplates.willCreate', {
+              lists: tpl.data.lists.map((l) => l.name).join(', '),
+              extra: [
+                t('boardTemplates.nStatuses', { count: tpl.counts.statuses }),
+                t('boardTemplates.nLabels', { count: tpl.counts.labels }),
+                t('boardTemplates.nCardTemplates', { count: tpl.counts.card_templates }),
+                t('boardTemplates.nCards', { count: tpl.counts.cards }),
+              ].join(', '),
+            })}
+          </p>
+        ) : (
+          <Field label={t('boards.listsLabel')}>
+            <Input value={lists} onChange={(e) => setLists(e.target.value)} />
+          </Field>
+        )}
         <Field label={t('common.color')}>
-          <ColorPicker value={color} onChange={setColor} />
+          <ColorPicker value={color} onChange={(c) => (setColor(c), setTouched({ ...touched, color: true }))} />
         </Field>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>

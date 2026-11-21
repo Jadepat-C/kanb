@@ -18,6 +18,7 @@ mod position;
 mod realtime;
 mod search;
 mod board_contacts;
+mod board_templates;
 mod contacts;
 mod templates;
 mod twofa;
@@ -224,6 +225,12 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/board-contact-points/{id}", patch(board_contacts::update).delete(board_contacts::delete))
         .route("/templates/{id}", patch(templates::update).delete(templates::delete))
         .route("/cards/{id}/save-template", post(templates::from_card))
+        .route("/cards/{id}/dependencies", axum::routing::put(cards::set_dependencies))
+        .route("/card-templates", get(board_templates::all_card_templates))
+        .route("/templates/{id}/copy", post(board_templates::copy_card_template))
+        .route("/board-templates", get(board_templates::list).post(board_templates::create))
+        .route("/board-templates/{id}", patch(board_templates::update).delete(board_templates::delete))
+        .route("/boards/{id}/save-as-template", post(board_templates::from_board))
         .route("/statuses/{id}", patch(boards::update_status).delete(boards::delete_status))
         .route("/lists/{id}/sort", post(boards::sort_list))
         .route("/lists/{id}/archive", post(boards::archive_list))
