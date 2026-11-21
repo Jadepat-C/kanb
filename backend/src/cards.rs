@@ -133,6 +133,8 @@ pub struct CreateCard {
     /// "top" or "bottom" (default)
     #[serde(default)]
     at: Option<String>,
+    /// e.g. when created from the calendar
+    due_at: Option<DateTime<Utc>>,
 }
 
 pub async fn create_card(
@@ -164,8 +166,8 @@ pub async fn create_card(
     let pos = position_at(&keys, index);
     let id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, created_by, status_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
+        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, created_by, due_at, status_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
                  (SELECT id FROM board_statuses WHERE board_id = $2 ORDER BY position, name LIMIT 1))",
     )
     .bind(id)
@@ -176,6 +178,7 @@ pub async fn create_card(
     .bind(&r.description)
     .bind(pos)
     .bind(u.id)
+    .bind(r.due_at)
     .execute(&mut *tx)
     .await?;
     let (list_name,): (String,) = sqlx::query_as("SELECT name FROM lists WHERE id = $1").bind(list_id).fetch_one(&mut *tx).await?;
@@ -682,4 +685,66 @@ mod tests {
         let md = "# งาน\n- [ ] ซื้อของ\n- [x] done\n  * [X] nested\n- not a task\n";
         assert_eq!(super::checklist(md), (3, 2));
     }
+}
+
+// ---------- calendar (cards with a due date, across every board the user can see) ----------
+
+#[derive(Deserialize)]
+pub struct CalendarQuery {
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    board_id: Option<Uuid>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct CalendarItem {
+    id: Uuid,
+    board_id: Uuid,
+    board_name: String,
+    board_color: String,
+    list_name: String,
+    number: i32,
+    title: String,
+    due_at: DateTime<Utc>,
+    priority: i16,
+    status_name: Option<String>,
+    status_color: Option<String>,
+    assignee_ids: Vec<Uuid>,
+    can_edit: bool,
+}
+
+pub async fn calendar(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    axum::extract::Query(q): axum::extract::Query<CalendarQuery>,
+) -> AppResult<Json<Vec<CalendarItem>>> {
+    if q.to <= q.from || q.to - q.from > chrono::Duration::days(100) {
+        return Err(AppError::BadRequest("invalid_range"));
+    }
+    let items: Vec<CalendarItem> = sqlx::query_as(
+        "SELECT c.id, c.board_id, b.name AS board_name, b.color AS board_color, l.name AS list_name, c.number, c.title,
+                c.due_at, c.priority, s.name AS status_name, s.color AS status_color,
+                COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{}') AS assignee_ids,
+                ($1 OR COALESCE(r.is_owner OR 'cards.edit' = ANY(r.permissions), false)) AS can_edit
+         FROM cards c
+         JOIN boards b ON b.id = c.board_id
+         JOIN lists l ON l.id = c.list_id
+         LEFT JOIN board_statuses s ON s.id = c.status_id
+         LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2
+         LEFT JOIN board_roles r ON r.id = m.role_id
+         WHERE c.archived_at IS NULL AND b.archived_at IS NULL
+           AND c.due_at >= $3 AND c.due_at < $4
+           AND ($1 OR m.user_id IS NOT NULL)
+           AND ($5::uuid IS NULL OR c.board_id = $5)
+         ORDER BY c.due_at, c.number
+         LIMIT 3000",
+    )
+    .bind(u.is_super_admin)
+    .bind(u.id)
+    .bind(q.from)
+    .bind(q.to)
+    .bind(q.board_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(items))
 }

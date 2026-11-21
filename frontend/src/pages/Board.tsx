@@ -16,12 +16,13 @@ import {
 import { arrayMove, horizontalListSortingStrategy, SortableContext, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Check, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
+import { CalendarDays, Check, Columns3, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams, useSearchParams } from 'react-router'
 import { BoardSettings } from '../components/BoardSettings'
+import { Calendar, type CalItem } from '../components/Calendar'
 import { CardModal } from '../components/CardModal'
 import { CardGhost } from '../components/CardTile'
 import { Column } from '../components/Column'
@@ -40,6 +41,11 @@ export function BoardPage() {
   const { t } = useTranslation()
   const [sp, setSp] = useSearchParams()
   const openCard = sp.get('card')
+  const view = sp.get('view') === 'calendar' ? 'calendar' : 'board'
+  const openCardId = (cid: string) => {
+    sp.set('card', cid)
+    setSp(sp)
+  }
   const b = useBoard(boardId)
   const online = useBoardSocket(boardId)
   const { data: me } = useMe()
@@ -108,6 +114,33 @@ export function BoardPage() {
       setOverride(null)
     },
   })
+  const changeDue = useMutation({
+    mutationFn: (p: { id: string; due: string | null }) => api.patch(`/cards/${p.id}`, { due_at: p.due }),
+    onError: toastError,
+    onSettled: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
+  })
+  const createOnDay = useMutation({
+    mutationFn: (p: { list: string; title: string; due: string }) => api.post(`/lists/${p.list}/cards`, { title: p.title, due_at: p.due }),
+    onError: toastError,
+    onSettled: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
+  })
+  // calendar items follow the same filters as the board
+  const calItems = useMemo(() => {
+    const ids = new Set(Object.values(visible).flat())
+    const toItem = (c: CardSummary): CalItem => ({
+      id: c.id,
+      title: c.title,
+      number: c.number,
+      due: c.due_at,
+      color: c.status_id ? b.statuses.get(c.status_id)?.color : null,
+      sub: data?.lists.find((l) => l.id === c.list_id)?.name,
+      priority: c.priority,
+      canMove: b.can('cards.edit'),
+    })
+    const cards = (data?.cards ?? []).filter((c) => ids.has(c.id))
+    return { dated: cards.filter((c) => c.due_at).map(toItem), undated: cards.filter((c) => !c.due_at).map(toItem) }
+  }, [visible, data, b])
+
   const moveList = useMutation({
     mutationFn: (p: { id: string; index: number }) => api.patch(`/lists/${p.id}`, { index: p.index }),
     onError: toastError,
@@ -309,6 +342,25 @@ export function BoardPage() {
           </Button>
         )}
         <div className="ml-auto flex items-center gap-2">
+          <div className="flex rounded-md border border-line p-0.5">
+            {(['board', 'calendar'] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => {
+                  if (v === 'board') sp.delete('view')
+                  else sp.set('view', v)
+                  setSp(sp)
+                }}
+                className={clsx(
+                  'flex items-center gap-1 rounded px-2 py-0.5 text-xs cursor-pointer',
+                  view === v ? 'bg-accent text-white' : 'text-muted hover:bg-black/5 dark:hover:bg-white/10',
+                )}
+              >
+                {v === 'board' ? <Columns3 size={13} /> : <CalendarDays size={13} />}
+                <span className="hidden sm:inline">{t(`calendar.${v}`)}</span>
+              </button>
+            ))}
+          </div>
           {filtering && <Filter size={14} className="text-accent" />}
           <span title={online ? t('board.live') : t('board.offline')} className={online ? 'text-green-600' : 'text-muted'}>
             {online ? <Wifi size={15} /> : <WifiOff size={15} />}
@@ -319,6 +371,21 @@ export function BoardPage() {
         </div>
       </div>
 
+      {view === 'calendar' ? (
+        <div className="min-h-0 flex-1">
+          <Calendar
+            items={calItems.dated}
+            unscheduled={calItems.undated}
+            onOpen={openCardId}
+            onMove={b.can('cards.edit') ? (id, due) => changeDue.mutate({ id, due }) : undefined}
+            onCreate={
+              b.can('cards.create') && data.lists.length
+                ? (due, title) => createOnDay.mutateAsync({ list: (data.lists.find((l) => !l.folded) ?? data.lists[0]).id, title, due })
+                : undefined
+            }
+          />
+        </div>
+      ) : (
       <DndContext
         sensors={sensors}
         collisionDetection={collision}
@@ -345,7 +412,7 @@ export function BoardPage() {
                   totalCount={(full[id] ?? []).length}
                   b={b}
                   boardId={boardId}
-                  onOpen={(cid) => setSp({ card: cid })}
+                  onOpen={openCardId}
                   dragDisabled={dragDisabled}
                 />
               )
@@ -355,6 +422,7 @@ export function BoardPage() {
         </div>
         <DragOverlay dropAnimation={null}>{activeCard ? <CardGhost card={activeCard} b={b} /> : null}</DragOverlay>
       </DndContext>
+      )}
 
       {openCard && (
         <CardModal

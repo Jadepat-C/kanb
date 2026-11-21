@@ -184,3 +184,10 @@ body {
 [cmdk-item][data-selected='true'] {
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
+
+/* docx-preview: paper pages on a neutral backdrop */
+.docx-host .docx-wrapper { background: transparent; padding: 16px; }
+.docx-host .docx-wrapper > section.docx { box-shadow: 0 1px 6px rgb(0 0 0 / 0.25); margin-bottom: 16px; }
+/* pptx-preview: show all slides stacked (its wrapper is a fixed-height black box by default) */
+.pptx-host .pptx-preview-wrapper { height: auto !important; overflow: visible !important; background: transparent !important; }
+.pptx-host .pptx-preview-slide-wrapper { margin: 0 auto 16px !important; box-shadow: 0 1px 6px rgb(0 0 0 / 0.25); }

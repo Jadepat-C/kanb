@@ -27,6 +27,7 @@ import type { BoardHelpers } from '../lib/board'
 import { fmtDate, fmtRelative, fmtSize } from '../lib/prefs'
 import type { Attachment, CardDetail, Label, TimelineItem } from '../lib/types'
 import { Stars } from './CardTile'
+import { FilePreview, previewKind } from './FilePreview'
 import { LiveEditor, type LiveEditorHandle, type Uploader } from './editor/LiveEditor'
 import { Markdown } from './Markdown'
 import { toast, toastError } from './toast'
@@ -236,6 +237,7 @@ function Attachments({
   const { t } = useTranslation()
   const { data: me } = useMe()
   const input = useRef<HTMLInputElement>(null)
+  const [preview, setPreview] = useState<number | null>(null)
   const del = useMutation({ mutationFn: (id: string) => api.del(`/attachments/${id}`), onSuccess: onChanged, onError: toastError })
   if (!canUpload && items.length === 0) return null
   return (
@@ -255,12 +257,13 @@ function Attachments({
     >
       <div className={clsx('space-y-1.5 rounded-lg', dragOver && 'outline-2 outline-dashed outline-accent p-2')}>
         {dragOver && <p className="text-center text-sm text-accent">{t('card.dropHere')}</p>}
-        {items.map((a) => {
+        {items.map((a, idx) => {
+          const canPreview = previewKind(a) !== 'none'
           const isImage = a.content_type.startsWith('image/') && a.content_type !== 'image/svg+xml'
           const uploader = a.uploaded_by ? b.members.get(a.uploaded_by)?.display_name : undefined
           return (
             <div key={a.id} className="group flex items-center gap-3 rounded-lg border border-line p-2">
-              <a href={fileUrl(a.id)} target="_blank" rel="noopener" className="shrink-0">
+              <button type="button" onClick={() => setPreview(idx)} className="shrink-0 cursor-pointer" title={t('preview.open')}>
                 {isImage ? (
                   <img src={fileUrl(a.id)} alt="" loading="lazy" className="h-10 w-14 rounded object-cover" />
                 ) : (
@@ -268,12 +271,13 @@ function Attachments({
                     {a.filename.split('.').pop()?.slice(0, 4) ?? <FileText size={16} />}
                   </span>
                 )}
-              </a>
+              </button>
               <div className="min-w-0 flex-1">
-                <a href={`${fileUrl(a.id)}?download=1`} className="block truncate text-sm font-medium hover:underline">
+                <button type="button" onClick={() => setPreview(idx)} className="block max-w-full cursor-pointer truncate text-left text-sm font-medium hover:underline">
                   {a.filename}
-                </a>
+                </button>
                 <div className="text-xs text-muted">
+                  {!canPreview && `${t('preview.downloadOnly')} · `}
                   {fmtSize(a.size)} · {fmtRelative(a.created_at)}
                   {uploader && ` · ${uploader}`}
                 </div>
@@ -292,6 +296,9 @@ function Attachments({
             </div>
           )
         })}
+        {preview !== null && items[preview] && (
+          <FilePreview items={items} index={preview} onIndex={setPreview} onClose={() => setPreview(null)} />
+        )}
         {uploads.map((u) => (
           <div key={u.name} className="rounded-lg border border-line p-2 text-sm text-muted">
             {t('card.uploading', { name: u.name, pct: u.pct })}

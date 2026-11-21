@@ -185,6 +185,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/files/{id}", get(files::download))
         .route("/attachments/{id}", axum::routing::delete(files::delete_attachment))
         .route("/search", get(search::search))
+        .route("/calendar", get(cards::calendar))
         .layer(middleware::from_fn_with_state(state.clone(), auth::csrf_guard))
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")));
 
@@ -197,7 +198,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
                 "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; \
-                 font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'",
+                 font-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'",
             ),
         ));
     }

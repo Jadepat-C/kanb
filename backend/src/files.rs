@@ -54,8 +54,7 @@ fn clean_filename(name: &str) -> String {
 
 #[derive(Deserialize)]
 pub struct UploadQuery {
-    #[serde(default)]
-    inline: bool,
+    inline: Option<String>,
 }
 
 pub async fn upload(
@@ -65,10 +64,11 @@ pub async fn upload(
     Query(q): Query<UploadQuery>,
     mut mp: Multipart,
 ) -> AppResult<Json<Attachment>> {
+    let inline = q.inline.as_deref().is_some_and(|v| !matches!(v, "0" | "false"));
     let board_id = board_of_card(&state.db, card_id).await?;
     let access = board_access(&state.db, &u, board_id).await?;
     // pasting an image into the description is part of editing the card
-    if q.inline {
+    if inline {
         if !(access.can(perms::ATTACHMENTS_UPLOAD) || access.can(perms::CARDS_EDIT) || access.can(perms::COMMENTS_CREATE)) {
             return Err(AppError::Forbidden);
         }
@@ -90,7 +90,7 @@ pub async fn upload(
         Some(ct) if !ct.is_empty() && ct != "application/octet-stream" => ct,
         _ => mime_guess::from_path(&filename).first_or_octet_stream().essence_str().to_string(),
     };
-    if q.inline && !INLINE_TYPES.contains(&content_type.as_str()) {
+    if inline && !INLINE_TYPES.contains(&content_type.as_str()) {
         return Err(AppError::BadRequest("not_an_image"));
     }
 
@@ -151,10 +151,10 @@ pub async fn upload(
     .bind(&content_type)
     .bind(size as i64)
     .bind(&key)
-    .bind(q.inline)
+    .bind(inline)
     .fetch_one(&mut *tx)
     .await?;
-    if !q.inline {
+    if !inline {
         log_event(&mut tx, card_id, board_id, u.id, "attachment_added", json!({ "filename": filename })).await?;
     }
     tx.commit().await?;
@@ -164,8 +164,14 @@ pub async fn upload(
 
 #[derive(Deserialize)]
 pub struct DownloadQuery {
-    #[serde(default)]
-    download: bool,
+    /// `?download`, `?download=1` or `?download=true` force a download
+    download: Option<String>,
+}
+
+impl DownloadQuery {
+    fn forced(&self) -> bool {
+        self.download.as_deref().is_some_and(|v| !matches!(v, "0" | "false"))
+    }
 }
 
 /// RFC 6266 / 5987 header that survives non-ASCII (e.g. Thai) filenames.
@@ -199,7 +205,7 @@ pub async fn download(
     let obj = state.store.get(&ObjPath::from(key.as_str())).await?;
     let stream = obj.into_stream().map_err(std::io::Error::other);
 
-    let inline = !q.download && INLINE_TYPES.contains(&content_type.as_str());
+    let inline = !q.forced() && INLINE_TYPES.contains(&content_type.as_str());
     let ct = if inline { content_type.as_str() } else { "application/octet-stream" };
     let mut resp = Body::from_stream(stream).into_response();
     let h = resp.headers_mut();

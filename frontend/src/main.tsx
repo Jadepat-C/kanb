@@ -10,6 +10,7 @@ import { useMe } from './lib/auth'
 import './lib/i18n'
 import { Admin } from './pages/Admin'
 import { BoardPage } from './pages/Board'
+import { CalendarPage } from './pages/CalendarPage'
 import { Boards } from './pages/Boards'
 import { Login } from './pages/Login'
 import { Profile } from './pages/Profile'
@@ -44,6 +45,7 @@ const router = createBrowserRouter([
     children: [
       { path: '/', element: <Boards /> },
       { path: '/b/:boardId', element: <BoardPage /> },
+      { path: '/calendar', element: <CalendarPage /> },
       { path: '/admin', element: <Admin /> },
       { path: '/profile', element: <Profile /> },
       { path: '*', element: <Navigate to="/" replace /> },

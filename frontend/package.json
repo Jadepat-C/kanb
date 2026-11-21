@@ -22,8 +22,11 @@
     "@tanstack/react-query": "^5.108.2",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "docx-preview": "^0.4.1",
     "i18next": "^27.2.2",
     "lucide-react": "^1.77.0",
+    "pdfjs-dist": "^6.5.438",
+    "pptx-preview": "^1.0.7",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -31,7 +34,8 @@
     "react-markdown": "^10.1.0",
     "react-router": "^8.5.2",
     "rehype-sanitize": "^6.0.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.20",
@@ -44,5 +48,10 @@
     "tailwindcss": "^4.3.5",
     "typescript": "~7.0.2",
     "vite": "^8.3.6"
+  },
+  "overrides": {
+    "echarts": "^6.1.0",
+    "uuid": "^11.1.1",
+    "postcss-selector-parser": "^6.1.5"
   }
 }

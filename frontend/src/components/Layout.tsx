@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, Languages, LogOut, Monitor, Moon, Sun, UserCog, Users } from 'lucide-react'
+import { CalendarDays, Check, Languages, LogOut, Monitor, Moon, Sun, UserCog, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Link, Outlet, useNavigate } from 'react-router'
 import { api } from '../lib/api'
@@ -35,6 +35,10 @@ export function Layout() {
         <nav className="flex items-center gap-1 text-sm">
           <Link to="/" className="rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
             {t('nav.boards')}
+          </Link>
+          <Link to="/calendar" className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
+            <CalendarDays size={15} />
+            <span className="hidden sm:inline">{t('nav.calendar')}</span>
           </Link>
           {me.is_super_admin && (
             <Link to="/admin" className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">

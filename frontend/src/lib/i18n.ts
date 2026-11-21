@@ -13,7 +13,7 @@ const en = {
     signIn: 'Sign in', signOut: 'Sign out', username: 'Username', password: 'Password',
     welcome: 'Sign in to your workspace', noSignup: 'Accounts are created by an administrator.',
   },
-  nav: { boards: 'Boards', admin: 'Users', profile: 'Profile', language: 'Language', theme: 'Theme' },
+  nav: { boards: 'Boards', calendar: 'Calendar', admin: 'Users', profile: 'Profile', language: 'Language', theme: 'Theme' },
   theme: { light: 'Light', dark: 'Dark', system: 'System' },
   search: {
     placeholder: 'Search boards and cards…', hint: 'Search everything', noResults: 'No results', boards: 'Boards', cards: 'Cards',
@@ -85,6 +85,15 @@ const en = {
     title: 'Sort cards by', priority: 'Priority (high first)', due: 'Due date (soonest first)', created: 'Newest first',
     createdAsc: 'Oldest first', updated: 'Recently updated', title_: 'Title (A–Z)', number: 'Card number', dragHint: 'Drag to reorder',
   },
+  preview: {
+    open: 'Preview', download: 'Download', unsupported: 'No preview for this file type.', tooBig: 'Too large to preview.',
+    failed: 'Could not open this file for preview.', downloadOnly: 'download only',
+  },
+  calendar: {
+    board: 'Board', calendar: 'Calendar', today: 'Today', month: 'Month', week: 'Week', unscheduled: 'No due date',
+    dragHint: 'Drag onto a day to schedule; drag back here to clear the date.', more_one: '+{{count}} more', more_other: '+{{count}} more',
+    addCard: 'Add card on this day', allBoards: 'All boards',
+  },
   errors: {
     unauthorized: 'Please sign in.', forbidden: 'You don’t have permission to do that.', not_found: 'Not found.',
     invalid_credentials: 'Wrong username or password.', password_too_short: 'Password must be at least 8 characters.',
@@ -112,7 +121,7 @@ const th: Dict = {
     signIn: 'เข้าสู่ระบบ', signOut: 'ออกจากระบบ', username: 'ชื่อผู้ใช้', password: 'รหัสผ่าน',
     welcome: 'เข้าสู่ระบบพื้นที่ทำงานของคุณ', noSignup: 'บัญชีผู้ใช้สร้างโดยผู้ดูแลระบบเท่านั้น',
   },
-  nav: { boards: 'บอร์ด', admin: 'ผู้ใช้', profile: 'โปรไฟล์', language: 'ภาษา', theme: 'ธีม' },
+  nav: { boards: 'บอร์ด', calendar: 'ปฏิทิน', admin: 'ผู้ใช้', profile: 'โปรไฟล์', language: 'ภาษา', theme: 'ธีม' },
   theme: { light: 'สว่าง', dark: 'มืด', system: 'ตามระบบ' },
   search: {
     placeholder: 'ค้นหาบอร์ดและการ์ด…', hint: 'ค้นหาทั้งหมด', noResults: 'ไม่พบผลลัพธ์', boards: 'บอร์ด', cards: 'การ์ด',
@@ -182,6 +191,15 @@ const th: Dict = {
   sort: {
     title: 'เรียงการ์ดตาม', priority: 'ความสำคัญ (มากไปน้อย)', due: 'กำหนดส่ง (ใกล้สุดก่อน)', created: 'ใหม่สุดก่อน',
     createdAsc: 'เก่าสุดก่อน', updated: 'แก้ไขล่าสุด', title_: 'ชื่อ (ก–ฮ, A–Z)', number: 'หมายเลขการ์ด', dragHint: 'ลากเพื่อจัดลำดับ',
+  },
+  preview: {
+    open: 'ดูตัวอย่าง', download: 'ดาวน์โหลด', unsupported: 'ไม่รองรับการแสดงตัวอย่างไฟล์ประเภทนี้', tooBig: 'ไฟล์ใหญ่เกินกว่าจะแสดงตัวอย่าง',
+    failed: 'ไม่สามารถเปิดไฟล์นี้เพื่อแสดงตัวอย่างได้', downloadOnly: 'ดาวน์โหลดเท่านั้น',
+  },
+  calendar: {
+    board: 'บอร์ด', calendar: 'ปฏิทิน', today: 'วันนี้', month: 'เดือน', week: 'สัปดาห์', unscheduled: 'ไม่มีกำหนดส่ง',
+    dragHint: 'ลากไปวางบนวันที่เพื่อกำหนดวัน ลากกลับมาที่นี่เพื่อลบวันที่', more_one: 'อีก {{count}} รายการ', more_other: 'อีก {{count}} รายการ',
+    addCard: 'เพิ่มการ์ดในวันนี้', allBoards: 'ทุกบอร์ด',
   },
   errors: {
     unauthorized: 'กรุณาเข้าสู่ระบบ', forbidden: 'คุณไม่มีสิทธิ์ทำรายการนี้', not_found: 'ไม่พบข้อมูล',
