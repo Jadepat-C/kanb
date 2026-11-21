@@ -4,6 +4,7 @@ import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Plus, Search, Trash2 } fro
 import { ConfirmDialog } from './ConfirmDialog'
 import { ask } from './dialogs'
 import { fmtRelative } from '../lib/prefs'
+import { avatarUrl, label } from '../lib/user'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
@@ -178,7 +179,7 @@ function Members({ b, boardId }: { b: BoardHelpers; boardId: string }) {
       <div className="divide-y divide-[var(--border)] rounded-lg border border-line">
         {data.members.map((m) => (
           <div key={m.user_id} className="flex items-center gap-3 px-3 py-2">
-            <Avatar name={m.display_name} color={m.avatar_color} size={28} />
+            <Avatar name={label(m)} color={m.avatar_color} src={avatarUrl(m.avatar_id)} size={28} />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{m.display_name}</div>
               <div className="text-xs text-muted">@{m.username}</div>
@@ -198,7 +199,7 @@ function Members({ b, boardId }: { b: BoardHelpers; boardId: string }) {
             {(can || m.user_id === me?.id) && (
               <button
                 title={m.user_id === me?.id ? t('settings.leave') : t('common.remove')}
-                onClick={async () => (await ask({ title: m.user_id === me?.id ? t('settings.leave') : t('common.remove'), message: t('settings.removeMemberMsg', { name: m.display_name }), confirmLabel: m.user_id === me?.id ? t('settings.leave') : t('common.remove'), danger: true })) && remove.mutate(m.user_id)}
+                onClick={async () => (await ask({ title: m.user_id === me?.id ? t('settings.leave') : t('common.remove'), message: t('settings.removeMemberMsg', { name: label(m) }), confirmLabel: m.user_id === me?.id ? t('settings.leave') : t('common.remove'), danger: true })) && remove.mutate(m.user_id)}
                 className="rounded p-1.5 text-muted hover:bg-red-500/10 hover:text-red-600 cursor-pointer"
               >
                 <Trash2 size={15} />
@@ -214,7 +215,7 @@ function Members({ b, boardId }: { b: BoardHelpers; boardId: string }) {
               <option value="">—</option>
               {candidates.map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.display_name} (@{u.username})
+                  {label(u)}
                 </option>
               ))}
             </select>

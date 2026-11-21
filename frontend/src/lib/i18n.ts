@@ -10,10 +10,10 @@ const en = {
     back: 'Back', clear: 'Clear', remove: 'Remove', done: 'Done', settings: 'Settings',
   },
   auth: {
-    signIn: 'Sign in', signOut: 'Sign out', username: 'Username', usernameOrEmail: 'Username or email', password: 'Password',
+    signIn: 'Sign in', signOut: 'Sign out', username: 'Username', usernameOrEmail: 'Username or email', forgot: 'Forgot password?', forgotTitle: 'Forgot password', forgotHint: 'Enter your username or email. If the account has an email address, we’ll send a link to choose a new password.', sendLink: 'Send link', forgotSent: 'If that account has an email address, a link is on its way. It is valid for 1 hour.', backToSignIn: 'Back to sign in', confirmPassword: 'Repeat new password', passwordsDiffer: 'The passwords don’t match.', savePassword: 'Save password', chooseNewPassword: 'Choose a new password', forcedHint: 'Hi {{name}}, your password was set by an administrator. Please choose your own to continue.', welcomeSetPassword: 'Welcome! Set your password', forAccount: 'Account: {{username}}', linkInvalidTitle: 'Link expired', linkInvalid: 'This link has expired or was already used.', requestNewLink: 'Request a new link', passwordSet: 'Password saved. You can sign in now.', password: 'Password',
     welcome: 'Sign in to your workspace', noSignup: 'Accounts are created by an administrator.',
   },
-  nav: { boards: 'Boards', calendar: 'Calendar', admin: 'Users', profile: 'Profile', language: 'Language', theme: 'Theme' },
+  nav: { boards: 'Boards', calendar: 'Calendar', admin: 'Admin', profile: 'Profile', language: 'Language', theme: 'Theme' },
   theme: { light: 'Light', dark: 'Dark', system: 'System' },
   search: {
     placeholder: 'Search boards and cards…', hint: 'Search everything', noResults: 'No results', boards: 'Boards', cards: 'Cards',
@@ -61,13 +61,13 @@ const en = {
     'attachments.delete': 'Delete any attachment',
   },
   admin: {
-    title: 'Users', newUser: 'New user', displayName: 'Display name', email: 'Email', superAdmin: 'Super admin', emailHint: 'Can be used to sign in. Leave empty to remove.',
+    title: 'Users', newUser: 'New user', displayName: 'Display name', email: 'Email', superAdmin: 'Super admin', search: 'Search name, username or email…', count_one: '{{count}} user', count_other: '{{count}} users', mustChange: 'must change password', deleteUser: 'Delete user', generate: 'Generate', copy: 'Copy', showPassword: 'Show password', passwordHint: 'At least 8 characters. They must change it at first sign-in.', sendInvite: 'Email a sign-in link', sendInviteHint: 'They get a link to set their own password (valid 3 days).', emailNotSetUp: 'Set up email (Email settings tab) and enter an address to enable this.', userCreated: 'Created {{name}}', inviteSent: 'Sign-in link sent to {{email}}.', inviteFailed: 'Email could not be sent', handOver: 'Sign-in details to hand over (the password is shown only now):', mustChangeHint: 'They will have to choose their own password when they sign in.', copyDetails: 'Copy details', signInAt: 'Sign in at', passwordCopied: 'New password copied to the clipboard', passwordReset: 'Password reset for {{name}}', resetLinkSent: 'Reset link sent to {{email}}', emailLinkHint: 'Recommended: email a reset link to {{email}} so only they know the new password.', emailResetLink: 'Email reset link', setPassword: 'Set this password', userDeleted: 'Deleted {{name}}', delBoardsDeleted_one: 'This board is deleted (only they are in it):', delBoardsDeleted_other: 'These {{count}} boards are deleted (only they are in them):', delNewOwner_one: 'This shared board gets a new owner (its longest-standing member):', delNewOwner_other: 'These {{count}} shared boards get a new owner (their longest-standing member):', delRemovedFrom_one: 'They are removed from 1 other shared board.', delRemovedFrom_other: 'They are removed from {{count}} other shared boards.', delHistory: 'Their comments and activity stay, shown as “{{label}}”. Their username and email can be used again.', emailHint: 'Can be used to sign in. Leave empty to remove.',
     canCreateBoards: 'Can create boards', active: 'Active', inactive: 'Disabled', resetPassword: 'Reset password',
     newPassword: 'New password', languageHint: 'Also the language of their “Getting started” board.', disable: 'Disable', enable: 'Enable', you: 'you',
   },
   profile: {
     title: 'Profile', changePassword: 'Change password', currentPassword: 'Current password', newPassword: 'New password',
-    passwordChanged: 'Password changed. Other sessions were signed out.',
+    passwordChanged: 'Password changed. Other sessions were signed out.', uploadPicture: 'Upload picture', changePicture: 'Change picture', pictureHint: 'PNG, JPEG, WebP or GIF, up to 10 MB. Cropped to a square; photo location data is removed. Without a picture, your initials and colour are shown.', pictureSaved: 'Profile picture updated', pictureRemoved: 'Profile picture removed',
   },
   editor: {
     heading: 'Heading', bold: 'Bold', italic: 'Italic', strike: 'Strikethrough', code: 'Inline code', link: 'Link',
@@ -133,9 +133,18 @@ const en = {
     viewing: 'Viewing this board', onCard: 'Viewing #{{number}} {{title}}', editingCard: 'Editing #{{number}} {{title}}', here: 'Also here',
     editing: 'editing…', you: 'you',
   },
+  email: {
+    title: 'Email settings', intro: 'Outgoing email for welcome links (new accounts) and “Forgot password”. Any SMTP server works (Gmail, Outlook/Microsoft 365, your provider…).',
+    enabled: 'Send emails', host: 'SMTP server', port: 'Port', security: 'Encryption', noEncryption: 'None (local relay only)',
+    username: 'SMTP username', passwordKept: 'Saved. Leave empty to keep it.', fromEmail: 'From address', fromName: 'From name',
+    publicUrl: 'Site address used in links', publicUrlHint: 'Empty = the configured PUBLIC_ORIGIN.',
+    gmailHint: 'Gmail: smtp.gmail.com, STARTTLS 587, your address as username and an App Password (Google Account → Security → App passwords).',
+    test: 'Send a test email', testHint: 'Uses the saved settings: save first.', sendTest: 'Send test', sending: 'Sending…',
+    testOk: 'Sent to {{to}}. Check the inbox (and spam folder).', testFailed: 'Failed',
+  },
   errors: {
     unauthorized: 'Please sign in.', forbidden: 'You don’t have permission to do that.', not_found: 'Not found.',
-    invalid_credentials: 'Wrong username/email or password.', invalid_email: 'That doesn’t look like a valid email address.', email_taken: 'That email is already used by another account.', password_too_short: 'Password must be at least 8 characters.',
+    invalid_credentials: 'Wrong username/email or password.', invalid_email: 'That doesn’t look like a valid email address.', invalid_token: 'This link has expired or was already used.', email_disabled: 'Email is not set up on this server. Ask an administrator.', smtp_incomplete: 'Fill in the SMTP server and the From address.', cannot_delete_self: 'You can’t delete your own account.', email_taken: 'That email is already used by another account.', password_too_short: 'Password must be at least 8 characters.',
     invalid_username: 'Username: 2–40 letters, digits, . _ -', username_taken: 'That username is taken.',
     name_required: 'Name is required.', title_required: 'Title is required.', list_not_empty: 'Move or archive the cards first.',
     too_large: 'File is too large.', not_an_image: 'Only PNG, JPEG, GIF, WebP or AVIF images can be pasted.',
@@ -157,10 +166,10 @@ const th: Dict = {
     back: 'กลับ', clear: 'ล้าง', remove: 'นำออก', done: 'เสร็จ', settings: 'ตั้งค่า',
   },
   auth: {
-    signIn: 'เข้าสู่ระบบ', signOut: 'ออกจากระบบ', username: 'ชื่อผู้ใช้', usernameOrEmail: 'ชื่อผู้ใช้หรืออีเมล', password: 'รหัสผ่าน',
+    signIn: 'เข้าสู่ระบบ', signOut: 'ออกจากระบบ', username: 'ชื่อผู้ใช้', usernameOrEmail: 'ชื่อผู้ใช้หรืออีเมล', forgot: 'ลืมรหัสผ่าน?', forgotTitle: 'ลืมรหัสผ่าน', forgotHint: 'กรอกชื่อผู้ใช้หรืออีเมล หากบัญชีมีอีเมล เราจะส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ให้', sendLink: 'ส่งลิงก์', forgotSent: 'หากบัญชีนั้นมีอีเมล ระบบได้ส่งลิงก์ไปแล้ว ลิงก์ใช้ได้ 1 ชั่วโมง', backToSignIn: 'กลับไปหน้าเข้าสู่ระบบ', confirmPassword: 'ยืนยันรหัสผ่านใหม่', passwordsDiffer: 'รหัสผ่านไม่ตรงกัน', savePassword: 'บันทึกรหัสผ่าน', chooseNewPassword: 'ตั้งรหัสผ่านใหม่', forcedHint: 'สวัสดีคุณ {{name}} รหัสผ่านนี้ตั้งโดยผู้ดูแลระบบ กรุณาตั้งรหัสผ่านของคุณเองเพื่อใช้งานต่อ', welcomeSetPassword: 'ยินดีต้อนรับ! ตั้งรหัสผ่านของคุณ', forAccount: 'บัญชี: {{username}}', linkInvalidTitle: 'ลิงก์หมดอายุ', linkInvalid: 'ลิงก์นี้หมดอายุหรือถูกใช้ไปแล้ว', requestNewLink: 'ขอลิงก์ใหม่', passwordSet: 'บันทึกรหัสผ่านแล้ว เข้าสู่ระบบได้เลย', password: 'รหัสผ่าน',
     welcome: 'เข้าสู่ระบบพื้นที่ทำงานของคุณ', noSignup: 'บัญชีผู้ใช้สร้างโดยผู้ดูแลระบบเท่านั้น',
   },
-  nav: { boards: 'บอร์ด', calendar: 'ปฏิทิน', admin: 'ผู้ใช้', profile: 'โปรไฟล์', language: 'ภาษา', theme: 'ธีม' },
+  nav: { boards: 'บอร์ด', calendar: 'ปฏิทิน', admin: 'ผู้ดูแลระบบ', profile: 'โปรไฟล์', language: 'ภาษา', theme: 'ธีม' },
   theme: { light: 'สว่าง', dark: 'มืด', system: 'ตามระบบ' },
   search: {
     placeholder: 'ค้นหาบอร์ดและการ์ด…', hint: 'ค้นหาทั้งหมด', noResults: 'ไม่พบผลลัพธ์', boards: 'บอร์ด', cards: 'การ์ด',
@@ -207,13 +216,13 @@ const th: Dict = {
     'comments.moderate': 'ลบความคิดเห็นของผู้อื่น', 'attachments.upload': 'อัปโหลดไฟล์แนบ', 'attachments.delete': 'ลบไฟล์แนบใดก็ได้',
   },
   admin: {
-    title: 'ผู้ใช้', newUser: 'เพิ่มผู้ใช้', displayName: 'ชื่อที่แสดง', email: 'อีเมล', superAdmin: 'ผู้ดูแลสูงสุด', emailHint: 'ใช้เข้าสู่ระบบได้ เว้นว่างเพื่อลบ',
+    title: 'ผู้ใช้', newUser: 'เพิ่มผู้ใช้', displayName: 'ชื่อที่แสดง', email: 'อีเมล', superAdmin: 'ผู้ดูแลสูงสุด', search: 'ค้นหาชื่อ ชื่อผู้ใช้ หรืออีเมล…', count_one: '{{count}} คน', count_other: '{{count}} คน', mustChange: 'ต้องเปลี่ยนรหัสผ่าน', deleteUser: 'ลบผู้ใช้', generate: 'สุ่ม', copy: 'คัดลอก', showPassword: 'แสดงรหัสผ่าน', passwordHint: 'อย่างน้อย 8 ตัวอักษร ผู้ใช้ต้องเปลี่ยนเมื่อเข้าสู่ระบบครั้งแรก', sendInvite: 'ส่งลิงก์เข้าสู่ระบบทางอีเมล', sendInviteHint: 'ผู้ใช้จะได้รับลิงก์สำหรับตั้งรหัสผ่านเอง (ใช้ได้ 3 วัน)', emailNotSetUp: 'ตั้งค่าอีเมล (แท็บตั้งค่าอีเมล) และกรอกอีเมลก่อน', userCreated: 'สร้าง {{name}} แล้ว', inviteSent: 'ส่งลิงก์ไปที่ {{email}} แล้ว', inviteFailed: 'ส่งอีเมลไม่สำเร็จ', handOver: 'ข้อมูลเข้าสู่ระบบสำหรับส่งต่อ (แสดงรหัสผ่านครั้งเดียว):', mustChangeHint: 'ผู้ใช้ต้องตั้งรหัสผ่านของตัวเองเมื่อเข้าสู่ระบบ', copyDetails: 'คัดลอกข้อมูล', signInAt: 'เข้าสู่ระบบที่', passwordCopied: 'คัดลอกรหัสผ่านใหม่แล้ว', passwordReset: 'รีเซ็ตรหัสผ่านของ {{name}} แล้ว', resetLinkSent: 'ส่งลิงก์รีเซ็ตไปที่ {{email}} แล้ว', emailLinkHint: 'แนะนำ: ส่งลิงก์รีเซ็ตไปที่ {{email}} เพื่อให้มีเพียงผู้ใช้ที่รู้รหัสผ่านใหม่', emailResetLink: 'ส่งลิงก์รีเซ็ตทางอีเมล', setPassword: 'ตั้งรหัสผ่านนี้', userDeleted: 'ลบ {{name}} แล้ว', delBoardsDeleted_one: 'บอร์ดนี้จะถูกลบ (มีผู้ใช้นี้คนเดียว):', delBoardsDeleted_other: 'บอร์ด {{count}} บอร์ดนี้จะถูกลบ (มีผู้ใช้นี้คนเดียว):', delNewOwner_one: 'บอร์ดที่ใช้ร่วมกันนี้จะได้เจ้าของใหม่ (สมาชิกที่อยู่นานที่สุด):', delNewOwner_other: 'บอร์ดที่ใช้ร่วมกัน {{count}} บอร์ดนี้จะได้เจ้าของใหม่ (สมาชิกที่อยู่นานที่สุด):', delRemovedFrom_one: 'จะถูกนำออกจากบอร์ดที่ใช้ร่วมกันอีก 1 บอร์ด', delRemovedFrom_other: 'จะถูกนำออกจากบอร์ดที่ใช้ร่วมกันอีก {{count}} บอร์ด', delHistory: 'ความคิดเห็นและกิจกรรมยังอยู่ โดยแสดงเป็น “{{label}}” ชื่อผู้ใช้และอีเมลนำกลับมาใช้ใหม่ได้', emailHint: 'ใช้เข้าสู่ระบบได้ เว้นว่างเพื่อลบ',
     canCreateBoards: 'สร้างบอร์ดได้', active: 'ใช้งาน', inactive: 'ปิดใช้งาน', resetPassword: 'รีเซ็ตรหัสผ่าน',
     newPassword: 'รหัสผ่านใหม่', languageHint: 'ใช้เป็นภาษาของบอร์ด “เริ่มต้นใช้งาน” ด้วย', disable: 'ปิดใช้งาน', enable: 'เปิดใช้งาน', you: 'คุณ',
   },
   profile: {
     title: 'โปรไฟล์', changePassword: 'เปลี่ยนรหัสผ่าน', currentPassword: 'รหัสผ่านปัจจุบัน', newPassword: 'รหัสผ่านใหม่',
-    passwordChanged: 'เปลี่ยนรหัสผ่านแล้ว อุปกรณ์อื่นถูกออกจากระบบ',
+    passwordChanged: 'เปลี่ยนรหัสผ่านแล้ว อุปกรณ์อื่นถูกออกจากระบบ', uploadPicture: 'อัปโหลดรูป', changePicture: 'เปลี่ยนรูป', pictureHint: 'PNG, JPEG, WebP หรือ GIF ไม่เกิน 10 MB รูปจะถูกครอปเป็นสี่เหลี่ยมจัตุรัส และลบข้อมูลตำแหน่งในรูปออก หากไม่มีรูปจะแสดงอักษรย่อและสีของคุณ', pictureSaved: 'อัปเดตรูปโปรไฟล์แล้ว', pictureRemoved: 'ลบรูปโปรไฟล์แล้ว',
   },
   editor: {
     heading: 'หัวข้อ', bold: 'ตัวหนา', italic: 'ตัวเอียง', strike: 'ขีดฆ่า', code: 'โค้ด', link: 'ลิงก์',
@@ -279,9 +288,18 @@ const th: Dict = {
     viewing: 'กำลังดูบอร์ดนี้', onCard: 'กำลังดู #{{number}} {{title}}', editingCard: 'กำลังแก้ไข #{{number}} {{title}}', here: 'กำลังดูอยู่ด้วย',
     editing: 'กำลังแก้ไข…', you: 'คุณ',
   },
+  email: {
+    title: 'ตั้งค่าอีเมล', intro: 'อีเมลขาออกสำหรับลิงก์ต้อนรับ (บัญชีใหม่) และ “ลืมรหัสผ่าน” ใช้เซิร์ฟเวอร์ SMTP ใดก็ได้ (Gmail, Outlook/Microsoft 365 ฯลฯ)',
+    enabled: 'ส่งอีเมล', host: 'เซิร์ฟเวอร์ SMTP', port: 'พอร์ต', security: 'การเข้ารหัส', noEncryption: 'ไม่เข้ารหัส (เฉพาะ relay ภายใน)',
+    username: 'ชื่อผู้ใช้ SMTP', passwordKept: 'บันทึกไว้แล้ว เว้นว่างเพื่อใช้ค่าเดิม', fromEmail: 'อีเมลผู้ส่ง', fromName: 'ชื่อผู้ส่ง',
+    publicUrl: 'ที่อยู่เว็บที่ใช้ในลิงก์', publicUrlHint: 'เว้นว่าง = ใช้ค่า PUBLIC_ORIGIN',
+    gmailHint: 'Gmail: smtp.gmail.com, STARTTLS 587, ใช้อีเมลเป็นชื่อผู้ใช้ และใช้ App Password (บัญชี Google → ความปลอดภัย → รหัสผ่านสำหรับแอป)',
+    test: 'ส่งอีเมลทดสอบ', testHint: 'ใช้การตั้งค่าที่บันทึกแล้ว: กดบันทึกก่อน', sendTest: 'ส่งทดสอบ', sending: 'กำลังส่ง…',
+    testOk: 'ส่งไปที่ {{to}} แล้ว ตรวจกล่องจดหมาย (และโฟลเดอร์สแปม)', testFailed: 'ไม่สำเร็จ',
+  },
   errors: {
     unauthorized: 'กรุณาเข้าสู่ระบบ', forbidden: 'คุณไม่มีสิทธิ์ทำรายการนี้', not_found: 'ไม่พบข้อมูล',
-    invalid_credentials: 'ชื่อผู้ใช้/อีเมล หรือรหัสผ่านไม่ถูกต้อง', invalid_email: 'รูปแบบอีเมลไม่ถูกต้อง', email_taken: 'อีเมลนี้ถูกใช้กับบัญชีอื่นแล้ว', password_too_short: 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร',
+    invalid_credentials: 'ชื่อผู้ใช้/อีเมล หรือรหัสผ่านไม่ถูกต้อง', invalid_email: 'รูปแบบอีเมลไม่ถูกต้อง', invalid_token: 'ลิงก์นี้หมดอายุหรือถูกใช้ไปแล้ว', email_disabled: 'เซิร์ฟเวอร์นี้ยังไม่ได้ตั้งค่าอีเมล กรุณาติดต่อผู้ดูแลระบบ', smtp_incomplete: 'กรอกเซิร์ฟเวอร์ SMTP และอีเมลผู้ส่ง', cannot_delete_self: 'ไม่สามารถลบบัญชีของตัวเองได้', email_taken: 'อีเมลนี้ถูกใช้กับบัญชีอื่นแล้ว', password_too_short: 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร',
     invalid_username: 'ชื่อผู้ใช้: 2–40 ตัว ใช้ตัวอักษร ตัวเลข . _ -', username_taken: 'ชื่อผู้ใช้นี้ถูกใช้แล้ว',
     name_required: 'กรุณากรอกชื่อ', title_required: 'กรุณากรอกชื่อการ์ด', list_not_empty: 'ย้ายหรือเก็บการ์ดในคอลัมน์ก่อน',
     too_large: 'ไฟล์มีขนาดใหญ่เกินไป', not_an_image: 'วางได้เฉพาะรูป PNG, JPEG, GIF, WebP หรือ AVIF',

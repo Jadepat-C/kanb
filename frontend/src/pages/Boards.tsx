@@ -31,6 +31,7 @@ import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { fmtRelative } from '../lib/prefs'
 import type { Board, BoardListItem } from '../lib/types'
+import { avatarUrl, label } from '../lib/user'
 
 type Confirm = { kind: 'archive' | 'purge' | 'leave'; board: BoardListItem } | null
 
@@ -92,7 +93,7 @@ export function Boards() {
     (b) => (!f || `${b.name} ${b.description}`.toLowerCase().includes(f)) && (!owner || b.owners.some((o) => o.id === owner)),
   )
   const owners = useMemo(() => {
-    const m = new Map<string, { id: string; display_name: string }>()
+    const m = new Map<string, { id: string; display_name: string; username: string }>()
     for (const b of [...(active.data ?? []), ...(archived.data ?? [])]) for (const o of b.owners) m.set(o.id, o)
     return [...m.values()].sort((a, b) => a.display_name.localeCompare(b.display_name))
   }, [active.data, archived.data])
@@ -212,7 +213,7 @@ export function Boards() {
             <option value="">{t('filter.allOwners')}</option>
             {owners.map((o) => (
               <option key={o.id} value={o.id}>
-                {t('filter.ownedBy')}: {o.display_name}
+                {t('filter.ownedBy')}: {label(o)}
               </option>
             ))}
           </select>
@@ -346,10 +347,10 @@ function BoardTile({ b }: { b: BoardListItem }) {
       <div className="mt-3 flex items-center gap-1.5 text-xs text-muted">
         <span className="flex -space-x-1.5">
           {b.owners.slice(0, 3).map((o) => (
-            <Avatar key={o.id} name={o.display_name} color={o.avatar_color} size={20} />
+            <Avatar key={o.id} name={label(o)} color={o.avatar_color} src={avatarUrl(o.avatar_id)} size={20} />
           ))}
         </span>
-        <span className="truncate">{b.owners.map((o) => o.display_name).join(', ')}</span>
+        <span className="truncate">{b.owners.map((o) => label(o)).join(', ')}</span>
       </div>
       <div className="mt-2 flex gap-3 text-xs text-muted">
         <span>{t('boards.cards', { count: b.card_count })}</span>

@@ -36,6 +36,7 @@ import { useMe } from '../lib/auth'
 import { groupCards, useBoard, useBoardSocket, type ChangeEvent, type Viewer } from '../lib/board'
 import { errorText } from '../lib/i18n'
 import type { CardSummary } from '../lib/types'
+import { avatarUrl, label } from '../lib/user'
 
 type Columns = Record<string, string[]>
 
@@ -74,7 +75,7 @@ export function BoardPage() {
       else if (ev.kind === 'list') text = t('activity.columns')
       else if (ev.kind === 'board_deleted') text = t('activity.archivedBoard')
       else text = t('activity.settings')
-      toastActivity({ name: who.display_name, color: who.avatar_color }, text)
+      toastActivity({ name: label(who), color: who.avatar_color, src: avatarUrl(who.avatar_id) }, text)
     },
     [t],
   )
@@ -137,7 +138,7 @@ export function BoardPage() {
         c.excerpt,
         String(c.number),
         ...c.label_ids.map((l) => b.labels.get(l)?.name ?? ''),
-        ...c.assignee_ids.map((u) => b.members.get(u)?.display_name ?? ''),
+        ...c.assignee_ids.map((u) => { const m = b.members.get(u); return m ? label(m) : '' }),
       ]
         .join(' ')
         .toLowerCase()
@@ -643,8 +644,8 @@ function PresenceStack({ viewers, cards }: { viewers: Viewer[]; cards: Map<strin
   return (
     <div className="flex items-center -space-x-1.5" aria-label={t('presence.here')}>
       {shown.map((v) => (
-        <span key={v.user_id} className="relative" title={`${v.display_name} · ${what(v)}`}>
-          <Avatar name={v.display_name} color={v.avatar_color} size={26} />
+        <span key={v.user_id} className="relative" title={`${label(v)} · ${what(v)}`}>
+          <Avatar name={label(v)} color={v.avatar_color} src={avatarUrl(v.avatar_id)} size={26} />
           <span
             className={clsx(
               'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-[var(--surface)]',

@@ -36,11 +36,18 @@ pub struct User {
     pub locale: String,
     pub theme: String,
     pub avatar_color: String,
+    pub must_change_password: bool,
+    pub avatar_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 
 pub const USER_COLUMNS: &str = "id, username, display_name, email, is_super_admin, can_create_boards, \
-     is_active, locale, theme, avatar_color, created_at";
+     is_active, locale, theme, avatar_color, must_change_password, avatar_id, created_at";
+
+/// How a user's name is shown in history: "Name · @username"; deleted accounts read "[Deleted User] Name (username)".
+/// Use with the users table aliased as `u`.
+pub const DISPLAY_NAME_SQL: &str =
+    "CASE WHEN u.deleted_at IS NOT NULL THEN '[Deleted User] ' || u.display_name || ' (' || u.username || ')' ELSE u.display_name || ' · @' || u.username END";
 
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
     Argon2::default()
@@ -82,7 +89,9 @@ pub fn normalize_email(e: Option<String>) -> AppResult<Option<Option<String>>> {
 
 /// Emails sign people in, so they must be unique (case-insensitive).
 pub async fn ensure_email_free(db: &sqlx::PgPool, email: &str, except: Option<Uuid>) -> AppResult<()> {
-    let taken: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE lower(email) = lower($1) AND ($2::uuid IS NULL OR id <> $2)")
+    let taken: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM users WHERE lower(email) = lower($1) AND deleted_at IS NULL AND ($2::uuid IS NULL OR id <> $2)",
+    )
         .bind(email)
         .bind(except)
         .fetch_optional(db)
@@ -90,11 +99,11 @@ pub async fn ensure_email_free(db: &sqlx::PgPool, email: &str, except: Option<Uu
     if taken.is_some() { Err(AppError::Conflict("email_taken")) } else { Ok(()) }
 }
 
-fn token_hash(token: &str) -> String {
+pub(crate) fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
 
-fn new_token() -> String {
+pub(crate) fn new_token() -> String {
     let mut buf = [0u8; 32];
     getrandom::fill(&mut buf).expect("os rng");
     hex::encode(buf)
@@ -134,6 +143,18 @@ impl FromRequestParts<AppState> for CurrentUser {
                 .bind(state.config.session_days as i32)
                 .execute(&state.db)
                 .await?;
+        }
+        // Until an admin-set password has been replaced, only "change my password" (and reading /me) works.
+        if user.must_change_password {
+            let path = parts
+                .extensions
+                .get::<axum::extract::OriginalUri>()
+                .map(|u| u.path().to_string())
+                .unwrap_or_else(|| parts.uri.path().to_string());
+            let allowed = ["/api/me", "/api/me/password", "/api/auth/logout", "/me", "/me/password", "/auth/logout"];
+            if !allowed.contains(&path.as_str()) {
+                return Err(AppError::Forbidden);
+            }
         }
         let cu = CurrentUser(user);
         parts.extensions.insert(cu.clone());
@@ -196,7 +217,8 @@ pub async fn login(
         // usernames can't contain '@', so anything with '@' is looked up as an email
         sqlx::query_as(
             "SELECT id, password_hash, is_active FROM users
-             WHERE CASE WHEN strpos($1, '@') > 0 THEN lower(email) = lower($1) ELSE lower(username) = lower($1) END",
+             WHERE deleted_at IS NULL
+               AND CASE WHEN strpos($1, '@') > 0 THEN lower(email) = lower($1) ELSE lower(username) = lower($1) END",
         )
             .bind(req.username.trim())
             .fetch_optional(&state.db)
@@ -316,7 +338,8 @@ pub async fn update_me(
 
 #[derive(Deserialize)]
 pub struct ChangePassword {
-    current_password: String,
+    #[serde(default)]
+    current_password: Option<String>,
     new_password: String,
 }
 
@@ -331,17 +354,19 @@ pub async fn change_password(
         .bind(u.id)
         .fetch_one(&state.db)
         .await?;
-    let cur = req.current_password.clone();
-    let ok = match hash {
-        Some(h) => tokio::task::spawn_blocking(move || verify_password(&cur, &h)).await.map_err(|e| anyhow::anyhow!(e))?,
-        None => false,
-    };
+    let cur = req.current_password.clone().unwrap_or_default();
+    // right after an admin-set password (forced change) the user just proved it by signing in
+    let ok = u.must_change_password
+        || match hash {
+            Some(h) => tokio::task::spawn_blocking(move || verify_password(&cur, &h)).await.map_err(|e| anyhow::anyhow!(e))?,
+            None => false,
+        };
     if !ok {
         return Err(AppError::BadRequest("invalid_credentials"));
     }
     let np = req.new_password.clone();
     let new_hash = tokio::task::spawn_blocking(move || hash_password(&np)).await.map_err(|e| anyhow::anyhow!(e))??;
-    sqlx::query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1")
+    sqlx::query("UPDATE users SET password_hash = $2, must_change_password = false, updated_at = now() WHERE id = $1")
         .bind(u.id)
         .bind(new_hash)
         .execute(&state.db)
@@ -353,5 +378,135 @@ pub async fn change_password(
         .bind(current)
         .execute(&state.db)
         .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------- one-time links: welcome (set your password) and forgot password ----------
+
+/// Creates a one-time token for `purpose` (invite | reset), valid for `hours`. Returns the raw token.
+pub async fn create_password_token(db: &sqlx::PgPool, user_id: Uuid, purpose: &str, hours: i32) -> AppResult<String> {
+    let token = new_token();
+    sqlx::query(
+        "INSERT INTO password_tokens (token_hash, user_id, purpose, expires_at) VALUES ($1,$2,$3, now() + make_interval(hours => $4))",
+    )
+    .bind(token_hash(&token))
+    .bind(user_id)
+    .bind(purpose)
+    .bind(hours)
+    .execute(db)
+    .await?;
+    Ok(token)
+}
+
+/// Emails a set-password (invite) or reset link. Err = SMTP error text for the admin.
+pub async fn send_link_email(state: &AppState, user_id: Uuid, purpose: &str) -> Result<(), String> {
+    let s = crate::mail::load(state).await.map_err(|e| e.to_string())?;
+    if !crate::mail::ready(&s) {
+        return Err("email is not set up".into());
+    }
+    let (name, username, email, locale): (String, String, Option<String>, String) =
+        sqlx::query_as("SELECT display_name, username, email, locale FROM users WHERE id = $1 AND deleted_at IS NULL")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    let email = email.ok_or("user has no email")?;
+    let hours = if purpose == "invite" { 72 } else { 1 };
+    let token = create_password_token(&state.db, user_id, purpose, hours).await.map_err(|e| e.to_string())?;
+    let base = crate::mail::base_url(state, &s);
+    let link = format!("{base}/reset-password?token={token}");
+    let (subject, text, html) = crate::mail::link_email(purpose, &locale, &name, &username, &link, &format!("{base}/login"));
+    crate::mail::send(&s, &email, &name, &subject, text, html).await
+}
+
+/// Public: whether the login page should offer "Forgot password?".
+pub async fn options(State(state): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    let s = crate::mail::load(&state).await?;
+    Ok(Json(serde_json::json!({ "email_enabled": crate::mail::ready(&s) })))
+}
+
+#[derive(Deserialize)]
+pub struct ForgotReq {
+    /// username or email
+    login: String,
+}
+
+/// Always answers the same way, so it can't be used to find out which accounts/emails exist.
+pub async fn forgot(State(state): State<AppState>, Json(r): Json<ForgotReq>) -> AppResult<Json<serde_json::Value>> {
+    let s = crate::mail::load(&state).await?;
+    if !crate::mail::ready(&s) {
+        return Err(AppError::BadRequest("email_disabled"));
+    }
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM users WHERE deleted_at IS NULL AND is_active AND email IS NOT NULL
+           AND CASE WHEN strpos($1, '@') > 0 THEN lower(email) = lower($1) ELSE lower(username) = lower($1) END
+           AND NOT EXISTS (SELECT 1 FROM password_tokens t WHERE t.user_id = users.id AND t.purpose = 'reset'
+                           AND t.created_at > now() - interval '1 minute')",
+    )
+    .bind(r.login.trim())
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some((uid,)) = row {
+        // send in the background: the response time must not reveal whether the account exists
+        let st = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = send_link_email(&st, uid, "reset").await {
+                tracing::warn!(error = %e, user = %uid, "password reset email failed");
+            }
+        });
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct TokenReq {
+    token: String,
+}
+
+/// Lets the reset page say "this link has expired" before the user types a new password.
+pub async fn check_token(State(state): State<AppState>, Json(r): Json<TokenReq>) -> AppResult<Json<serde_json::Value>> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT u.username, t.purpose FROM password_tokens t JOIN users u ON u.id = t.user_id
+         WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now() AND u.deleted_at IS NULL AND u.is_active",
+    )
+    .bind(token_hash(&r.token))
+    .fetch_optional(&state.db)
+    .await?;
+    Ok(Json(match row {
+        Some((username, purpose)) => serde_json::json!({ "valid": true, "username": username, "purpose": purpose }),
+        None => serde_json::json!({ "valid": false }),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct ResetReq {
+    token: String,
+    password: String,
+}
+
+pub async fn reset(State(state): State<AppState>, Json(r): Json<ResetReq>) -> AppResult<Json<serde_json::Value>> {
+    validate_password(&r.password)?;
+    let mut tx = state.db.begin().await?;
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "UPDATE password_tokens t SET used_at = now() FROM users u
+         WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now()
+           AND u.id = t.user_id AND u.deleted_at IS NULL AND u.is_active
+         RETURNING t.user_id",
+    )
+    .bind(token_hash(&r.token))
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (uid,) = row.ok_or(AppError::BadRequest("invalid_token"))?;
+    let pw = r.password.clone();
+    let hash = tokio::task::spawn_blocking(move || hash_password(&pw)).await.map_err(|e| anyhow::anyhow!(e))??;
+    sqlx::query("UPDATE users SET password_hash = $2, must_change_password = false, updated_at = now() WHERE id = $1")
+        .bind(uid)
+        .bind(hash)
+        .execute(&mut *tx)
+        .await?;
+    // every other outstanding link and every session dies with the old password
+    sqlx::query("UPDATE password_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL").bind(uid).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1").bind(uid).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }

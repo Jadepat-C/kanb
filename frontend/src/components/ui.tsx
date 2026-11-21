@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import { Dialog as RDialog, DropdownMenu as RMenu, Popover as RPopover } from 'radix-ui'
 import { X } from 'lucide-react'
-import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
+import { forwardRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
 
 type Variant = 'primary' | 'ghost' | 'outline' | 'danger'
 
@@ -48,8 +48,21 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   )
 }
 
-export function Avatar({ name, color, size = 24 }: { name: string; color: string; size?: number }) {
-  const initials = [...name.trim()].slice(0, 2).join('').toUpperCase()
+export function Avatar({ name, color, size = 24, src }: { name: string; color: string; size?: number; src?: string | null }) {
+  const [broken, setBroken] = useState(false)
+  // initials from the display name only (labels look like "Name · @username")
+  const initials = [...name.split(' · ')[0].trim()].slice(0, 2).join('').toUpperCase()
+  if (src && !broken)
+    return (
+      <img
+        src={src}
+        alt=""
+        title={name}
+        onError={() => setBroken(true)}
+        className="inline-block shrink-0 rounded-full bg-[var(--surface-2)] object-cover ring-2 ring-[var(--surface)]"
+        style={{ width: size, height: size }}
+      />
+    )
   return (
     <span
       title={name}

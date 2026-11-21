@@ -34,6 +34,9 @@ pub struct CreateUser {
     can_create_boards: bool,
     /// UI language for the new user (and of their tutorial board)
     locale: Option<String>,
+    /// email them a "set your password" link (needs an email address and email set up)
+    #[serde(default)]
+    send_invite: bool,
 }
 fn yes() -> bool {
     true
@@ -49,6 +52,7 @@ pub async fn insert_user(
     is_super_admin: bool,
     can_create_boards: bool,
     locale: &str,
+    must_change_password: bool,
 ) -> AppResult<User> {
     let locale = if locale == "th" { "th" } else { "en" };
     let username = validate_username(username)?;
@@ -63,8 +67,8 @@ pub async fn insert_user(
     let id = Uuid::now_v7();
     let color = AVATAR_COLORS[(id.as_u128() % AVATAR_COLORS.len() as u128) as usize];
     let user: User = sqlx::query_as(sqlf!(
-        "INSERT INTO users (id, username, display_name, email, password_hash, is_super_admin, can_create_boards, avatar_color, locale)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING {USER_COLUMNS}"
+        "INSERT INTO users (id, username, display_name, email, password_hash, is_super_admin, can_create_boards, avatar_color, locale, must_change_password)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING {USER_COLUMNS}"
     ))
     .bind(id)
     .bind(&username)
@@ -75,6 +79,7 @@ pub async fn insert_user(
     .bind(can_create_boards)
     .bind(color)
     .bind(locale)
+    .bind(must_change_password)
     .fetch_one(db)
     .await?;
     // every new account starts with its own "Getting started" board (best effort: never block account creation)
@@ -85,7 +90,7 @@ pub async fn insert_user(
 }
 
 pub async fn list_users(State(state): State<AppState>, _a: SuperAdmin) -> AppResult<Json<Vec<User>>> {
-    let users: Vec<User> = sqlx::query_as(sqlf!("SELECT {USER_COLUMNS} FROM users ORDER BY lower(display_name)"))
+    let users: Vec<User> = sqlx::query_as(sqlf!("SELECT {USER_COLUMNS} FROM users WHERE deleted_at IS NULL ORDER BY lower(display_name)"))
         .fetch_all(&state.db)
         .await?;
     Ok(Json(users))
@@ -95,15 +100,31 @@ pub async fn create_user(
     State(state): State<AppState>,
     SuperAdmin(admin): SuperAdmin,
     Json(r): Json<CreateUser>,
-) -> AppResult<Json<User>> {
+) -> AppResult<Json<serde_json::Value>> {
     let locale = r.locale.clone().unwrap_or_else(|| admin.locale.clone());
-    let u = insert_user(&state.db, &r.username, &r.display_name, r.email, &r.password, r.is_super_admin, r.can_create_boards, &locale)
+    // the admin chose this password, so the user must replace it at first sign-in
+    let u = insert_user(&state.db, &r.username, &r.display_name, r.email, &r.password, r.is_super_admin, r.can_create_boards, &locale, true)
         .await
         .map_err(|e| match e {
             AppError::Conflict("already_exists") => AppError::Conflict("username_taken"),
             e => e,
         })?;
-    Ok(Json(u))
+    let mut invite = serde_json::Value::Null;
+    if r.send_invite && u.email.is_some() {
+        invite = match crate::auth::send_link_email(&state, u.id, "invite").await {
+            Ok(()) => serde_json::json!({ "sent": true }),
+            Err(e) => serde_json::json!({ "sent": false, "error": e }),
+        };
+    }
+    Ok(Json(serde_json::json!({ "user": u, "invite": invite })))
+}
+
+/// Emails the user a password-reset link (instead of the admin choosing a password).
+pub async fn send_reset(State(state): State<AppState>, _a: SuperAdmin, Path(id): Path<Uuid>) -> AppResult<Json<serde_json::Value>> {
+    Ok(Json(match crate::auth::send_link_email(&state, id, "reset").await {
+        Ok(()) => serde_json::json!({ "sent": true }),
+        Err(e) => serde_json::json!({ "sent": false, "error": e }),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -162,7 +183,8 @@ pub async fn reset_password(
     validate_password(&r.password)?;
     let pw = r.password.clone();
     let hash = tokio::task::spawn_blocking(move || hash_password(&pw)).await.map_err(|e| anyhow::anyhow!(e))??;
-    let res = sqlx::query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1")
+    // an admin-chosen password must be replaced by the user at next sign-in
+    let res = sqlx::query("UPDATE users SET password_hash = $2, must_change_password = true, updated_at = now() WHERE id = $1 AND deleted_at IS NULL")
         .bind(id)
         .bind(hash)
         .execute(&state.db)
@@ -181,13 +203,128 @@ pub struct UserBrief {
     username: String,
     display_name: String,
     avatar_color: String,
+    avatar_id: Option<Uuid>,
 }
 
 pub async fn directory(State(state): State<AppState>, _u: CurrentUser) -> AppResult<Json<Vec<UserBrief>>> {
     let users: Vec<UserBrief> = sqlx::query_as(
-        "SELECT id, username, display_name, avatar_color FROM users WHERE is_active ORDER BY lower(display_name)",
+        "SELECT id, username, display_name, avatar_color, avatar_id FROM users WHERE is_active ORDER BY lower(display_name)",
     )
     .fetch_all(&state.db)
     .await?;
     Ok(Json(users))
+}
+
+// ---------- deleting users ----------
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct BoardImpact {
+    id: Uuid,
+    name: String,
+    card_count: i64,
+}
+
+#[derive(Serialize)]
+pub struct DeletePreview {
+    /// boards the user owns and is the only member of: deleted with everything in them
+    deleted: Vec<BoardImpact>,
+    /// shared boards where the user is the only owner: another member becomes owner
+    new_owner: Vec<BoardImpact>,
+    /// other shared boards: the user is just removed
+    removed_from: i64,
+}
+
+async fn impact(db: &sqlx::PgPool, id: Uuid) -> AppResult<DeletePreview> {
+    let deleted: Vec<BoardImpact> = sqlx::query_as(
+        "SELECT b.id, b.name, (SELECT count(*) FROM cards c WHERE c.board_id = b.id) AS card_count
+         FROM boards b JOIN board_members m ON m.board_id = b.id AND m.user_id = $1
+         WHERE NOT EXISTS (SELECT 1 FROM board_members o WHERE o.board_id = b.id AND o.user_id <> $1)
+         ORDER BY lower(b.name)",
+    )
+    .bind(id)
+    .fetch_all(db)
+    .await?;
+    let new_owner: Vec<BoardImpact> = sqlx::query_as(
+        "SELECT b.id, b.name, (SELECT count(*) FROM cards c WHERE c.board_id = b.id) AS card_count
+         FROM boards b JOIN board_members m ON m.board_id = b.id AND m.user_id = $1
+         JOIN board_roles r ON r.id = m.role_id AND r.is_owner
+         WHERE EXISTS (SELECT 1 FROM board_members o WHERE o.board_id = b.id AND o.user_id <> $1)
+           AND NOT EXISTS (SELECT 1 FROM board_members o JOIN board_roles r2 ON r2.id = o.role_id
+                           WHERE o.board_id = b.id AND o.user_id <> $1 AND r2.is_owner)
+         ORDER BY lower(b.name)",
+    )
+    .bind(id)
+    .fetch_all(db)
+    .await?;
+    let (total,): (i64,) = sqlx::query_as("SELECT count(*) FROM board_members WHERE user_id = $1").bind(id).fetch_one(db).await?;
+    let removed_from = total - deleted.len() as i64 - new_owner.len() as i64;
+    Ok(DeletePreview { deleted, new_owner, removed_from })
+}
+
+pub async fn delete_preview(State(state): State<AppState>, _a: SuperAdmin, Path(id): Path<Uuid>) -> AppResult<Json<DeletePreview>> {
+    Ok(Json(impact(&state.db, id).await?))
+}
+
+/// Deletes an account. Boards only they were in are deleted (with their files); on shared boards they're
+/// removed (if they were the only owner, the longest-standing other member becomes owner). Their comments
+/// and history stay, shown as "[Deleted User] Name (username)". The username and email become free again.
+pub async fn delete_user(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, Path(id): Path<Uuid>) -> AppResult<Json<serde_json::Value>> {
+    if id == me.id {
+        return Err(AppError::BadRequest("cannot_delete_self"));
+    }
+    let (username,): (String,) = sqlx::query_as("SELECT username FROM users WHERE id = $1 AND deleted_at IS NULL")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+    let plan = impact(&state.db, id).await?;
+    let mut tx = state.db.begin().await?;
+    for b in &plan.new_owner {
+        // hand ownership to whoever joined the board earliest
+        sqlx::query(
+            "UPDATE board_members SET role_id = (SELECT id FROM board_roles WHERE board_id = $1 AND is_owner LIMIT 1)
+             WHERE board_id = $1 AND user_id = (SELECT user_id FROM board_members WHERE board_id = $1 AND user_id <> $2
+                                                ORDER BY added_at LIMIT 1)",
+        )
+        .bind(b.id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for b in &plan.deleted {
+        sqlx::query("DELETE FROM boards WHERE id = $1").bind(b.id).execute(&mut *tx).await?;
+    }
+    for q in [
+        "DELETE FROM board_members WHERE user_id = $1",
+        "DELETE FROM card_assignees WHERE user_id = $1",
+        "DELETE FROM board_prefs WHERE user_id = $1",
+        "DELETE FROM sessions WHERE user_id = $1",
+        "DELETE FROM password_tokens WHERE user_id = $1",
+    ] {
+        sqlx::query(q).bind(id).execute(&mut *tx).await?;
+    }
+    sqlx::query(
+        "UPDATE users SET deleted_at = now(), is_active = false, password_hash = NULL, email = NULL, totp_secret = NULL,
+                is_super_admin = false, can_create_boards = false, updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    crate::avatars::purge_for_user(&state, id).await;
+    sqlx::query("UPDATE users SET avatar_id = NULL WHERE id = $1").bind(id).execute(&state.db).await?;
+    let mut files = 0;
+    for b in &plan.deleted {
+        files += crate::files::delete_board_objects(&state.store, b.id).await;
+    }
+    for b in plan.new_owner.iter() {
+        state.hub.notify(b.id, "member", None, me.id);
+    }
+    tracing::info!(user = %username, by = %me.username, boards_deleted = plan.deleted.len(), files, "user deleted");
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "boards_deleted": plan.deleted.len(),
+        "boards_new_owner": plan.new_owner.len(),
+        "files_deleted": files,
+    })))
 }

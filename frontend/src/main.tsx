@@ -10,6 +10,7 @@ import './index.css'
 import { useMe } from './lib/auth'
 import './lib/i18n'
 import { Admin } from './pages/Admin'
+import { ForceChangePassword, ForgotPassword, ResetPassword } from './pages/AuthPages'
 import { BoardPage } from './pages/Board'
 import { CalendarPage } from './pages/CalendarPage'
 import { Boards } from './pages/Boards'
@@ -32,11 +33,15 @@ function RequireAuth({ children }: { children: ReactNode }) {
       </div>
     )
   if (!me) return <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />
+  // an admin-set password must be replaced before anything else
+  if (me.must_change_password) return <ForceChangePassword me={me} />
   return <>{children}</>
 }
 
 const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
+  { path: '/forgot-password', element: <ForgotPassword /> },
+  { path: '/reset-password', element: <ResetPassword /> },
   {
     element: (
       <RequireAuth>

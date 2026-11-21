@@ -5,7 +5,7 @@ import { errorText } from '../lib/i18n'
 import { Avatar } from './ui'
 
 type Kind = 'success' | 'error' | 'info' | 'activity'
-type Toast = { id: number; text: string; kind: Kind; who?: { name: string; color: string } }
+type Toast = { id: number; text: string; kind: Kind; who?: { name: string; color: string; src?: string } }
 let listeners: ((t: Toast[]) => void)[] = []
 let toasts: Toast[] = []
 let seq = 0
@@ -33,7 +33,7 @@ export function toast(text: string, kind: Exclude<Kind, 'activity'> = 'info') {
 export const toastSuccess = (text: string) => toast(text, 'success')
 export const toastError = (e: unknown) => toast(errorText(e), 'error')
 /** Something another person did (shown with their avatar). */
-export const toastActivity = (who: { name: string; color: string }, text: string) => push({ text, kind: 'activity', who }, 5000)
+export const toastActivity = (who: { name: string; color: string; src?: string }, text: string) => push({ text, kind: 'activity', who }, 5000)
 
 export function Toaster() {
   const [items, setItems] = useState<Toast[]>([])
@@ -56,7 +56,7 @@ export function Toaster() {
           )}
         >
           {t.kind === 'activity' && t.who ? (
-            <Avatar name={t.who.name} color={t.who.color} size={22} />
+            <Avatar name={t.who.name} color={t.who.color} src={t.who.src} size={22} />
           ) : t.kind === 'success' ? (
             <CircleCheck size={18} className="mt-px shrink-0 text-green-600" />
           ) : t.kind === 'error' ? (

@@ -12,6 +12,13 @@ A self-hosted Kanban board for **one organization**: no public sign-up. Accounts
 
 ## Features
 
+- **Users page (super admin):**
+  - Search users. When creating one, a **random password is generated** and can be copied. Optionally **email them a "set your password" link**, valid 3 days.
+  - **Forced password change:** anyone whose password was set by an admin (on creation or reset) must choose their own at their next sign-in. The server enforces this; until then every other request is refused.
+  - **Delete users:** a preview shows the effect first. Boards they own and are the only member of are deleted with their files. Shared boards stay; if they were the only owner, the longest-standing member becomes owner. Their comments and history remain, shown as **"[Deleted User] Name (username)"**. Their username and email become free again.
+- **Email (SMTP), set up in-app** (Users → Email settings): any SMTP server; the SMTP password is never sent back to the browser. There's a test button. It powers the welcome links and **"Forgot password?"** on the login page: a one-time link valid for 1 hour, with the same answer whether or not the account exists, and every session is signed out once a new password is set. In development, Mailpit catches all mail at http://127.0.0.1:58025.
+- **Profile pictures** (Profile page: click or drop an image). The server re-encodes each upload as a 256×256 JPEG, which keeps files small, strips EXIF/GPS metadata and rejects anything that isn't a real image. Pictures are only served to signed-in users, are deleted with the account, and fall back to initials on the user's colour.
+- **People are shown as "Display Name · @username"** wherever a name appears on one line, because display names can be anything. Deleted accounts show as "[Deleted User] Name (username)".
 - **Sign in with username or email.** Emails are unique (case-insensitive) and validated. Users set theirs in Profile, or a super admin sets it in Users → Edit.
 - **Roles.** *Super admin* sees and manages every board and all users. *Board roles* are per board and fully customizable: Owner / Admin / Editor / Commenter / Viewer are seeded, and you can add your own from a permission matrix (13 permissions).
 - **Cards are Markdown, edited Obsidian-style.** Live preview renders headings, bold/italic/strike, code, links, images, quotes, lists, checkboxes and dividers in place. An element's raw syntax shows only while the cursor is in it. There's a formatting toolbar, and Ctrl+B / I / E / K work. **Paste or drop images**: they upload and become `![](/api/files/…)`. Other dropped files are attached with a link. `- [ ]` items double as the card's checklist progress.

@@ -31,7 +31,9 @@ pub struct Viewer {
     pub conn: Uuid,
     pub user_id: Uuid,
     pub display_name: String,
+    pub username: String,
     pub avatar_color: String,
+    pub avatar_id: Option<Uuid>,
     pub card_id: Option<Uuid>,
     pub editing: bool,
 }
@@ -121,7 +123,9 @@ async fn pump(mut socket: WebSocket, hub: Hub, board_id: Uuid, user: User) {
         conn,
         user_id: user.id,
         display_name: user.display_name.clone(),
+        username: user.username.clone(),
         avatar_color: user.avatar_color.clone(),
+        avatar_id: user.avatar_id,
         card_id: None,
         editing: false,
     };

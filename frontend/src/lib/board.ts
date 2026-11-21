@@ -33,7 +33,9 @@ export interface Viewer {
   conn: string
   user_id: string
   display_name: string
+  username: string
   avatar_color: string
+  avatar_id: string | null
   card_id: string | null
   editing: boolean
 }

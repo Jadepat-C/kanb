@@ -1,8 +1,8 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Languages, Moon, Sun } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Navigate, useLocation, useNavigate } from 'react-router'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router'
 import { Button, Field, Input } from '../components/ui'
 import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
@@ -21,6 +21,7 @@ export function Login() {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [, force] = useState(0)
+  const options = useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ email_enabled: boolean }>('/auth/options') })
 
   if (me) return <Navigate to="/" replace />
   const from = (loc.state as { from?: string } | null)?.from ?? '/'
@@ -75,6 +76,11 @@ export function Login() {
         <Button variant="primary" className="w-full" disabled={busy}>
           {t('auth.signIn')}
         </Button>
+        {options.data?.email_enabled && (
+          <Link to="/forgot-password" className="block text-center text-sm text-accent hover:underline">
+            {t('auth.forgot')}
+          </Link>
+        )}
         <p className="text-center text-xs text-muted">{t('auth.noSignup')}</p>
       </form>
     </div>

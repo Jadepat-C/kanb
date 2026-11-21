@@ -44,6 +44,9 @@ pub struct CardSummary {
     pub description: String,
 }
 
+/// shown user name, see auth::DISPLAY_NAME_SQL
+const DN: &str = crate::auth::DISPLAY_NAME_SQL;
+
 const SUMMARY_SELECT: &str = r#"
 SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status_id, c.color, c.due_at, c.updated_at, c.description,
   COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{}') AS label_ids,
@@ -205,6 +208,8 @@ pub struct Card {
     color: Option<String>,
     due_at: Option<DateTime<Utc>>,
     created_by: Option<Uuid>,
+    #[sqlx(default)]
+    created_by_name: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     label_ids: Vec<Uuid>,
@@ -220,6 +225,9 @@ pub struct Attachment {
     pub is_inline: bool,
     pub uploaded_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// shown name (deleted accounts read "[Deleted User] Name (username)")
+    #[sqlx(default)]
+    pub uploaded_by_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -235,19 +243,22 @@ pub async fn get_card(
 ) -> AppResult<Json<CardDetail>> {
     let board_id = board_of_card(&state.db, id).await?;
     board_access(&state.db, &u, board_id).await?;
-    let card: Card = sqlx::query_as(
+    let card: Card = sqlx::query_as(sqlf!(
         "SELECT c.id, c.board_id, c.list_id, c.number, c.title, c.description, c.priority, c.status_id, c.color, c.due_at,
-                c.created_by, c.created_at, c.updated_at,
-                COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{}') AS label_ids,
-                COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{}') AS assignee_ids
-         FROM cards c WHERE c.id = $1",
-    )
+                c.created_by, (SELECT {DN} FROM users u WHERE u.id = c.created_by) AS created_by_name, c.created_at, c.updated_at,
+                COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{{}}') AS label_ids,
+                COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{{}}') AS assignee_ids
+         FROM cards c WHERE c.id = $1"
+    ))
     .bind(id)
     .fetch_one(&state.db)
     .await?;
     let attachments: Vec<Attachment> = sqlx::query_as(
-        "SELECT id, filename, content_type, size, is_inline, uploaded_by, created_at FROM attachments
-         WHERE card_id = $1 AND deleted_at IS NULL AND NOT is_inline ORDER BY created_at",
+        sqlf!(
+            "SELECT a.id, a.filename, a.content_type, a.size, a.is_inline, a.uploaded_by, a.created_at, {DN} AS uploaded_by_name
+             FROM attachments a LEFT JOIN users u ON u.id = a.uploaded_by
+             WHERE a.card_id = $1 AND a.deleted_at IS NULL AND NOT a.is_inline ORDER BY a.created_at"
+        ),
     )
     .bind(id)
     .fetch_all(&state.db)
@@ -508,7 +519,7 @@ pub async fn set_assignees(
     board_access(&state.db, &u, board_id).await?.require(perms::CARDS_EDIT)?;
     let mut tx = state.db.begin().await?;
     let valid: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT u.id, u.display_name FROM board_members m JOIN users u ON u.id = m.user_id WHERE m.board_id = $1",
+        "SELECT u.id, u.display_name || ' · @' || u.username FROM board_members m JOIN users u ON u.id = m.user_id WHERE m.board_id = $1",
     )
     .bind(board_id)
     .fetch_all(&mut *tx)
@@ -542,6 +553,9 @@ pub enum TimelineItem {
     Comment {
         id: Uuid,
         author_id: Option<Uuid>,
+        author_name: Option<String>,
+        author_color: Option<String>,
+        author_avatar: Option<Uuid>,
         body: String,
         created_at: DateTime<Utc>,
         edited: bool,
@@ -549,6 +563,9 @@ pub enum TimelineItem {
     Event {
         id: i64,
         actor_id: Option<Uuid>,
+        actor_name: Option<String>,
+        actor_color: Option<String>,
+        actor_avatar: Option<Uuid>,
         kind: String,
         data: Value,
         created_at: DateTime<Utc>,
@@ -570,29 +587,41 @@ pub async fn timeline(
 ) -> AppResult<Json<Vec<TimelineItem>>> {
     let board_id = board_of_card(&state.db, id).await?;
     board_access(&state.db, &u, board_id).await?;
-    let comments: Vec<(Uuid, Option<Uuid>, String, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT id, author_id, body, created_at, updated_at FROM comments WHERE card_id = $1 AND deleted_at IS NULL",
-    )
+    type C = (Uuid, Option<Uuid>, String, DateTime<Utc>, DateTime<Utc>, Option<String>, Option<String>, Option<Uuid>);
+    let comments: Vec<C> = sqlx::query_as(sqlf!(
+        "SELECT cm.id, cm.author_id, cm.body, cm.created_at, cm.updated_at, {DN}, u.avatar_color, u.avatar_id
+         FROM comments cm LEFT JOIN users u ON u.id = cm.author_id WHERE cm.card_id = $1 AND cm.deleted_at IS NULL"
+    ))
     .bind(id)
     .fetch_all(&state.db)
     .await?;
-    let events: Vec<(i64, Option<Uuid>, String, Value, DateTime<Utc>)> =
-        sqlx::query_as("SELECT id, actor_id, kind, data, created_at FROM card_events WHERE card_id = $1")
+    type E = (i64, Option<Uuid>, String, Value, DateTime<Utc>, Option<String>, Option<String>, Option<Uuid>);
+    let events: Vec<E> =
+        sqlx::query_as(sqlf!(
+            "SELECT e.id, e.actor_id, e.kind, e.data, e.created_at, {DN}, u.avatar_color, u.avatar_id
+             FROM card_events e LEFT JOIN users u ON u.id = e.actor_id WHERE e.card_id = $1"
+        ))
             .bind(id)
             .fetch_all(&state.db)
             .await?;
     let mut items: Vec<TimelineItem> = comments
         .into_iter()
-        .map(|(id, author_id, body, created_at, updated_at)| TimelineItem::Comment {
+        .map(|(id, author_id, body, created_at, updated_at, author_name, author_color, author_avatar)| TimelineItem::Comment {
             id,
             author_id,
+            author_name,
+            author_color,
+            author_avatar,
             body,
             created_at,
             edited: updated_at > created_at + chrono::Duration::seconds(1),
         })
-        .chain(events.into_iter().map(|(id, actor_id, kind, data, created_at)| TimelineItem::Event {
+        .chain(events.into_iter().map(|(id, actor_id, kind, data, created_at, actor_name, actor_color, actor_avatar)| TimelineItem::Event {
             id,
             actor_id,
+            actor_name,
+            actor_color,
+            actor_avatar,
             kind,
             data,
             created_at,
@@ -827,14 +856,14 @@ pub async fn archived_cards(
     Path(board_id): Path<Uuid>,
 ) -> AppResult<Json<Vec<ArchivedCard>>> {
     board_access(&state.db, &u, board_id).await?;
-    let rows: Vec<ArchivedCard> = sqlx::query_as(
+    let rows: Vec<ArchivedCard> = sqlx::query_as(sqlf!(
         "SELECT c.id, c.number, c.title, l.name AS list_name, c.archived_at,
-                (SELECT us.display_name FROM card_events e JOIN users us ON us.id = e.actor_id
+                (SELECT {DN} FROM card_events e JOIN users u ON u.id = e.actor_id
                  WHERE e.card_id = c.id AND e.kind = 'archived' ORDER BY e.id DESC LIMIT 1) AS archived_by
          FROM cards c JOIN lists l ON l.id = c.list_id
          WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND l.archived_at IS NULL
-         ORDER BY c.archived_at DESC",
-    )
+         ORDER BY c.archived_at DESC"
+    ))
     .bind(board_id)
     .fetch_all(&state.db)
     .await?;

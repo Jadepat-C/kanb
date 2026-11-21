@@ -64,7 +64,7 @@ pub async fn list_boards(
                 (SELECT count(*) FROM cards c JOIN lists l ON l.id = c.list_id
                  WHERE c.board_id = b.id AND c.archived_at IS NULL AND l.archived_at IS NULL) AS card_count,
                 (SELECT count(*) FROM board_members m WHERE m.board_id = b.id) AS member_count,
-                COALESCE((SELECT json_agg(json_build_object('id', u.id, 'display_name', u.display_name, 'avatar_color', u.avatar_color)
+                COALESCE((SELECT json_agg(json_build_object('id', u.id, 'display_name', u.display_name, 'username', u.username, 'avatar_color', u.avatar_color, 'avatar_id', u.avatar_id)
                                           ORDER BY lower(u.display_name))
                           FROM board_members m JOIN board_roles r ON r.id = m.role_id JOIN users u ON u.id = m.user_id
                           WHERE m.board_id = b.id AND r.is_owner), '[]'::json) AS owners,
@@ -224,6 +224,7 @@ pub struct Member {
     pub username: String,
     pub display_name: String,
     pub avatar_color: String,
+    pub avatar_id: Option<Uuid>,
     pub role_id: Uuid,
 }
 
@@ -287,7 +288,7 @@ pub async fn get_board(
             .fetch_all(db)
             .await?;
     let members: Vec<Member> = sqlx::query_as(
-        "SELECT u.id AS user_id, u.username, u.display_name, u.avatar_color, m.role_id
+        "SELECT u.id AS user_id, u.username, u.display_name, u.avatar_color, u.avatar_id, m.role_id
          FROM board_members m JOIN users u ON u.id = m.user_id WHERE m.board_id = $1 ORDER BY lower(u.display_name)",
     )
     .bind(id)

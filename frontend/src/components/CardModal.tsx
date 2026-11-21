@@ -25,6 +25,7 @@ import { api, fileUrl, upload } from '../lib/api'
 import { useMe } from '../lib/auth'
 import type { BoardHelpers, Viewer } from '../lib/board'
 import { fmtDate, fmtRelative, fmtSize } from '../lib/prefs'
+import { avatarUrl, label } from '../lib/user'
 import type { Attachment, CardDetail, Label, TimelineItem } from '../lib/types'
 import { Stars } from './CardTile'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -153,14 +154,14 @@ export function CardModal({
                   <div className="flex shrink-0 items-center gap-1.5 self-center rounded-full bg-black/5 py-1 pl-1 pr-2.5 text-xs dark:bg-white/10">
                     <span className="flex -space-x-1.5">
                       {viewers.slice(0, 4).map((v) => (
-                        <span key={v.user_id} title={v.display_name} className={clsx('rounded-full', v.editing && 'ring-2 ring-amber-500')}>
-                          <Avatar name={v.display_name} color={v.avatar_color} size={22} />
+                        <span key={v.user_id} title={label(v)} className={clsx('rounded-full', v.editing && 'ring-2 ring-amber-500')}>
+                          <Avatar name={label(v)} color={v.avatar_color} src={avatarUrl(v.avatar_id)} size={22} />
                         </span>
                       ))}
                     </span>
                     <span className="text-muted">
                       {viewers.some((v) => v.editing)
-                        ? `${viewers.filter((v) => v.editing).map((v) => v.display_name).join(', ')} ${t('presence.editing')}`
+                        ? `${viewers.filter((v) => v.editing).map((v) => label(v)).join(', ')} ${t('presence.editing')}`
                         : t('presence.here')}
                     </span>
                   </div>
@@ -307,7 +308,8 @@ function Attachments({
         {items.map((a, idx) => {
           const canPreview = previewKind(a) !== 'none'
           const isImage = a.content_type.startsWith('image/') && a.content_type !== 'image/svg+xml'
-          const uploader = a.uploaded_by ? b.members.get(a.uploaded_by)?.display_name : undefined
+          const m = a.uploaded_by ? b.members.get(a.uploaded_by) : undefined
+          const uploader = a.uploaded_by_name ?? (m ? label(m) : undefined)
           return (
             <div key={a.id} className="group flex items-center gap-3 rounded-lg border border-line p-2">
               <button type="button" onClick={() => setPreview(idx)} className="shrink-0 cursor-pointer" title={t('preview.open')}>
@@ -389,8 +391,14 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
       },
     })
   }
-  const name = (id: string | null) => (id && b.members.get(id)?.display_name) || '—'
-  const color = (id: string | null) => (id && b.members.get(id)?.avatar_color) || '#a1a1aa'
+  // the server sends names (incl. "[Deleted User] Name (username)" for removed accounts); members are a fallback
+  const memberLabel = (id: string | null) => {
+    const m = id ? b.members.get(id) : undefined
+    return m ? label(m) : undefined
+  }
+  const name = (id: string | null, server?: string | null) => server || memberLabel(id) || '—'
+  const pic = (id: string | null, server?: string | null) => avatarUrl(server ?? (id ? b.members.get(id)?.avatar_id : null))
+  const color = (id: string | null, server?: string | null) => server || (id && b.members.get(id)?.avatar_color) || '#a1a1aa'
   const items = (q.data ?? []).filter((i) => showEvents || i.type === 'comment')
 
   return (
@@ -406,7 +414,7 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
     >
       {b.can('comments.create') && me && (
         <div className="mb-4 flex gap-3">
-          <Avatar name={me.display_name} color={me.avatar_color} size={30} />
+          <Avatar name={label(me)} color={me.avatar_color} src={avatarUrl(me.avatar_id)} size={30} />
           <div className="min-w-0 flex-1 space-y-2">
             <LiveEditor
               ref={composer}
@@ -432,10 +440,10 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
         {items.map((i) =>
           i.type === 'comment' ? (
             <li key={`c${i.id}`} className="flex gap-3">
-              <Avatar name={name(i.author_id)} color={color(i.author_id)} size={30} />
+              <Avatar name={name(i.author_id, i.author_name)} color={color(i.author_id, i.author_color)} src={pic(i.author_id, i.author_avatar)} size={30} />
               <div className="min-w-0 flex-1 rounded-lg border border-line bg-surface-2 px-3 py-2">
                 <div className="mb-1 flex items-center gap-2 text-xs">
-                  <span className="font-semibold">{name(i.author_id)}</span>
+                  <span className="font-semibold">{name(i.author_id, i.author_name)}</span>
                   <span className="text-muted" title={fmtDate(i.created_at, true)}>
                     {fmtRelative(i.created_at)}
                     {i.edited && ` · ${t('card.edited')}`}
@@ -466,7 +474,7 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
                 <EventIcon kind={i.kind} />
               </span>
               <span className="min-w-0">
-                <span className="font-medium text-[var(--text)]">{name(i.actor_id)}</span> <EventText kind={i.kind} data={i.data} />
+                <span className="font-medium text-[var(--text)]">{name(i.actor_id, i.actor_name)}</span> <EventText kind={i.kind} data={i.data} />
                 <span className="ml-1.5" title={fmtDate(i.created_at, true)}>· {fmtRelative(i.created_at)}</span>
               </span>
             </li>
@@ -605,8 +613,8 @@ function Sidebar({
             const m = b.members.get(id)
             return m ? (
               <span key={id} className="flex items-center gap-1 rounded-full bg-black/5 py-0.5 pl-0.5 pr-2 text-xs dark:bg-white/10">
-                <Avatar name={m.display_name} color={m.avatar_color} size={20} />
-                {m.display_name}
+                <Avatar name={label(m)} color={m.avatar_color} src={avatarUrl(m.avatar_id)} size={20} />
+                {label(m)}
               </span>
             ) : null
           })}
@@ -619,8 +627,8 @@ function Sidebar({
                     onClick={() => setIds.mutate({ kind: 'assignees', ids: toggle(card.assignee_ids, m.user_id) })}
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
                   >
-                    <Avatar name={m.display_name} color={m.avatar_color} size={22} />
-                    <span className="flex-1 truncate">{m.display_name}</span>
+                    <Avatar name={label(m)} color={m.avatar_color} src={avatarUrl(m.avatar_id)} size={22} />
+                    <span className="flex-1 truncate">{label(m)}</span>
                     {card.assignee_ids.includes(m.user_id) && <Check size={14} />}
                   </button>
                 ))}
@@ -683,7 +691,8 @@ function Sidebar({
       <div className="space-y-0.5 border-t border-line pt-3 text-xs text-muted">
         <div>
           {t('card.created')}: {fmtDate(card.created_at, true)}
-          {card.created_by && b.members.get(card.created_by) && ` · ${b.members.get(card.created_by)!.display_name}`}
+          {(card.created_by_name || (card.created_by && b.members.get(card.created_by))) &&
+            ` · ${card.created_by_name || label(b.members.get(card.created_by!)!)}`}
         </div>
         <div>
           {t('card.updated')}: {fmtRelative(card.updated_at)}

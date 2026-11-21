@@ -12,6 +12,8 @@ export interface User {
   locale: Locale
   theme: Theme
   avatar_color: string
+  must_change_password: boolean
+  avatar_id: string | null
   created_at: string
 }
 
@@ -20,6 +22,7 @@ export interface UserBrief {
   username: string
   display_name: string
   avatar_color: string
+  avatar_id: string | null
 }
 
 export interface BoardListItem {
@@ -31,7 +34,7 @@ export interface BoardListItem {
   is_member: boolean
   card_count: number
   member_count: number
-  owners: { id: string; display_name: string; avatar_color: string }[]
+  owners: { id: string; display_name: string; username: string; avatar_color: string; avatar_id: string | null }[]
   archived_at: string | null
   can_manage: boolean
   can_delete: boolean
@@ -93,6 +96,7 @@ export interface Member {
   username: string
   display_name: string
   avatar_color: string
+  avatar_id: string | null
   role_id: string
 }
 
@@ -128,6 +132,7 @@ export interface Card {
   color: string | null
   due_at: string | null
   created_by: string | null
+  created_by_name?: string | null
   created_at: string
   updated_at: string
   label_ids: string[]
@@ -142,6 +147,7 @@ export interface Attachment {
   is_inline: boolean
   uploaded_by: string | null
   created_at: string
+  uploaded_by_name?: string | null
 }
 
 export interface CardDetail {
@@ -150,8 +156,8 @@ export interface CardDetail {
 }
 
 export type TimelineItem =
-  | { type: 'comment'; id: string; author_id: string | null; body: string; created_at: string; edited: boolean }
-  | { type: 'event'; id: number; actor_id: string | null; kind: string; data: Record<string, unknown>; created_at: string }
+  | { type: 'comment'; id: string; author_id: string | null; author_name?: string | null; author_color?: string | null; author_avatar?: string | null; body: string; created_at: string; edited: boolean }
+  | { type: 'event'; id: number; actor_id: string | null; actor_name?: string | null; actor_color?: string | null; actor_avatar?: string | null; kind: string; data: Record<string, unknown>; created_at: string }
 
 export interface SearchResult {
   boards: { id: string; name: string; color: string }[]

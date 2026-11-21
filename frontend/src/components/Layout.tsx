@@ -1,10 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { CalendarDays, Check, Languages, LogOut, Monitor, Moon, Sun, UserCog, Users } from 'lucide-react'
+import { CalendarDays, Check, LayoutGrid, Languages, LogOut, Monitor, Moon, ShieldCheck, Sun, UserCog } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Link, Outlet, useNavigate } from 'react-router'
 import { api } from '../lib/api'
 import { useMe, useUpdatePrefs } from '../lib/auth'
 import type { Locale, Theme } from '../lib/types'
+import { avatarUrl, label } from '../lib/user'
 import { SearchPalette } from './SearchPalette'
 import { Avatar, Button, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from './ui'
 
@@ -33,8 +34,9 @@ export function Layout() {
           <span className="hidden sm:inline">{t('app.name')}</span>
         </Link>
         <nav className="flex items-center gap-1 text-sm">
-          <Link to="/" className="rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
-            {t('nav.boards')}
+          <Link to="/" className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
+            <LayoutGrid size={15} />
+            <span className="hidden sm:inline">{t('nav.boards')}</span>
           </Link>
           <Link to="/calendar" className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
             <CalendarDays size={15} />
@@ -42,7 +44,7 @@ export function Layout() {
           </Link>
           {me.is_super_admin && (
             <Link to="/admin" className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
-              <Users size={15} />
+              <ShieldCheck size={15} />
               <span className="hidden sm:inline">{t('nav.admin')}</span>
             </Link>
           )}
@@ -77,11 +79,11 @@ export function Layout() {
         </Menu>
         <Menu>
           <MenuTrigger className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent">
-            <Avatar name={me.display_name} color={me.avatar_color} size={28} />
+            <Avatar name={label(me)} color={me.avatar_color} src={avatarUrl(me.avatar_id)} size={28} />
           </MenuTrigger>
           <MenuContent>
             <MenuLabel>
-              {me.display_name} · @{me.username}
+              {label(me)}
             </MenuLabel>
             <MenuSeparator />
             <MenuItem onSelect={() => nav('/profile')}>

@@ -5,11 +5,13 @@ macro_rules! sqlf {
 
 mod admin;
 mod auth;
+mod avatars;
 mod boards;
 mod cards;
 mod config;
 mod error;
 mod files;
+mod mail;
 mod perms;
 mod position;
 mod realtime;
@@ -107,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.cmd.unwrap_or(Cmd::Serve) {
         Cmd::CreateAdmin { username, display_name, locale } => {
             let pw = read_password()?;
-            let u = admin::insert_user(&db, &username, &display_name, None, &pw, true, true, &locale)
+            let u = admin::insert_user(&db, &username, &display_name, None, &pw, true, true, &locale, false)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("created super admin {} ({})", u.username, u.id);
@@ -154,12 +156,22 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        .route("/auth/options", get(auth::options))
+        .route("/auth/forgot", post(auth::forgot))
+        .route("/auth/reset/check", post(auth::check_token))
+        .route("/auth/reset", post(auth::reset))
+        .route("/admin/email", get(mail::get_settings).put(mail::save_settings))
+        .route("/admin/email/test", post(mail::test))
         .route("/me", get(auth::me).patch(auth::update_me))
         .route("/me/password", post(auth::change_password))
         .route("/me/tutorial", post(tutorial::create_for_me))
+        .route("/me/avatar", post(avatars::upload).delete(avatars::remove).layer(DefaultBodyLimit::max(11 * 1024 * 1024)))
+        .route("/avatars/{id}", get(avatars::serve))
         .route("/users", get(admin::directory))
         .route("/admin/users", get(admin::list_users).post(admin::create_user))
-        .route("/admin/users/{id}", patch(admin::update_user))
+        .route("/admin/users/{id}", patch(admin::update_user).delete(admin::delete_user))
+        .route("/admin/users/{id}/delete-preview", get(admin::delete_preview))
+        .route("/admin/users/{id}/send-reset", post(admin::send_reset))
         .route("/admin/users/{id}/password", post(admin::reset_password))
         .route("/boards", get(boards::list_boards).post(boards::create_board))
         .route("/boards/{id}", get(boards::get_board).patch(boards::update_board).delete(boards::delete_board))

@@ -7,6 +7,7 @@ import { memo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { BoardHelpers, Viewer } from '../lib/board'
 import { fmtDate } from '../lib/prefs'
+import { avatarUrl, label } from '../lib/user'
 import type { CardSummary } from '../lib/types'
 import { Markdown } from './Markdown'
 import { CardContextMenu } from './CardMenu'
@@ -82,7 +83,7 @@ function TileBody({ card, b }: { card: CardSummary; b: BoardHelpers }) {
         <span className="ml-auto flex -space-x-1.5">
           {card.assignee_ids.slice(0, 4).map((id) => {
             const m = b.members.get(id)
-            return m ? <Avatar key={id} name={m.display_name} color={m.avatar_color} size={20} /> : null
+            return m ? <Avatar key={id} name={label(m)} color={m.avatar_color} src={avatarUrl(m.avatar_id)} size={20} /> : null
           })}
         </span>
       </div>
@@ -109,7 +110,7 @@ function Preview({ card, b }: { card: CardSummary; b: BoardHelpers }) {
         )}
         {card.due_at && <span>· {t('card.due')}: {fmtDate(card.due_at, true)}</span>}
         {card.assignee_ids.length > 0 && (
-          <span>· {card.assignee_ids.map((id) => b.members.get(id)?.display_name).filter(Boolean).join(', ')}</span>
+          <span>· {card.assignee_ids.map((id) => b.members.get(id)).filter((m) => !!m).map((m) => label(m!)).join(', ')}</span>
         )}
       </div>
       {card.excerpt ? (
@@ -179,8 +180,8 @@ export const CardTile = memo(function CardTile({
           {!!viewers?.length && (
             <span className="absolute -right-1.5 -top-1.5 flex -space-x-1.5">
               {viewers.slice(0, 3).map((v) => (
-                <span key={v.user_id} title={`${v.display_name}${v.editing ? ' · ✎' : ''}`} className={clsx('rounded-full', v.editing && 'ring-2 ring-amber-500')}>
-                  <Avatar name={v.display_name} color={v.avatar_color} size={18} />
+                <span key={v.user_id} title={`${label(v)}${v.editing ? ' · ✎' : ''}`} className={clsx('rounded-full', v.editing && 'ring-2 ring-amber-500')}>
+                  <Avatar name={label(v)} color={v.avatar_color} src={avatarUrl(v.avatar_id)} size={18} />
                 </span>
               ))}
             </span>
