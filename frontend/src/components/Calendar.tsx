@@ -11,7 +11,7 @@ import {
 } from '@dnd-kit/core'
 import clsx from 'clsx'
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button, Popover } from './ui'
 
@@ -26,7 +26,12 @@ export interface CalItem {
   sub?: string
   priority: number
   canMove: boolean
+  /** shown under the title, e.g. the board on the cross-board calendar */
+  badge?: { label: string; color: string }
 }
+
+type ItemMenu = (item: CalItem, trigger: ReactElement) => ReactElement
+type DayMenu = (due: string, trigger: ReactElement) => ReactElement
 
 type Mode = 'month' | 'week'
 
@@ -56,6 +61,9 @@ export function Calendar({
   onCreate,
   onRange,
   toolbar,
+  itemMenu,
+  dayMenu,
+  onNewAt,
 }: {
   items: CalItem[]
   unscheduled?: CalItem[]
@@ -64,6 +72,12 @@ export function Calendar({
   onCreate?: (due: string, title: string) => Promise<unknown> | void
   onRange?: (from: Date, to: Date) => void
   toolbar?: ReactNode
+  /** right-click menu for a card chip */
+  itemMenu?: ItemMenu
+  /** right-click menu for an empty spot on a day */
+  dayMenu?: DayMenu
+  /** double-click on a day */
+  onNewAt?: (due: string) => void
 }) {
   const { t, i18n } = useTranslation()
   const loc = i18n.language === 'th' ? 'th-TH' : 'en-GB'
@@ -184,13 +198,17 @@ export function Calendar({
                   onOpen={onOpen}
                   onCreate={onCreate ? (title) => onCreate(moveTo(d, null), title) : undefined}
                   draggable={!!onMove}
+                  itemMenu={itemMenu}
+                  dayMenu={dayMenu}
+                  onNewAt={onNewAt ? () => onNewAt(moveTo(d, null)) : undefined}
+                  due={moveTo(d, null)}
                 />
               )
             })}
           </div>
         </div>
         {unscheduled && (
-          <Unscheduled items={noDue} onOpen={onOpen} draggable={!!onMove} />
+          <Unscheduled items={noDue} onOpen={onOpen} draggable={!!onMove} itemMenu={itemMenu} />
         )}
       </div>
       <DragOverlay dropAnimation={null}>{dragging ? <Chip item={dragging} ghost /> : null}</DragOverlay>
@@ -209,7 +227,15 @@ function Day({
   onOpen,
   onCreate,
   draggable,
+  itemMenu,
+  dayMenu,
+  onNewAt,
+  due,
 }: {
+  itemMenu?: ItemMenu
+  dayMenu?: DayMenu
+  onNewAt?: () => void
+  due: string
   date: Date
   dayKey_: string
   isToday: boolean
@@ -226,9 +252,13 @@ function Day({
   const [adding, setAdding] = useState(false)
   const shown = items.slice(0, limit)
   const rest = items.length - shown.length
-  return (
+  const cell = (
     <div
       ref={setNodeRef}
+      onDoubleClick={(e) => {
+        // only on the day itself, not on a card chip
+        if (onNewAt && !(e.target as HTMLElement).closest('button, input')) onNewAt()
+      }}
       className={clsx(
         'group/day flex min-h-24 min-w-0 flex-col gap-1 overflow-hidden border-b border-r border-line p-1',
         weekend ? 'bg-surface-2' : 'bg-surface',
@@ -248,7 +278,7 @@ function Day({
         {onCreate && !adding && (
           <button
             onClick={() => setAdding(true)}
-            className="rounded p-0.5 text-muted opacity-0 hover:bg-black/5 group-hover/day:opacity-100 cursor-pointer dark:hover:bg-white/10"
+            className="rounded p-0.5 text-muted opacity-30 hover:bg-black/5 group-hover/day:opacity-100 cursor-pointer dark:hover:bg-white/10"
             title={t('calendar.addCard')}
           >
             <Plus size={14} />
@@ -273,7 +303,7 @@ function Day({
       )}
       <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
         {shown.map((i) => (
-          <DraggableChip key={i.id} item={i} onOpen={onOpen} draggable={draggable && i.canMove} />
+          <DraggableChip key={i.id} item={i} onOpen={onOpen} draggable={draggable && i.canMove} itemMenu={itemMenu} />
         ))}
       </div>
       {rest > 0 && (
@@ -290,9 +320,10 @@ function Day({
       )}
     </div>
   )
+  return dayMenu ? dayMenu(due, cell) : cell
 }
 
-function Unscheduled({ items, onOpen, draggable }: { items: CalItem[]; onOpen: (id: string) => void; draggable: boolean }) {
+function Unscheduled({ items, onOpen, draggable, itemMenu }: { items: CalItem[]; onOpen: (id: string) => void; draggable: boolean; itemMenu?: ItemMenu }) {
   const { t } = useTranslation()
   const { setNodeRef, isOver } = useDroppable({ id: 'day:none' })
   return (
@@ -306,20 +337,21 @@ function Unscheduled({ items, onOpen, draggable }: { items: CalItem[]; onOpen: (
       <p className="mb-2 px-1 text-[11px] text-muted">{t('calendar.dragHint')}</p>
       <div className="scroll-thin flex min-h-0 flex-col gap-1 overflow-y-auto">
         {items.map((i) => (
-          <DraggableChip key={i.id} item={i} onOpen={onOpen} draggable={draggable && i.canMove} />
+          <DraggableChip key={i.id} item={i} onOpen={onOpen} draggable={draggable && i.canMove} itemMenu={itemMenu} />
         ))}
       </div>
     </aside>
   )
 }
 
-function DraggableChip({ item, onOpen, draggable }: { item: CalItem; onOpen: (id: string) => void; draggable: boolean }) {
+function DraggableChip({ item, onOpen, draggable, itemMenu }: { item: CalItem; onOpen: (id: string) => void; draggable: boolean; itemMenu?: ItemMenu }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: `item:${item.id}`, disabled: !draggable })
-  return (
+  const el = (
     <div ref={setNodeRef} {...attributes} aria-disabled={undefined} {...listeners} className={clsx(isDragging && 'opacity-30')}>
       <Chip item={item} onClick={() => onOpen(item.id)} />
     </div>
   )
+  return itemMenu ? itemMenu(item, el) : el
 }
 
 function Chip({ item, onClick, ghost }: { item: CalItem; onClick?: () => void; ghost?: boolean }) {
@@ -338,9 +370,19 @@ function Chip({ item, onClick, ghost }: { item: CalItem; onClick?: () => void; g
       )}
       style={{ borderLeft: `3px solid ${item.color ?? 'var(--border)'}` }}
     >
-      {time && <span className={clsx('shrink-0 tabular-nums', overdue ? 'text-red-600' : 'text-muted')}>{time}</span>}
-      <span className="min-w-0 flex-1 truncate">{item.title}</span>
-      {item.priority > 0 && <span className="shrink-0 text-[10px] text-amber-500">{'★'.repeat(item.priority)}</span>}
+      {time && <span className={clsx('shrink-0 self-start tabular-nums', overdue ? 'text-red-600' : 'text-muted')}>{time}</span>}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="min-w-0 flex-1 truncate">{item.title}</span>
+          {item.priority > 0 && <span className="shrink-0 text-[10px] text-amber-500">{'★'.repeat(item.priority)}</span>}
+        </span>
+        {item.badge && (
+          <span className="flex min-w-0 items-center gap-1 text-[10px] text-muted">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: item.badge.color }} />
+            <span className="truncate">{item.badge.label}</span>
+          </span>
+        )}
+      </span>
     </button>
   )
 }

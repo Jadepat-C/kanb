@@ -28,11 +28,15 @@ A self-hosted Kanban board for **one organization**: no public sign-up. Accounts
 - **Drag and drop** cards between columns, and reorder columns by their grip handle. **Sort a column** (priority, due date, newest/oldest, recently updated, title, number) from its ⋯ menu. This is a one-off reorder; you can keep dragging afterwards. Positions use fractional indexing, so one move rewrites one row.
 - **Realtime.** Other people's changes appear live over a WebSocket per board.
 - Labels, assignees, due dates (overdue highlighting), card colours, archive.
+- **Right-click menus:**
+  - **Cards** (Kanban and both calendars): open, rename, new card, duplicate, copy link / title, move to column, status, priority, due date (today / tomorrow / in a week / clear), labels, assign to me, colour, archive. Only actions you have permission for are shown.
+  - **Columns:** new card at top or bottom, fold, sort, rename, WIP limit, delete.
 - **Calendar:**
   - Each board has a Board / Calendar switch, and the calendar uses the same filters.
   - There's also a cross-board **Calendar** page with board and "assigned to me" filters.
   - Month and week views, weeks starting Monday.
   - Drag a card to another day to reschedule it (its time is kept), drag it to "No due date" to clear the date, or click + on a day to add a card there.
+  - **New card** from the toolbar, by double-clicking a day, or by right-clicking a day. Choose the column, date and time; the cross-board calendar also asks for the board. Chips there show which board each card is from.
 
 ## Development
 

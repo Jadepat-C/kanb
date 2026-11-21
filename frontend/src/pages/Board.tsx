@@ -23,6 +23,9 @@ import { useTranslation } from 'react-i18next'
 import { useParams, useSearchParams } from 'react-router'
 import { BoardSettings } from '../components/BoardSettings'
 import { Calendar, type CalItem } from '../components/Calendar'
+import { CardContextMenu } from '../components/CardMenu'
+import { ContextMenu, CTX, MItem } from '../components/menu'
+import { NewCardDialog, type NewCardPreset } from '../components/NewCardDialog'
 import { CardModal } from '../components/CardModal'
 import { CardGhost } from '../components/CardTile'
 import { Column } from '../components/Column'
@@ -51,6 +54,7 @@ export function BoardPage() {
   const { data: me } = useMe()
   const qc = useQueryClient()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [newCard, setNewCard] = useState<NewCardPreset | null>(null)
 
   // filters
   const [text, setText] = useState('')
@@ -383,6 +387,39 @@ export function BoardPage() {
                 ? (due, title) => createOnDay.mutateAsync({ list: (data.lists.find((l) => !l.folded) ?? data.lists[0]).id, title, due })
                 : undefined
             }
+            onNewAt={b.can('cards.create') ? (due) => setNewCard({ boardId, due }) : undefined}
+            toolbar={
+              b.can('cards.create') && (
+                <Button size="sm" variant="primary" onClick={() => setNewCard({ boardId, due: null })}>
+                  <Plus size={14} /> {t('menu.newCard')}
+                </Button>
+              )
+            }
+            itemMenu={(item, trigger) => {
+              const c = cardsById.get(item.id)
+              if (!c) return trigger
+              return (
+                <CardContextMenu
+                  card={{ ...c, board_id: boardId }}
+                  b={b}
+                  onOpen={() => openCardId(c.id)}
+                  onNew={() => setNewCard({ boardId, listId: c.list_id, due: c.due_at })}
+                >
+                  {trigger}
+                </CardContextMenu>
+              )
+            }}
+            dayMenu={
+              b.can('cards.create')
+                ? (due, trigger) => (
+                    <ContextMenu trigger={trigger}>
+                      <MItem M={CTX} onSelect={() => setNewCard({ boardId, due })}>
+                        <Plus size={14} /> {t('menu.newCardOnDay')}
+                      </MItem>
+                    </ContextMenu>
+                  )
+                : undefined
+            }
           />
         </div>
       ) : (
@@ -433,6 +470,13 @@ export function BoardPage() {
             sp.delete('card')
             setSp(sp)
           }}
+        />
+      )}
+      {newCard && (
+        <NewCardDialog
+          preset={newCard}
+          onClose={() => setNewCard(null)}
+          onCreated={(c, _board, open) => open && openCardId(c.id)}
         />
       )}
       <BoardSettings open={settingsOpen} onOpenChange={setSettingsOpen} b={b} boardId={boardId} />

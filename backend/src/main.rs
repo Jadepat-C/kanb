@@ -173,6 +173,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/roles/{id}", patch(boards::update_role).delete(boards::delete_role))
         .route("/cards/{id}", get(cards::get_card).patch(cards::update_card).delete(cards::archive_card))
         .route("/cards/{id}/move", post(cards::move_card))
+        .route("/cards/{id}/duplicate", post(cards::duplicate_card))
         .route("/cards/{id}/labels", put(cards::set_labels))
         .route("/cards/{id}/assignees", put(cards::set_assignees))
         .route("/cards/{id}/timeline", get(cards::timeline))

@@ -4,15 +4,15 @@ import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { ArrowDownUp, ChevronsLeftRight, ChevronsRightLeft, Gauge, GripVertical, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
-import { DropdownMenu as RMenu } from 'radix-ui'
-import { useState, type FormEvent } from 'react'
+import { useCallback, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { BoardHelpers } from '../lib/board'
 import type { CardSummary, List } from '../lib/types'
 import { CardTile } from './CardTile'
 import { toastError } from './toast'
-import { Button, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from './ui'
+import { ContextMenu, CTX, DROP, MItem, MSep, MSub, type MenuKit } from './menu'
+import { Button, Menu, MenuContent, MenuTrigger } from './ui'
 
 export function Column({
   list,
@@ -38,6 +38,7 @@ export function Column({
   const drop = useDroppable({ id: `drop:${list.id}`, data: { type: 'drop', listId: list.id } })
   const [adding, setAdding] = useState<null | 'top' | 'bottom'>(null)
   const [renaming, setRenaming] = useState(false)
+  const openBottom = useCallback(() => setAdding('bottom'), [])
 
   const update = useMutation({
     mutationFn: (p: Partial<List>) => api.patch(`/lists/${list.id}`, p),
@@ -63,8 +64,70 @@ export function Column({
   const bar = [...b.statuses.values()].map((s) => ({ key: s.id, name: s.name, color: s.color, n: counts.get(s.id) ?? 0 }))
   if (counts.get('')) bar.push({ key: '', name: t('filter.noStatus'), color: '#d4d4d8', n: counts.get('')! })
 
+  // shared by the "⋯" menu and the right-click menu
+  const ColumnItems = ({ M, withNew }: { M: MenuKit; withNew?: boolean }) => (
+    <>
+      {withNew && b.can('cards.create') && (
+        <>
+          <MItem M={M} onSelect={() => (list.folded ? update.mutate({ folded: false }) : undefined, setAdding('top'))}>
+            <Plus size={14} /> {t('menu.newCardTop')}
+          </MItem>
+          <MItem M={M} onSelect={() => (list.folded ? update.mutate({ folded: false }) : undefined, setAdding('bottom'))}>
+            <Plus size={14} /> {t('menu.newCardBottom')}
+          </MItem>
+          <MSep M={M} />
+        </>
+      )}
+      <MItem M={M} onSelect={() => update.mutate({ folded: !list.folded })}>
+        {list.folded ? <ChevronsLeftRight size={14} /> : <ChevronsRightLeft size={14} />} {list.folded ? t('board.unfold') : t('board.fold')}
+      </MItem>
+      {b.can('cards.move') && cards.length > 1 && (
+        <MSub M={M} icon={<ArrowDownUp size={14} />} label={t('sort.title')}>
+          {(
+            [
+              ['priority', true, 'sort.priority'],
+              ['due', false, 'sort.due'],
+              ['created', true, 'sort.created'],
+              ['created', false, 'sort.createdAsc'],
+              ['updated', true, 'sort.updated'],
+              ['title', false, 'sort.title_'],
+              ['number', false, 'sort.number'],
+            ] as const
+          ).map(([by, desc, label]) => (
+            <MItem key={label} M={M} onSelect={() => sort.mutate({ by, desc })}>
+              {t(label)}
+            </MItem>
+          ))}
+        </MSub>
+      )}
+      {canManage && (
+        <>
+          <MItem M={M} onSelect={() => setRenaming(true)}>
+            <Pencil size={14} /> {t('common.rename')}
+          </MItem>
+          <MItem
+            M={M}
+            onSelect={() => {
+              const v = prompt(t('board.wipPrompt'), list.wip_limit?.toString() ?? '')
+              if (v === null) return
+              const n = parseInt(v, 10)
+              update.mutate({ wip_limit: Number.isFinite(n) && n > 0 ? n : null })
+            }}
+          >
+            <Gauge size={14} /> {t('board.wipLimit')}
+          </MItem>
+          <MSep M={M} />
+          <MItem M={M} danger onSelect={() => confirm(t('common.confirmDelete')) && remove.mutate()}>
+            <Trash2 size={14} /> {t('board.deleteList')}
+          </MItem>
+        </>
+      )}
+    </>
+  )
+
   if (list.folded) {
     return (
+      <ContextMenu trigger={
       <div
         ref={(el) => {
           sortable.setNodeRef(el)
@@ -84,10 +147,14 @@ export function Column({
         <span className="text-xs text-muted">{totalCount}</span>
         <span className="text-sm font-medium [writing-mode:vertical-rl]">{list.name}</span>
       </div>
+      }>
+        <ColumnItems M={CTX} withNew />
+      </ContextMenu>
     )
   }
 
   return (
+    <ContextMenu trigger={
     <div
       ref={sortable.setNodeRef}
       style={style}
@@ -148,56 +215,7 @@ export function Column({
               </button>
             </MenuTrigger>
             <MenuContent>
-              <MenuItem onSelect={() => update.mutate({ folded: true })}>
-                <ChevronsRightLeft size={14} /> {t('board.fold')}
-              </MenuItem>
-              {b.can('cards.move') && cards.length > 1 && (
-                <RMenu.Sub>
-                  <RMenu.SubTrigger className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-black/5 data-[state=open]:bg-black/5 dark:data-[highlighted]:bg-white/10 dark:data-[state=open]:bg-white/10">
-                    <ArrowDownUp size={14} /> {t('sort.title')}
-                  </RMenu.SubTrigger>
-                  <RMenu.Portal>
-                    <RMenu.SubContent sideOffset={4} className="z-50 min-w-48 rounded-lg border border-line bg-surface p-1 text-sm shadow-lg">
-                      {(
-                        [
-                          ['priority', true, 'sort.priority'],
-                          ['due', false, 'sort.due'],
-                          ['created', true, 'sort.created'],
-                          ['created', false, 'sort.createdAsc'],
-                          ['updated', true, 'sort.updated'],
-                          ['title', false, 'sort.title_'],
-                          ['number', false, 'sort.number'],
-                        ] as const
-                      ).map(([by, desc, label]) => (
-                        <MenuItem key={label} onSelect={() => sort.mutate({ by, desc })}>
-                          {t(label)}
-                        </MenuItem>
-                      ))}
-                    </RMenu.SubContent>
-                  </RMenu.Portal>
-                </RMenu.Sub>
-              )}
-              {canManage && (
-                <>
-                  <MenuItem onSelect={() => setRenaming(true)}>
-                    <Pencil size={14} /> {t('common.rename')}
-                  </MenuItem>
-                  <MenuItem
-                    onSelect={() => {
-                      const v = prompt(t('board.wipPrompt'), list.wip_limit?.toString() ?? '')
-                      if (v === null) return
-                      const n = parseInt(v, 10)
-                      update.mutate({ wip_limit: Number.isFinite(n) && n > 0 ? n : null })
-                    }}
-                  >
-                    <Gauge size={14} /> {t('board.wipLimit')}
-                  </MenuItem>
-                  <MenuSeparator />
-                  <MenuItem danger onSelect={() => confirm(t('common.confirmDelete')) && remove.mutate()}>
-                    <Trash2 size={14} /> {t('board.deleteList')}
-                  </MenuItem>
-                </>
-              )}
+              <ColumnItems M={DROP} />
             </MenuContent>
           </Menu>
         </div>
@@ -218,7 +236,7 @@ export function Column({
         {adding === 'top' && <QuickAdd listId={list.id} boardId={boardId} at="top" onDone={() => setAdding(null)} />}
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((c) => (
-            <CardTile key={c.id} card={c} b={b} onOpen={onOpen} disabled={dragDisabled} />
+            <CardTile key={c.id} card={c} b={b} onOpen={onOpen} disabled={dragDisabled} onNew={openBottom} />
           ))}
         </SortableContext>
         {adding === 'bottom' && <QuickAdd listId={list.id} boardId={boardId} at="bottom" onDone={() => setAdding(null)} />}
@@ -232,6 +250,9 @@ export function Column({
         </button>
       )}
     </div>
+    }>
+      <ColumnItems M={CTX} withNew />
+    </ContextMenu>
   )
 }
 

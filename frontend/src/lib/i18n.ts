@@ -46,7 +46,7 @@ const en = {
     status: 'changed status from {{from}} to {{to}}', noStatus: 'none', color: 'changed the color', due: 'changed the due date to {{to}}',
     dueCleared: 'removed the due date', moved: 'moved this card from {{from}} to {{to}}', archived: 'archived this card',
     labels: 'changed labels', assignees: 'changed assignees', added: 'added {{items}}', removed: 'removed {{items}}',
-    attachment_added: 'attached {{filename}}', attachment_removed: 'removed attachment {{filename}}',
+    attachment_added: 'attached {{filename}}', duplicated: 'created this card as a copy of #{{from}}', attachment_removed: 'removed attachment {{filename}}',
   },
   settings: {
     title: 'Board settings', general: 'General', members: 'Members', roles: 'Roles & permissions', labels: 'Labels', statuses: 'Statuses', newStatus: 'New status', statusHint: 'Shown as a colored dot on cards and in the column progress bar. New cards get the first status.',
@@ -93,6 +93,12 @@ const en = {
     board: 'Board', calendar: 'Calendar', today: 'Today', month: 'Month', week: 'Week', unscheduled: 'No due date',
     dragHint: 'Drag onto a day to schedule; drag back here to clear the date.', more_one: '+{{count}} more', more_other: '+{{count}} more',
     addCard: 'Add card on this day', allBoards: 'All boards',
+  },
+  menu: {
+    open: 'Open', newCard: 'New card', newCardOnDay: 'New card on this day', newCardTop: 'New card at top', newCardBottom: 'New card at bottom',
+    duplicate: 'Duplicate', copyLink: 'Copy link', copyTitle: 'Copy number & title', linkCopied: 'Link copied', copied: 'Copied',
+    moveTo: 'Move to', today: 'Today', tomorrow: 'Tomorrow', nextWeek: 'In a week', pickDate: 'Pick a date…', clearDue: 'Remove due date',
+    assignMe: 'Assign to me', unassignMe: 'Unassign me', time: 'Time', openAfter: 'Open the card after creating it',
   },
   errors: {
     unauthorized: 'Please sign in.', forbidden: 'You don’t have permission to do that.', not_found: 'Not found.',
@@ -154,7 +160,7 @@ const th: Dict = {
     status: 'เปลี่ยนสถานะจาก {{from}} เป็น {{to}}', noStatus: 'ไม่มี', color: 'เปลี่ยนสี', due: 'เปลี่ยนกำหนดส่งเป็น {{to}}',
     dueCleared: 'ลบกำหนดส่ง', moved: 'ย้ายการ์ดจาก {{from}} ไป {{to}}', archived: 'เก็บการ์ดนี้',
     labels: 'เปลี่ยนป้ายกำกับ', assignees: 'เปลี่ยนผู้รับผิดชอบ', added: 'เพิ่ม {{items}}', removed: 'นำออก {{items}}',
-    attachment_added: 'แนบไฟล์ {{filename}}', attachment_removed: 'ลบไฟล์แนบ {{filename}}',
+    attachment_added: 'แนบไฟล์ {{filename}}', duplicated: 'สร้างการ์ดนี้โดยคัดลอกจาก #{{from}}', attachment_removed: 'ลบไฟล์แนบ {{filename}}',
   },
   settings: {
     title: 'ตั้งค่าบอร์ด', general: 'ทั่วไป', members: 'สมาชิก', roles: 'บทบาทและสิทธิ์', labels: 'ป้ายกำกับ', statuses: 'สถานะ', newStatus: 'สถานะใหม่', statusHint: 'แสดงเป็นจุดสีบนการ์ดและแถบความคืบหน้าของคอลัมน์ การ์ดใหม่จะได้สถานะแรก',
@@ -200,6 +206,12 @@ const th: Dict = {
     board: 'บอร์ด', calendar: 'ปฏิทิน', today: 'วันนี้', month: 'เดือน', week: 'สัปดาห์', unscheduled: 'ไม่มีกำหนดส่ง',
     dragHint: 'ลากไปวางบนวันที่เพื่อกำหนดวัน ลากกลับมาที่นี่เพื่อลบวันที่', more_one: 'อีก {{count}} รายการ', more_other: 'อีก {{count}} รายการ',
     addCard: 'เพิ่มการ์ดในวันนี้', allBoards: 'ทุกบอร์ด',
+  },
+  menu: {
+    open: 'เปิด', newCard: 'การ์ดใหม่', newCardOnDay: 'สร้างการ์ดในวันนี้', newCardTop: 'การ์ดใหม่ด้านบน', newCardBottom: 'การ์ดใหม่ด้านล่าง',
+    duplicate: 'ทำสำเนา', copyLink: 'คัดลอกลิงก์', copyTitle: 'คัดลอกหมายเลขและชื่อ', linkCopied: 'คัดลอกลิงก์แล้ว', copied: 'คัดลอกแล้ว',
+    moveTo: 'ย้ายไป', today: 'วันนี้', tomorrow: 'พรุ่งนี้', nextWeek: 'อีก 1 สัปดาห์', pickDate: 'เลือกวันที่…', clearDue: 'ลบกำหนดส่ง',
+    assignMe: 'มอบหมายให้ฉัน', unassignMe: 'ยกเลิกการมอบหมายฉัน', time: 'เวลา', openAfter: 'เปิดการ์ดหลังสร้าง',
   },
   errors: {
     unauthorized: 'กรุณาเข้าสู่ระบบ', forbidden: 'คุณไม่มีสิทธิ์ทำรายการนี้', not_found: 'ไม่พบข้อมูล',

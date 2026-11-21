@@ -1,9 +1,12 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { User } from 'lucide-react'
+import { Plus, User } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { Calendar, type CalItem } from '../components/Calendar'
+import { CardContextMenu } from '../components/CardMenu'
+import { ContextMenu, CTX, MItem } from '../components/menu'
+import { NewCardDialog, type NewCardPreset } from '../components/NewCardDialog'
 import { toastError } from '../components/toast'
 import { Button } from '../components/ui'
 import { api } from '../lib/api'
@@ -35,6 +38,7 @@ export function CalendarPage() {
   const [range, setRange] = useState<{ from: string; to: string } | null>(null)
   const [mine, setMine] = useState(false)
   const [board, setBoard] = useState('')
+  const [newCard, setNewCard] = useState<NewCardPreset | null>(null)
   const onRange = useCallback((from: Date, to: Date) => setRange({ from: from.toISOString(), to: to.toISOString() }), [])
 
   const boards = useQuery({ queryKey: ['boards'], queryFn: () => api.get<BoardListItem[]>('/boards') })
@@ -64,17 +68,41 @@ export function CalendarPage() {
           sub: `${i.board_name} · ${i.list_name}${i.status_name ? ` · ${i.status_name}` : ''}`,
           priority: i.priority,
           canMove: i.can_edit,
+          badge: { label: i.board_name, color: i.board_color },
         })),
     [raw, mine, board, me?.id],
   )
-  const boardOf = useMemo(() => new Map((raw ?? []).map((i) => [i.id, i.board_id])), [raw])
+  const byId = useMemo(() => new Map((raw ?? []).map((i) => [i.id, i])), [raw])
+  const open = (id: string, boardId?: string) => nav(`/b/${boardId ?? byId.get(id)?.board_id}?view=calendar&card=${id}`)
 
   return (
     <div className="h-full">
       <Calendar
         items={items}
         onRange={onRange}
-        onOpen={(id) => nav(`/b/${boardOf.get(id)}?view=calendar&card=${id}`)}
+        onOpen={(id) => open(id)}
+        onNewAt={(due) => setNewCard({ boardId: board || undefined, due })}
+        itemMenu={(item, trigger) => {
+          const c = byId.get(item.id)
+          if (!c) return trigger
+          return (
+            <CardContextMenu
+              card={c}
+              canEdit={c.can_edit}
+              onOpen={() => open(c.id)}
+              onNew={() => setNewCard({ boardId: c.board_id, due: c.due_at })}
+            >
+              {trigger}
+            </CardContextMenu>
+          )
+        }}
+        dayMenu={(due, trigger) => (
+          <ContextMenu trigger={trigger}>
+            <MItem M={CTX} onSelect={() => setNewCard({ boardId: board || undefined, due })}>
+              <Plus size={14} /> {t('menu.newCardOnDay')}
+            </MItem>
+          </ContextMenu>
+        )}
         onMove={(id, due) => move.mutate({ id, due })}
         toolbar={
           <>
@@ -89,9 +117,15 @@ export function CalendarPage() {
             <Button size="sm" variant={mine ? 'primary' : 'outline'} onClick={() => setMine(!mine)}>
               <User size={13} /> {t('board.onlyMine')}
             </Button>
+            <Button size="sm" variant="primary" onClick={() => setNewCard({ boardId: board || undefined, due: null })}>
+              <Plus size={14} /> {t('menu.newCard')}
+            </Button>
           </>
         }
       />
+      {newCard && (
+        <NewCardDialog preset={newCard} onClose={() => setNewCard(null)} onCreated={(c, boardId, o) => o && open(c.id, boardId)} />
+      )}
     </div>
   )
 }

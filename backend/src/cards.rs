@@ -748,3 +748,62 @@ pub async fn calendar(
     .await?;
     Ok(Json(items))
 }
+
+// ---------- duplicate ----------
+
+/// Copies a card (text, priority, status, colour, due date, labels, assignees) right below the original.
+/// Attachments aren't copied; images pasted into the description keep pointing at the same files.
+pub async fn duplicate_card(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<CardSummary>> {
+    let board_id = board_of_card(&state.db, id).await?;
+    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_CREATE)?;
+    let mut tx = state.db.begin().await?;
+    let (list_id, title, position): (Uuid, String, String) =
+        sqlx::query_as("SELECT list_id, title, position FROM cards WHERE id = $1").bind(id).fetch_one(&mut *tx).await?;
+    sqlx::query("SELECT 1 FROM lists WHERE id = $1 FOR UPDATE").bind(list_id).execute(&mut *tx).await?;
+    let next: Option<(String,)> = sqlx::query_as(
+        r#"SELECT position FROM cards WHERE list_id = $1 AND archived_at IS NULL AND position COLLATE "C" > $2
+           ORDER BY position COLLATE "C" LIMIT 1"#,
+    )
+    .bind(list_id)
+    .bind(&position)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let pos = crate::position::between(Some(&position), next.as_ref().map(|n| n.0.as_str()));
+    let (number,): (i32,) = sqlx::query_as("UPDATE boards SET card_seq = card_seq + 1, updated_at = now() WHERE id = $1 RETURNING card_seq")
+        .bind(board_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let new_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, priority, status_id, color, due_at, created_by)
+         SELECT $2, board_id, list_id, $3, $4, description, $5, priority, status_id, color, due_at, $6 FROM cards WHERE id = $1",
+    )
+    .bind(id)
+    .bind(new_id)
+    .bind(number)
+    .bind(format!("{title} (copy)"))
+    .bind(pos)
+    .bind(u.id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("INSERT INTO card_labels (card_id, label_id) SELECT $2, label_id FROM card_labels WHERE card_id = $1")
+        .bind(id)
+        .bind(new_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO card_assignees (card_id, user_id) SELECT $2, user_id FROM card_assignees WHERE card_id = $1")
+        .bind(id)
+        .bind(new_id)
+        .execute(&mut *tx)
+        .await?;
+    let (orig_number,): (i32,) = sqlx::query_as("SELECT number FROM cards WHERE id = $1").bind(id).fetch_one(&mut *tx).await?;
+    log_event(&mut tx, new_id, board_id, u.id, "duplicated", json!({ "from": orig_number })).await?;
+    tx.commit().await?;
+    state.hub.notify(board_id, "card", Some(new_id), u.id);
+    let card = load_card_summaries(&state.db, board_id, Some(new_id)).await?.pop().ok_or(AppError::NotFound)?;
+    Ok(Json(card))
+}

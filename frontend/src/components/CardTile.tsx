@@ -9,6 +9,7 @@ import type { BoardHelpers } from '../lib/board'
 import { fmtDate } from '../lib/prefs'
 import type { CardSummary } from '../lib/types'
 import { Markdown } from './Markdown'
+import { CardContextMenu } from './CardMenu'
 import { Avatar } from './ui'
 
 export function Stars({ value, onChange, size = 13 }: { value: number; onChange?: (v: number) => void; size?: number }) {
@@ -127,11 +128,13 @@ export const CardTile = memo(function CardTile({
   b,
   onOpen,
   disabled,
+  onNew,
 }: {
   card: CardSummary
   b: BoardHelpers
   onOpen: (id: string) => void
   disabled: boolean
+  onNew?: () => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
@@ -147,6 +150,7 @@ export const CardTile = memo(function CardTile({
       open={preview}
       onOpenChange={(o) => setPreview(o && !document.querySelector('[role=dialog]'))}
     >
+      <CardContextMenu card={{ ...card, board_id: b.data!.board.id }} b={b} onOpen={() => onOpen(card.id)} onNew={onNew}>
       <HoverCard.Trigger asChild>
         <div
           ref={setNodeRef}
@@ -158,6 +162,7 @@ export const CardTile = memo(function CardTile({
             setPreview(false)
             onOpen(card.id)
           }}
+          onContextMenu={() => setPreview(false)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') onOpen(card.id)
             else listeners?.onKeyDown?.(e)
@@ -171,6 +176,7 @@ export const CardTile = memo(function CardTile({
           <TileBody card={card} b={b} />
         </div>
       </HoverCard.Trigger>
+      </CardContextMenu>
       {!isDragging && (
         <HoverCard.Portal>
           <HoverCard.Content
