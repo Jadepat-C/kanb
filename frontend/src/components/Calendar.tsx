@@ -11,8 +11,10 @@ import {
 } from '@dnd-kit/core'
 import clsx from 'clsx'
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import { useContext, createContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { CardGlimpse, type GlimpseInfo } from './CardTile'
+import { fmtDate } from '../lib/prefs'
 import { Button, Popover } from './ui'
 
 export interface CalItem {
@@ -26,6 +28,8 @@ export interface CalItem {
   sub?: string
   priority: number
   canMove: boolean
+  /** finished: shown struck through, never overdue */
+  done?: boolean
   /** shown under the title, e.g. the board on the cross-board calendar */
   badge?: { label: string; color: string }
 }
@@ -64,6 +68,7 @@ export function Calendar({
   itemMenu,
   dayMenu,
   onNewAt,
+  glimpse,
 }: {
   items: CalItem[]
   unscheduled?: CalItem[]
@@ -78,6 +83,8 @@ export function Calendar({
   dayMenu?: DayMenu
   /** double-click on a day */
   onNewAt?: (due: string) => void
+  /** hover preview for a chip (same as on the board) */
+  glimpse?: (item: CalItem) => GlimpseInfo | null
 }) {
   const { t, i18n } = useTranslation()
   const loc = i18n.language === 'th' ? 'th-TH' : 'en-GB'
@@ -118,7 +125,7 @@ export function Calendar({
   const title =
     mode === 'month'
       ? cursor.toLocaleDateString(loc, { month: 'long', year: 'numeric' })
-      : `${start.toLocaleDateString(loc, { day: 'numeric', month: 'short' })} – ${addDays(start, 6).toLocaleDateString(loc, { day: 'numeric', month: 'short', year: 'numeric' })}`
+      : `${fmtDate(start.toISOString())} – ${fmtDate(addDays(start, 6).toISOString())}`
   const step = (n: number) =>
     setCursor((c) => (mode === 'month' ? new Date(c.getFullYear(), c.getMonth() + n, 1) : addDays(c, 7 * n)))
 
@@ -139,6 +146,7 @@ export function Calendar({
   const today = dayKey(new Date())
 
   return (
+    <GlimpseCtx.Provider value={glimpse}>
     <DndContext
       sensors={sensors}
       collisionDetection={pointerWithin /* the day under the mouse, not the one the chip overlaps most */}
@@ -213,6 +221,7 @@ export function Calendar({
       </div>
       <DragOverlay dropAnimation={null}>{dragging ? <Chip item={dragging} ghost /> : null}</DragOverlay>
     </DndContext>
+    </GlimpseCtx.Provider>
   )
 }
 
@@ -310,7 +319,7 @@ function Day({
         <Popover
           trigger={<button className="px-1 text-left text-[11px] text-muted hover:underline cursor-pointer">{t('calendar.more', { count: rest })}</button>}
         >
-          <div className="mb-1 text-xs font-medium">{date.toLocaleDateString()}</div>
+          <div className="mb-1 text-xs font-medium">{fmtDate(date.toISOString())}</div>
           <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
             {items.map((i) => (
               <Chip key={i.id} item={i} onClick={() => onOpen(i.id)} />
@@ -344,13 +353,18 @@ function Unscheduled({ items, onOpen, draggable, itemMenu }: { items: CalItem[];
   )
 }
 
+const GlimpseCtx = createContext<((item: CalItem) => GlimpseInfo | null) | undefined>(undefined)
+
 function DraggableChip({ item, onOpen, draggable, itemMenu }: { item: CalItem; onOpen: (id: string) => void; draggable: boolean; itemMenu?: ItemMenu }) {
+  const glimpse = useContext(GlimpseCtx)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: `item:${item.id}`, disabled: !draggable })
   const el = (
     <div ref={setNodeRef} {...attributes} aria-disabled={undefined} {...listeners} className={clsx(isDragging && 'opacity-30')}>
       <Chip item={item} onClick={() => onOpen(item.id)} />
     </div>
   )
+  const info = glimpse?.(item)
+  if (info) return <CardGlimpse info={info} suppress={isDragging} wrap={itemMenu ? (tr) => itemMenu(item, tr) : undefined}>{el}</CardGlimpse>
   return itemMenu ? itemMenu(item, el) : el
 }
 
@@ -358,7 +372,7 @@ function Chip({ item, onClick, ghost }: { item: CalItem; onClick?: () => void; g
   const { i18n } = useTranslation()
   const due = item.due ? new Date(item.due) : null
   const time = due && (due.getHours() || due.getMinutes()) ? due.toLocaleTimeString(i18n.language === 'th' ? 'th-TH' : 'en-GB', { hour: '2-digit', minute: '2-digit' }) : ''
-  const overdue = due && due < new Date()
+  const overdue = !item.done && due && due < new Date()
   return (
     <button
       type="button"
@@ -370,10 +384,10 @@ function Chip({ item, onClick, ghost }: { item: CalItem; onClick?: () => void; g
       )}
       style={{ borderLeft: `3px solid ${item.color ?? 'var(--border)'}` }}
     >
-      {time && <span className={clsx('shrink-0 self-start tabular-nums', overdue ? 'text-red-600' : 'text-muted')}>{time}</span>}
+      {time && <span className={clsx('shrink-0 self-start tabular-nums', overdue ? 'text-red-600 dark:text-red-400' : 'text-muted')}>{time}</span>}
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex min-w-0 items-center gap-1">
-          <span className="min-w-0 flex-1 truncate">{item.title}</span>
+          <span className={clsx('min-w-0 flex-1 truncate', item.done && 'text-muted line-through')}>{item.title}</span>
           {item.priority > 0 && <span className="shrink-0 text-[10px] text-amber-500">{'★'.repeat(item.priority)}</span>}
         </span>
         {item.badge && (

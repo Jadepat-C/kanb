@@ -114,6 +114,9 @@ browser ──https──▶ VPS nginx (TLS) ──tailscale──▶ home serve
    openssl rand -hex 24   # use for POSTGRES_PASSWORD / S3 secret
    ```
    `app.env`'s `PUBLIC_ORIGIN` must be the exact public URL (`https://<host>`).
+   Set `SECRET_KEY` too (`docker run --rm <image> kanban gen-key`) and keep a copy with your backups: it encrypts the stored SMTP
+   password, webhook secrets and 2FA secrets. `TZ` in `docker-compose.yml` sets the time zone used for channel posts,
+   calendar feeds and recurring cards.
 3. `docker compose up -d`, then `docker exec -it kanban-app kanban create-admin --username <you>`.
 4. **VPS:** DNS A record → VPS, issue the cert (certbot webroot, same as the other vhosts), copy `deploy/nginx-kanban.conf` to `/opt/nginx/conf.d/kanban.conf` with the host name filled in, `nginx -t`, reload.
 5. **Tailscale ACL:** allow `tag:vps` → `100.64.12.34:3040`.
@@ -133,9 +136,14 @@ Memory: the app uses about 30–70 MB, and Postgres and SeaweedFS are capped at 
 - Files: permission-checked on every request. Only PNG, JPEG, GIF, WebP and AVIF are served inline. Everything else (SVG and HTML included) is a download with `nosniff` and `CSP: sandbox`.
 - Markdown is sanitized (no raw HTML, no `javascript:` or `data:` URLs). The SPA ships with a strict CSP (no inline scripts).
 - Boards you can't access return 404, not 403.
+- Secrets in the database (SMTP password, webhook URLs/tokens, TOTP secrets, the Web Push key) are AES-256-GCM encrypted
+  with `SECRET_KEY`. Values saved before a key was set are encrypted at the next start.
+- Outgoing webhooks and push deliveries only go to public addresses (DNS-pinned, no redirects) unless an admin allows
+  private ones.
+- Calendar feed links carry a random token; only its hash is stored and a new link revokes the old one.
 
 ## Roadmap
 
-- 2FA (TOTP; the `users.totp_secret` column is reserved) and OIDC SSO (`password_hash` is already nullable).
+- OIDC SSO (`password_hash` is already nullable).
 - Import from kan.bn.
 - @mentions and notifications, custom fields, an archived-cards view with restore, board templates.

@@ -117,7 +117,7 @@ pub async fn create(State(state): State<AppState>, CurrentUser(u): CurrentUser, 
     .bind(board_id)
     .bind(&kind)
     .bind(name_of(r.name)?)
-    .bind(Value::Object(cfg))
+    .bind(Value::Object(contacts::seal_cfg(&kind, cfg)))
     .bind(contacts::clean_events(r.events, &EVENTS))
     .bind(r.enabled.unwrap_or(true))
     .bind(locale(r.locale.as_deref().or(Some(u.locale.as_str()))))
@@ -133,7 +133,7 @@ pub async fn update(State(state): State<AppState>, CurrentUser(u): CurrentUser, 
     let kind = r.kind.clone().unwrap_or_else(|| old.base.kind.clone());
     let cfg = match &r.config {
         Some(c) => contacts::merge(&kind, c, Some(&old.base))?,
-        None if kind == old.base.kind => old.base.config.as_object().cloned().unwrap_or_default(),
+        None if kind == old.base.kind => contacts::open_cfg(&kind, old.base.config.as_object().cloned().unwrap_or_default()),
         None => return Err(AppError::BadRequest("contact_field_required")),
     };
     contacts::validate(&kind, &cfg).map_err(AppError::BadRequest)?;
@@ -149,7 +149,7 @@ pub async fn update(State(state): State<AppState>, CurrentUser(u): CurrentUser, 
         Some(n) => name_of(Some(n))?,
         None => old.base.name.clone(),
     })
-    .bind(Value::Object(cfg))
+    .bind(Value::Object(contacts::seal_cfg(&kind, cfg)))
     .bind(match r.events {
         Some(e) => contacts::clean_events(Some(e), &EVENTS),
         None => old.base.events.clone(),
@@ -187,7 +187,7 @@ pub async fn test(State(state): State<AppState>, CurrentUser(u): CurrentUser, Pa
     let kind = r.kind.clone().or_else(|| saved.as_ref().map(|s| s.base.kind.clone())).unwrap_or_default();
     let cfg = match &r.config {
         Some(c) => contacts::merge(&kind, c, saved.as_ref().map(|s| &s.base))?,
-        None => saved.as_ref().and_then(|s| s.base.config.as_object().cloned()).unwrap_or_default(),
+        None => contacts::open_cfg(&kind, saved.as_ref().and_then(|s| s.base.config.as_object().cloned()).unwrap_or_default()),
     };
     contacts::validate(&kind, &cfg).map_err(AppError::BadRequest)?;
     let th = locale(r.locale.as_deref().or(saved.as_ref().map(|s| s.locale.as_str()))) == "th";
@@ -245,16 +245,10 @@ fn message(base: &str, th: bool, kind: &str, board_id: Uuid, board_name: &str, c
     }
 }
 
-const TH_MONTHS: [&str; 12] = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
-
-/// Server-local time (set TZ for the container, e.g. Asia/Bangkok). Thai uses the Buddhist year.
+/// dd/mm/yyyy HH:mm in server-local time (set TZ for the container, e.g. Asia/Bangkok). Thai uses the Buddhist year.
 fn fmt_date(th: bool, d: DateTime<Utc>) -> String {
     let l = d.with_timezone(&Local);
-    if th {
-        format!("{} {} {} {}", l.day(), TH_MONTHS[l.month0() as usize], l.year() + 543, l.format("%H:%M"))
-    } else {
-        l.format("%-d %b %Y %H:%M").to_string()
-    }
+    format!("{:02}/{:02}/{} {}", l.day(), l.month(), l.year() + if th { 543 } else { 0 }, l.format("%H:%M"))
 }
 
 fn stars(p: Option<i64>, th: bool) -> String {
@@ -403,6 +397,7 @@ pub async fn due_pass(state: &AppState) {
              SELECT c.id, '{kind}', c.due_at FROM cards c
              JOIN lists l ON l.id = c.list_id JOIN boards b ON b.id = c.board_id
              WHERE {window} AND c.archived_at IS NULL AND l.archived_at IS NULL AND b.archived_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM board_statuses s WHERE s.id = c.status_id AND s.is_done)
                AND EXISTS (SELECT 1 FROM {TABLE} p WHERE p.board_id = c.board_id AND p.enabled AND (p.events = '{{}}' OR 'due' = ANY(p.events)))
              ON CONFLICT DO NOTHING
              RETURNING card_id, (SELECT board_id FROM cards WHERE id = card_id),

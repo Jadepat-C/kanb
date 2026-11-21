@@ -149,7 +149,7 @@ function BoardTemplateEditor({ template, onClose }: { template: BoardTemplate | 
   const qc = useQueryClient()
   const [name, setName] = useState(template?.name ?? '')
   const [description, setDescription] = useState(template?.description ?? '')
-  const [color, setColor] = useState<string | null>(template?.color ?? '#6366f1')
+  const [color, setColor] = useState<string | null>(template?.color ?? '#2f5bd3')
   const [d, setD] = useState<BoardTemplateData>(
     () =>
       template?.data ?? {
@@ -209,6 +209,17 @@ function BoardTemplateEditor({ template, onClose }: { template: BoardTemplate | 
           <div className="min-w-0 flex-1">
             <Input value={x.name} onChange={(e) => setD({ ...d, [key]: d[key].map((y, k) => (k === i ? { ...y, name: e.target.value } : y)) })} className="h-8" />
           </div>
+          {key === 'statuses' && (
+            <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted" title={t('settings.doneHint')}>
+              <input
+                type="checkbox"
+                checked={!!d.statuses[i].done}
+                onChange={(e) => setD({ ...d, statuses: d.statuses.map((y, k) => (k === i ? { ...y, done: e.target.checked } : y)) })}
+                className="accent-[var(--color-accent)]"
+              />
+              {t('settings.done')}
+            </label>
+          )}
           <IconX onClick={() => setD({ ...d, [key]: d[key].filter((_, k) => k !== i) })} />
         </div>
       ))}

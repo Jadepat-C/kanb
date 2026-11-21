@@ -28,7 +28,7 @@ import { CardContextMenu } from '../components/CardMenu'
 import { ContextMenu, CTX, MItem } from '../components/menu'
 import { NewCardDialog, type NewCardPreset } from '../components/NewCardDialog'
 import { CardModal } from '../components/CardModal'
-import { CardGhost } from '../components/CardTile'
+import { CardGhost, glimpseOf } from '../components/CardTile'
 import { Column } from '../components/Column'
 import { toastActivity, toastError } from '../components/toast'
 import { Avatar, Button, Input, Menu, MenuContent, MenuItem, MenuTrigger, Popover, Spinner } from '../components/ui'
@@ -141,7 +141,7 @@ export function BoardPage() {
       if (labelFilter.length && !labelFilter.some((l) => c.label_ids.includes(l))) return false
       if (statusFilter.length && !statusFilter.includes(c.status_id ?? '')) return false
       if (minPriority === -1 ? c.priority !== 0 : c.priority < minPriority) return false
-      if (!matchDue(c.due_at, due)) return false
+      if (!matchDue(c.due_at, due, c.done)) return false
       if (!q) return true
       const hay = [
         c.title,
@@ -223,6 +223,7 @@ export function BoardPage() {
       sub: data?.lists.find((l) => l.id === c.list_id)?.name,
       priority: c.priority,
       canMove: b.can('cards.due'),
+      done: c.done,
     })
     const cards = (data?.cards ?? []).filter((c) => ids.has(c.id))
     return { dated: cards.filter((c) => c.due_at).map(toItem), undated: cards.filter((c) => !c.due_at).map(toItem) }
@@ -341,6 +342,7 @@ export function BoardPage() {
       <div className="flex flex-wrap items-center gap-2 border-b border-line bg-surface/60 px-4 py-2">
         <span className="h-3 w-3 rounded-sm" style={{ background: data.board.color }} />
         <h1 className="mr-2 truncate text-lg font-semibold">{data.board.name}</h1>
+        {data.statuses.some((s) => s.is_done) && data.cards.length > 0 && <Progress done={data.cards.filter((c) => c.done).length} total={data.cards.length} />}
         <div className="relative w-full max-w-[220px]">
           <Search size={14} className="absolute left-2.5 top-2.5 text-muted" />
           <Input value={text} onChange={(e) => setText(e.target.value)} placeholder={t('search.filterCards')} className="h-8 pl-8" />
@@ -466,6 +468,8 @@ export function BoardPage() {
             allCards={data.cards}
             lists={data.lists}
             statuses={b.statuses}
+            labels={b.labels}
+            members={b.members}
             onOpen={openCardId}
             onDates={b.can('cards.due') ? (id, dates) => changeDates.mutate({ id, dates }) : undefined}
             onLink={
@@ -495,6 +499,10 @@ export function BoardPage() {
           <Calendar
             items={calItems.dated}
             unscheduled={calItems.undated}
+            glimpse={(item) => {
+              const c = cardsById.get(item.id)
+              return c ? glimpseOf(c, b, data.lists.find((l) => l.id === c.list_id)?.name) : null
+            }}
             onOpen={openCardId}
             onMove={b.can('cards.due') ? (id, due) => changeDue.mutate({ id, due }) : undefined}
             onCreate={
@@ -653,14 +661,14 @@ function AddList({ boardId }: { boardId: string }) {
 
 type DueFilter = 'any' | 'overdue' | 'today' | 'week' | 'has' | 'none'
 
-function matchDue(dueAt: string | null, f: DueFilter) {
+function matchDue(dueAt: string | null, f: DueFilter, done = false) {
   if (f === 'any') return true
   if (f === 'none') return !dueAt
   if (!dueAt) return false
   if (f === 'has') return true
   const d = new Date(dueAt)
   const now = new Date()
-  if (f === 'overdue') return d < now
+  if (f === 'overdue') return d < now && !done
   const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const endToday = new Date(startToday.getTime() + 86400000)
   if (f === 'today') return d >= startToday && d < endToday
@@ -683,7 +691,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
       onClick={onClick}
       className={clsx(
         'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs cursor-pointer',
-        active ? 'border-accent bg-accent/10 font-medium text-accent dark:text-indigo-300' : 'border-line text-muted hover:bg-black/5 dark:hover:bg-white/5',
+        active ? 'border-accent bg-accent/10 font-medium text-accent dark:text-[#a9bdf5]' : 'border-line text-muted hover:bg-black/5 dark:hover:bg-white/5',
       )}
     >
       {children}
@@ -716,5 +724,19 @@ function PresenceStack({ viewers, cards }: { viewers: Viewer[]; cards: Map<strin
       ))}
       {viewers.length > shown.length && <span className="pl-2.5 text-xs text-muted">+{viewers.length - shown.length}</span>}
     </div>
+  )
+}
+
+/** "12 / 20 done" with a small bar. */
+export function Progress({ done, total }: { done: number; total: number }) {
+  const { t } = useTranslation()
+  const pct = total ? Math.round((done / total) * 100) : 0
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted" title={t('board.progress', { done, total, pct })}>
+      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+        <span className="block h-full rounded-full bg-done" style={{ width: `${pct}%` }} />
+      </span>
+      {t('board.doneOf', { done, total })}
+    </span>
   )
 }

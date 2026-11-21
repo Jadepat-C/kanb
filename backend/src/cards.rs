@@ -30,6 +30,9 @@ pub struct CardSummary {
     pub color: Option<String>,
     pub start_at: Option<DateTime<Utc>>,
     pub due_at: Option<DateTime<Utc>>,
+    /// status counts as done
+    pub done: bool,
+    pub done_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     pub label_ids: Vec<Uuid>,
     /// cards this one waits for (finish-to-start)
@@ -51,7 +54,8 @@ pub struct CardSummary {
 const DN: &str = crate::auth::DISPLAY_NAME_SQL;
 
 const SUMMARY_SELECT: &str = r#"
-SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status_id, c.color, c.start_at, c.due_at, c.updated_at, c.description,
+SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status_id, c.color, c.start_at, c.due_at, c.updated_at, c.description, c.done_at,
+  COALESCE((SELECT is_done FROM board_statuses WHERE id = c.status_id), false) AS done,
   COALESCE((SELECT array_agg(d.depends_on) FROM card_dependencies d JOIN cards x ON x.id = d.depends_on AND x.archived_at IS NULL WHERE d.card_id = c.id), '{}') AS depends_on,
   COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{}') AS label_ids,
   COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{}') AS assignee_ids,
@@ -112,6 +116,18 @@ pub async fn load_card_summaries(db: &PgPool, board_id: Uuid, card_id: Option<Uu
     Ok(rows.into_iter().map(finish).collect())
 }
 
+/// done_at follows the card's status (set when it is a "done" status, cleared otherwise).
+pub async fn sync_done(tx: &mut Transaction<'_, Postgres>, card_id: Uuid) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE cards c SET done_at = CASE WHEN s.is_done THEN COALESCE(c.done_at, now()) END
+         FROM cards x LEFT JOIN board_statuses s ON s.id = x.status_id WHERE x.id = c.id AND c.id = $1",
+    )
+    .bind(card_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 pub async fn log_event(
     tx: &mut Transaction<'_, Postgres>,
     card_id: Uuid,
@@ -170,6 +186,28 @@ pub async fn create_card(
         return Err(AppError::BadRequest("title_required"));
     }
     let description = if r.description.is_empty() { tpl.as_ref().map(|t| t.description.clone()).unwrap_or_default() } else { r.description.clone() };
+    let id = insert_card(&state, board_id, list_id, u.id, title, &description, r.due_at, tpl.as_ref(), r.at.as_deref() == Some("top"), &[], json!({})).await?;
+    state.hub.notify(board_id, "card", Some(id), u.id);
+    let card = load_card_summaries(&state.db, board_id, Some(id)).await?.pop().ok_or(AppError::NotFound)?;
+    Ok(Json(card))
+}
+
+/// Creates a card at the end (or top) of a column: the next number, a position, the board's first status unless the
+/// template says otherwise, the template's labels, optional assignees, and a "created" history entry.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_card(
+    state: &AppState,
+    board_id: Uuid,
+    list_id: Uuid,
+    actor: Uuid,
+    title: &str,
+    description: &str,
+    due_at: Option<DateTime<Utc>>,
+    tpl: Option<&crate::templates::Template>,
+    top: bool,
+    assignees: &[Uuid],
+    extra: Value,
+) -> AppResult<Uuid> {
     let mut tx = state.db.begin().await?;
     let (number,): (i32,) = sqlx::query_as("UPDATE boards SET card_seq = card_seq + 1, updated_at = now() WHERE id = $1 RETURNING card_seq")
         .bind(board_id)
@@ -183,7 +221,7 @@ pub async fn create_card(
             .fetch_all(&mut *tx)
             .await?;
     let keys: Vec<String> = keys.into_iter().map(|k| k.0).collect();
-    let index = if r.at.as_deref() == Some("top") { 0 } else { keys.len() };
+    let index = if top { 0 } else { keys.len() };
     let pos = position_at(&keys, index);
     let id = Uuid::now_v7();
     sqlx::query(
@@ -196,15 +234,15 @@ pub async fn create_card(
     .bind(list_id)
     .bind(number)
     .bind(title)
-    .bind(&description)
+    .bind(description)
     .bind(pos)
-    .bind(u.id)
-    .bind(r.due_at)
+    .bind(actor)
+    .bind(due_at)
     .bind(tpl.as_ref().map(|t| t.priority).unwrap_or(0))
     .bind(tpl.as_ref().and_then(|t| t.status_id))
     .execute(&mut *tx)
     .await?;
-    if let Some(t) = &tpl {
+    if let Some(t) = tpl {
         sqlx::query(
             "INSERT INTO card_labels (card_id, label_id) SELECT $1, l.id FROM labels l WHERE l.board_id = $2 AND l.id = ANY($3)",
         )
@@ -214,12 +252,23 @@ pub async fn create_card(
         .execute(&mut *tx)
         .await?;
     }
+    sync_done(&mut tx, id).await?;
     let (list_name,): (String,) = sqlx::query_as("SELECT name FROM lists WHERE id = $1").bind(list_id).fetch_one(&mut *tx).await?;
-    log_event(&mut tx, id, board_id, u.id, "created", json!({ "list": list_name })).await?;
+    for a in assignees {
+        sqlx::query("INSERT INTO card_assignees (card_id, user_id) SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM board_members WHERE board_id = $3 AND user_id = $2) ON CONFLICT DO NOTHING")
+            .bind(id)
+            .bind(a)
+            .bind(board_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let mut data = json!({ "list": list_name });
+    if let (Some(d), Some(extra)) = (data.as_object_mut(), extra.as_object()) {
+        d.extend(extra.clone());
+    }
+    log_event(&mut tx, id, board_id, actor, "created", data).await?;
     tx.commit().await?;
-    state.hub.notify(board_id, "card", Some(id), u.id);
-    let card = load_card_summaries(&state.db, board_id, Some(id)).await?.pop().ok_or(AppError::NotFound)?;
-    Ok(Json(card))
+    Ok(id)
 }
 
 // ---------- detail ----------
@@ -237,6 +286,7 @@ pub struct Card {
     color: Option<String>,
     start_at: Option<DateTime<Utc>>,
     due_at: Option<DateTime<Utc>>,
+    done_at: Option<DateTime<Utc>>,
     created_by: Option<Uuid>,
     #[sqlx(default)]
     created_by_name: Option<String>,
@@ -274,7 +324,7 @@ pub async fn get_card(
     let board_id = board_of_card(&state.db, id).await?;
     board_access(&state.db, &u, board_id).await?;
     let card: Card = sqlx::query_as(sqlf!(
-        "SELECT c.id, c.board_id, c.list_id, c.number, c.title, c.description, c.priority, c.status_id, c.color, c.start_at, c.due_at,
+        "SELECT c.id, c.board_id, c.list_id, c.number, c.title, c.description, c.priority, c.status_id, c.color, c.start_at, c.due_at, c.done_at,
                 c.created_by, (SELECT {DN} FROM users u WHERE u.id = c.created_by) AS created_by_name, c.created_at, c.updated_at,
                 COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{{}}') AS label_ids,
                 COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{{}}') AS assignee_ids
@@ -433,6 +483,9 @@ pub async fn update_card(
             color = CASE WHEN $6 THEN $7 ELSE color END,
             due_at = CASE WHEN $8 THEN $9 ELSE due_at END,
             start_at = CASE WHEN $11 THEN $12 ELSE start_at END,
+            done_at = CASE WHEN NOT $10 THEN done_at
+                           WHEN EXISTS (SELECT 1 FROM board_statuses s WHERE s.id = $5 AND s.is_done) THEN COALESCE(done_at, now())
+                           ELSE NULL END,
             updated_at = now()
          WHERE id = $1",
     )
@@ -829,6 +882,15 @@ pub struct CalendarItem {
     status_color: Option<String>,
     assignee_ids: Vec<Uuid>,
     can_edit: bool,
+    done: bool,
+    // for the hover preview
+    start_at: Option<DateTime<Utc>>,
+    assignee_names: Vec<String>,
+    labels: Value,
+    #[serde(skip)]
+    description: String,
+    #[sqlx(skip)]
+    excerpt: String,
 }
 
 pub async fn calendar(
@@ -839,11 +901,14 @@ pub async fn calendar(
     if q.to <= q.from || q.to - q.from > chrono::Duration::days(100) {
         return Err(AppError::BadRequest("invalid_range"));
     }
-    let items: Vec<CalendarItem> = sqlx::query_as(
+    let mut items: Vec<CalendarItem> = sqlx::query_as(sqlf!(
         "SELECT c.id, c.board_id, b.name AS board_name, b.color AS board_color, l.name AS list_name, c.number, c.title,
                 c.due_at, c.priority, s.name AS status_name, s.color AS status_color,
-                COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{}') AS assignee_ids,
-                ($1 OR COALESCE(r.is_owner OR 'cards.due' = ANY(r.permissions), false)) AS can_edit
+                COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{{}}') AS assignee_ids,
+                ($1 OR COALESCE(r.is_owner OR 'cards.due' = ANY(r.permissions), false)) AS can_edit,
+                COALESCE(s.is_done, false) AS done, c.start_at, c.description,
+                COALESCE((SELECT array_agg({DN} ORDER BY u.display_name) FROM card_assignees a JOIN users u ON u.id = a.user_id WHERE a.card_id = c.id), '{{}}') AS assignee_names,
+                COALESCE((SELECT json_agg(json_build_object('name', x.name, 'color', x.color) ORDER BY x.name) FROM card_labels cl JOIN labels x ON x.id = cl.label_id WHERE cl.card_id = c.id), '[]'::json) AS labels
          FROM cards c
          JOIN boards b ON b.id = c.board_id
          JOIN lists l ON l.id = c.list_id
@@ -855,8 +920,8 @@ pub async fn calendar(
            AND (($1 AND NOT b.is_tutorial) OR m.user_id IS NOT NULL)
            AND ($5::uuid IS NULL OR c.board_id = $5)
          ORDER BY c.due_at, c.number
-         LIMIT 3000",
-    )
+         LIMIT 3000"
+    ))
     .bind(u.is_super_admin)
     .bind(u.id)
     .bind(q.from)
@@ -864,6 +929,9 @@ pub async fn calendar(
     .bind(q.board_id)
     .fetch_all(&state.db)
     .await?;
+    for i in &mut items {
+        i.excerpt = excerpt(&std::mem::take(&mut i.description));
+    }
     Ok(Json(items))
 }
 
@@ -908,6 +976,7 @@ pub async fn duplicate_card(
     .bind(u.id)
     .execute(&mut *tx)
     .await?;
+    sync_done(&mut tx, new_id).await?;
     sqlx::query("INSERT INTO card_labels (card_id, label_id) SELECT $2, label_id FROM card_labels WHERE card_id = $1")
         .bind(id)
         .bind(new_id)

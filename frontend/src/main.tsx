@@ -61,6 +61,9 @@ const router = createBrowserRouter([
   },
 ])
 
+// browser notifications (Web Push) need a service worker; it only shows notifications, no offline caching
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>

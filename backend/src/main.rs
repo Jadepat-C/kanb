@@ -15,11 +15,16 @@ mod mail;
 mod notify;
 mod perms;
 mod position;
+mod push;
 mod realtime;
+mod recurring;
 mod search;
 mod board_contacts;
 mod board_templates;
 mod contacts;
+mod crypto;
+mod export;
+mod ical;
 mod templates;
 mod twofa;
 mod tutorial;
@@ -84,6 +89,8 @@ enum Cmd {
         #[arg(long)]
         username: String,
     },
+    /// Print a new random SECRET_KEY (for encrypting stored secrets).
+    GenKey,
     /// Reset a user's password (same password input as create-admin).
     SetPassword {
         #[arg(long)]
@@ -108,8 +115,14 @@ async fn main() -> anyhow::Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "kanban=info,tower_http=warn".into()),
         )
         .init();
+    // needs no database or other settings
+    if std::env::args().nth(1).as_deref() == Some("gen-key") {
+        println!("{}", crypto::new_key());
+        return Ok(());
+    }
     let cli = Cli::parse();
     let config = cli.config;
+    crypto::init(config.secret_key.as_deref())?;
 
     let db = PgPoolOptions::new()
         .max_connections(10)
@@ -156,7 +169,11 @@ async fn main() -> anyhow::Result<()> {
             println!("two-factor sign-in turned off for {username}");
             Ok(())
         }
-        Cmd::Serve => serve(db, config).await,
+        Cmd::GenKey => Ok(()),
+        Cmd::Serve => {
+            crypto::seal_existing(&db).await.context("encrypting stored secrets")?;
+            serve(db, config).await
+        }
     }
 }
 
@@ -176,6 +193,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
     };
     notify::spawn_due_job(state.clone());
     board_contacts::spawn_dispatch(state.clone());
+    recurring::spawn_job(state.clone());
     let upload_limit = config.max_upload_mb * 1024 * 1024 + 1024 * 1024;
 
     let api = Router::new()
@@ -194,6 +212,12 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/me/contact-points", get(contacts::list).post(contacts::create))
         .route("/me/contact-points/test", post(contacts::test))
         .route("/me/contact-points/{id}", patch(contacts::update).delete(contacts::delete))
+        .route("/me/calendar-feed", get(ical::status).post(ical::reset).patch(ical::update).delete(ical::disable))
+        .route("/cards/{id}/calendar", axum::routing::put(ical::pick))
+        .route("/calendar/{file}", get(ical::feed))
+        .route("/push", get(push::info))
+        .route("/me/push", post(push::subscribe).delete(push::unsubscribe))
+        .route("/me/push/test", post(push::test))
         .route("/me/2fa/setup", post(twofa::setup))
         .route("/me/2fa/enable", post(twofa::enable))
         .route("/me/2fa/disable", post(twofa::disable))
@@ -220,6 +244,8 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/boards/{id}/roles", post(boards::create_role))
         .route("/boards/{id}/statuses", post(boards::create_status))
         .route("/boards/{id}/templates", post(templates::create))
+        .route("/boards/{id}/recurrences", get(recurring::list).post(recurring::create))
+        .route("/recurrences/{id}", patch(recurring::update).delete(recurring::delete))
         .route("/boards/{id}/contact-points", get(board_contacts::list).post(board_contacts::create))
         .route("/boards/{id}/contact-points/test", post(board_contacts::test))
         .route("/board-contact-points/{id}", patch(board_contacts::update).delete(board_contacts::delete))
@@ -231,6 +257,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/board-templates", get(board_templates::list).post(board_templates::create))
         .route("/board-templates/{id}", patch(board_templates::update).delete(board_templates::delete))
         .route("/boards/{id}/save-as-template", post(board_templates::from_board))
+        .route("/boards/{id}/export", get(export::export_board))
         .route("/statuses/{id}", patch(boards::update_status).delete(boards::delete_status))
         .route("/lists/{id}/sort", post(boards::sort_list))
         .route("/lists/{id}/archive", post(boards::archive_list))

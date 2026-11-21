@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronRight, Columns3, LayoutTemplate, MessageSquare, Paperclip, Pencil, Plus, Search, Settings2, SquareStack, Trash2, Users } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronRight, Download, Columns3, LayoutTemplate, MessageSquare, Paperclip, Pencil, Plus, Search, Settings2, SquareStack, Trash2, Users } from 'lucide-react'
 import { Stars } from './CardTile'
 import { boardScope, ContactPointList } from './ContactPoints'
 import { SaveBoardTemplate } from './SaveBoardTemplate'
+import { RecurringCards } from './Recurring'
 import { LiveEditor } from './editor/LiveEditor'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ask, askText } from './dialogs'
@@ -118,6 +119,22 @@ function General({ b, boardId, onClose }: { b: BoardHelpers; boardId: string; on
           {t('common.save')}
         </Button>
       )}
+      <div className="space-y-2 border-t border-line pt-4">
+        <div className="text-sm font-medium">{t('export.title')}</div>
+        <div className="flex flex-wrap gap-2">
+          {(['csv', 'json', 'zip'] as const).map((f) => (
+            <a
+              key={f}
+              href={`/api/boards/${boardId}/export?format=${f}`}
+              download
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-sm hover:bg-black/5 dark:hover:bg-white/5"
+            >
+              <Download size={14} /> {t(`export.${f}`)}
+            </a>
+          ))}
+        </div>
+        <p className="text-xs text-muted">{t('export.hint')}</p>
+      </div>
       {(me?.can_create_boards || me?.is_super_admin) && (
         <div className="space-y-2 border-t border-line pt-4">
           <Button onClick={() => setSavingTpl(true)}>
@@ -433,7 +450,7 @@ function Labels({ b, boardId }: { b: BoardHelpers; boardId: string }) {
   const refresh = useRefresh(boardId)
   const can = b.can('labels.manage')
   const [name, setName] = useState('')
-  const [color, setColor] = useState<string | null>('#6366f1')
+  const [color, setColor] = useState<string | null>('#2f5bd3')
   const create = useMutation({
     mutationFn: () => api.post(`/boards/${boardId}/labels`, { name, color }),
     onSuccess: () => (setName(''), refresh()),
@@ -465,7 +482,7 @@ function Labels({ b, boardId }: { b: BoardHelpers; boardId: string }) {
                   className="h-8 rounded-md border border-line bg-surface px-1 text-xs"
                   style={{ color: l.color }}
                 >
-                  {['#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#6366f1', '#a855f7', '#ec4899'].map((c) => (
+                  {['#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#2f5bd3', '#a855f7', '#ec4899'].map((c) => (
                     <option key={c} value={c} style={{ color: c }}>
                       ●
                     </option>
@@ -498,7 +515,7 @@ function Labels({ b, boardId }: { b: BoardHelpers; boardId: string }) {
   )
 }
 
-const COLORS = ['#a1a1aa', '#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#6366f1', '#a855f7', '#ec4899']
+const COLORS = ['#a1a1aa', '#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#2f5bd3', '#a855f7', '#ec4899']
 
 function Statuses({ b, boardId }: { b: BoardHelpers; boardId: string }) {
   const { t } = useTranslation()
@@ -513,7 +530,7 @@ function Statuses({ b, boardId }: { b: BoardHelpers; boardId: string }) {
     onError: toastError,
   })
   const update = useMutation({
-    mutationFn: (p: { id: string; name?: string; color?: string; index?: number }) => api.patch(`/statuses/${p.id}`, p),
+    mutationFn: (p: { id: string; name?: string; color?: string; index?: number; is_done?: boolean }) => api.patch(`/statuses/${p.id}`, p),
     onSuccess: refresh,
     onError: toastError,
   })
@@ -544,6 +561,10 @@ function Statuses({ b, boardId }: { b: BoardHelpers; boardId: string }) {
               onBlur={(e) => e.currentTarget.value.trim() && e.currentTarget.value !== st.name && update.mutate({ id: st.id, name: e.currentTarget.value })}
               className="h-8"
             />
+            <label className="flex shrink-0 items-center gap-1 text-xs text-muted" title={t('settings.doneHint')}>
+              <input type="checkbox" checked={st.is_done} disabled={!can} onChange={(e) => update.mutate({ id: st.id, is_done: e.target.checked })} className="accent-[var(--color-accent)]" />
+              {t('settings.done')}
+            </label>
             {can && (
               <>
                 <button disabled={i === 0} onClick={() => update.mutate({ id: st.id, index: i - 1 })} className="rounded p-1.5 text-muted enabled:hover:bg-black/5 disabled:opacity-30 enabled:cursor-pointer dark:enabled:hover:bg-white/10">
@@ -775,6 +796,7 @@ function Templates({ b, boardId }: { b: BoardHelpers; boardId: string }) {
         </Button>
       )}
       {editing && <TemplateEditor b={b} boardId={boardId} template={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
+      <RecurringCards b={b} boardId={boardId} />
     </div>
   )
 }

@@ -56,7 +56,7 @@ function useNotificationSocket() {
         if (d?.items[0]) lastSeen.current = Math.max(lastSeen.current ?? 0, d.items[0].id)
         for (const n of fresh.slice(0, 3).reverse()) {
           toastActivity(
-            { name: n.actor_name ?? 'Kanban', color: n.actor_color ?? '#6366f1', src: avatarUrl(n.actor_avatar) },
+            { name: n.actor_name ?? 'Kanban', color: n.actor_color ?? '#2f5bd3', src: avatarUrl(n.actor_avatar) },
             describe(t, n, true),
           )
         }
@@ -152,7 +152,7 @@ export function NotificationBell() {
                   )}
                 >
                   {n.actor_name ? (
-                    <Avatar name={n.actor_name} color={n.actor_color ?? '#6366f1'} src={avatarUrl(n.actor_avatar)} size={28} />
+                    <Avatar name={n.actor_name} color={n.actor_color ?? '#2f5bd3'} src={avatarUrl(n.actor_avatar)} size={28} />
                   ) : (
                     <span className={clsx('flex h-7 w-7 shrink-0 items-center justify-center rounded-full', n.kind === 'overdue' ? 'bg-red-500/15 text-red-600' : 'bg-amber-500/15 text-amber-600')}>
                       <Icon size={15} />

@@ -175,7 +175,7 @@ impl DownloadQuery {
 }
 
 /// RFC 6266 / 5987 header that survives non-ASCII (e.g. Thai) filenames.
-fn content_disposition(kind: &str, filename: &str) -> String {
+pub(crate) fn content_disposition(kind: &str, filename: &str) -> String {
     let ascii: String = filename.chars().map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '_' }).collect();
     let mut enc = String::new();
     for b in filename.bytes() {

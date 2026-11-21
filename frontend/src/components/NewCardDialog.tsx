@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import { templateDue, type BoardDetail, type BoardListItem, type CardSummary } from '../lib/types'
 import { toastError, toastSuccess } from './toast'
 import { Button, Dialog, Field, Input } from './ui'
+import { DateInput, TimeInput } from './DateInput'
 
 export interface NewCardPreset {
   boardId?: string
@@ -115,10 +116,10 @@ export function NewCardDialog({
         </Field>
         <div className="grid grid-cols-[1fr_110px] gap-2">
           <Field label={t('card.due')}>
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <DateInput value={date} onChange={setDate} />
           </Field>
           <Field label={t('menu.time')}>
-            <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} disabled={!date} />
+            <TimeInput value={time || '09:00'} onChange={setTime} disabled={!date} />
           </Field>
         </div>
         <label className="flex items-center gap-2 text-sm">

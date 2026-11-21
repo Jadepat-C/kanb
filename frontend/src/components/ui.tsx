@@ -14,7 +14,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
         className={clsx(
           'inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
           size === 'sm' ? 'h-7 px-2 text-xs' : 'h-9 px-3 text-sm',
-          variant === 'primary' && 'bg-accent text-white hover:bg-indigo-700',
+          variant === 'primary' && 'bg-accent text-white hover:bg-accent-strong',
           variant === 'outline' && 'border border-line bg-surface hover:bg-black/5 dark:hover:bg-white/5',
           variant === 'ghost' && 'hover:bg-black/5 dark:hover:bg-white/10',
           variant === 'danger' && 'bg-red-600 text-white hover:bg-red-700',
@@ -168,7 +168,7 @@ export function Spinner() {
   return <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
 }
 
-export const PALETTE = ['#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#6366f1', '#a855f7', '#ec4899']
+export const PALETTE = ['#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#2f5bd3', '#a855f7', '#ec4899']
 
 export function ColorPicker({ value, onChange, allowNone }: { value: string | null; onChange: (c: string | null) => void; allowNone?: boolean }) {
   return (

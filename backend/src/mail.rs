@@ -54,6 +54,7 @@ pub async fn load(state: &AppState) -> AppResult<SmtpSettings> {
     let row: Option<(serde_json::Value,)> =
         sqlx::query_as("SELECT value FROM app_settings WHERE key = $1").bind(KEY).fetch_optional(&state.db).await?;
     let mut s: SmtpSettings = row.and_then(|(v,)| serde_json::from_value(v).ok()).unwrap_or_default();
+    s.password = crate::crypto::open(&s.password).map_err(AppError::Internal)?;
     if let Some(redirect) = state.config.mail_redirect.as_deref() {
         // dev/test safety valve: everything goes to the local catcher, whatever the saved settings say
         let (host, port) = redirect.rsplit_once(':').unwrap_or((redirect, "1025"));
@@ -153,9 +154,9 @@ pub fn link_email(kind: &str, locale: &str, name: &str, username: &str, link: &s
     let hello = if th { format!("สวัสดีคุณ {name}") } else { format!("Hello {name},") };
     let text = format!("{hello}\n\n{intro}\n\n{button}: {link}\n\n{validity}\n\n{outro}\n");
     let html = format!(
-        r#"<div style="font-family:system-ui,'IBM Plex Sans Thai',sans-serif;max-width:520px;margin:auto;color:#18181b;line-height:1.6">
+        r#"<div style="font-family:system-ui,'Anuphan',sans-serif;max-width:520px;margin:auto;color:#18181b;line-height:1.6">
 <p>{h}</p><p>{i}</p>
-<p style="margin:24px 0"><a href="{l}" style="background:#4f46e5;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">{b}</a></p>
+<p style="margin:24px 0"><a href="{l}" style="background:#2f5bd3;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">{b}</a></p>
 <p style="color:#71717a;font-size:13px">{v}<br>{o}</p>
 <p style="color:#a1a1aa;font-size:12px;word-break:break-all">{l}</p></div>"#,
         h = esc(&hello),
@@ -223,7 +224,7 @@ pub async fn save_settings(State(state): State<AppState>, _a: SuperAdmin, Json(r
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
     )
     .bind(KEY)
-    .bind(serde_json::to_value(&s).map_err(|e| anyhow::anyhow!(e))?)
+    .bind(serde_json::to_value(SmtpSettings { password: crate::crypto::seal(&s.password), ..s.clone() }).map_err(|e| anyhow::anyhow!(e))?)
     .execute(&state.db)
     .await?;
     Ok(Json(json!({ "ok": true })))

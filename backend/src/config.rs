@@ -40,6 +40,11 @@ pub struct Config {
     #[arg(long, env = "MAIL_REDIRECT")]
     pub mail_redirect: Option<String>,
 
+    /// 64 hex characters (`kanban gen-key`): encrypts the SMTP password, webhook secrets and 2FA secrets in the database.
+    /// Keep it safe and with your backups: without it those secrets can't be read.
+    #[arg(long, env = "SECRET_KEY", hide_env_values = true)]
+    pub secret_key: Option<String>,
+
     /// Development/testing only: send ALL contact-point requests (Discord, Slack, …) to this base URL instead,
     /// keeping the path; the real target goes in an `X-Original-Url` header.
     #[arg(long, env = "WEBHOOK_REDIRECT")]

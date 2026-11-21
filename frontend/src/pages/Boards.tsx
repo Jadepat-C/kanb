@@ -358,6 +358,7 @@ function BoardTile({ b }: { b: BoardListItem }) {
       </div>
       <div className="mt-2 flex gap-3 text-xs text-muted">
         <span>{t('boards.cards', { count: b.card_count })}</span>
+        {b.done_count > 0 && <span className="text-done">{t('board.doneOf', { done: b.done_count, total: b.card_count })}</span>}
         <span>{t('boards.members', { count: b.member_count })}</span>
         <span className="ml-auto">{fmtRelative(b.updated_at)}</span>
       </div>
@@ -371,7 +372,7 @@ export function CreateBoard({ open, onOpenChange, templateId }: { open: boolean;
   const nav = useNavigate()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [color, setColor] = useState<string | null>('#6366f1')
+  const [color, setColor] = useState<string | null>('#2f5bd3')
   const [lists, setLists] = useState(t('boards.defaultLists'))
   const templates = useQuery({ queryKey: ['board-templates'], queryFn: () => api.get<BoardTemplate[]>('/board-templates'), enabled: open })
   const [tplId, setTplId] = useState(templateId ?? '')

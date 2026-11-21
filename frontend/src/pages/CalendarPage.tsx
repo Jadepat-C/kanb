@@ -1,8 +1,8 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, User } from 'lucide-react'
+import { Plus, User, CalendarPlus } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router'
+import { useNavigate, Link } from 'react-router'
 import { Calendar, type CalItem } from '../components/Calendar'
 import { CardContextMenu } from '../components/CardMenu'
 import { ContextMenu, CTX, MItem } from '../components/menu'
@@ -27,6 +27,11 @@ interface Item {
   status_color: string | null
   assignee_ids: string[]
   can_edit: boolean
+  done: boolean
+  start_at: string | null
+  assignee_names: string[]
+  labels: { name: string; color: string }[]
+  excerpt: string
 }
 
 /** Every card with a due date, across all boards you can see. */
@@ -68,6 +73,7 @@ export function CalendarPage() {
           sub: `${i.board_name} · ${i.list_name}${i.status_name ? ` · ${i.status_name}` : ''}`,
           priority: i.priority,
           canMove: i.can_edit,
+          done: i.done,
           badge: { label: i.board_name, color: i.board_color },
         })),
     [raw, mine, board, me?.id],
@@ -78,6 +84,23 @@ export function CalendarPage() {
   return (
     <div className="h-full">
       <Calendar
+        glimpse={(item) => {
+          const i = byId.get(item.id)
+          return i
+            ? {
+                number: i.number,
+                title: i.title,
+                done: i.done,
+                status: i.status_name ? { name: i.status_name, color: i.status_color ?? '#a1a1aa' } : null,
+                labels: i.labels,
+                start_at: i.start_at,
+                due_at: i.due_at,
+                people: i.assignee_names,
+                excerpt: i.excerpt,
+                sub: `${i.board_name} · ${i.list_name}`,
+              }
+            : null
+        }}
         items={items}
         onRange={onRange}
         onOpen={(id) => open(id)}
@@ -117,6 +140,9 @@ export function CalendarPage() {
             <Button size="sm" variant={mine ? 'primary' : 'outline'} onClick={() => setMine(!mine)}>
               <User size={13} /> {t('board.onlyMine')}
             </Button>
+            <Link to="/profile#calendar-feed" className="inline-flex h-7 items-center gap-1 rounded-md border border-line px-2 text-xs hover:bg-black/5 dark:hover:bg-white/5" title={t('feed.hint')}>
+              <CalendarPlus size={13} /> {t('feed.subscribe')}
+            </Link>
             <Button size="sm" variant="primary" onClick={() => setNewCard({ boardId: board || undefined, due: null })}>
               <Plus size={14} /> {t('menu.newCard')}
             </Button>

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import {
   Archive,
+  CalendarCheck,
   ArrowRightLeft,
   CalendarClock,
   Check,
@@ -29,6 +30,8 @@ import { fmtDate, fmtRelative, fmtSize } from '../lib/prefs'
 import { avatarUrl, label } from '../lib/user'
 import type { Attachment, CardDetail, CardSummary, Label, TimelineItem } from '../lib/types'
 import { Stars } from './CardTile'
+import { useCalendarPick } from './CalendarFeed'
+import { DateTimeInput } from './DateInput'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ask } from './dialogs'
 import { FilePreview, previewKind } from './FilePreview'
@@ -574,8 +577,6 @@ function Sidebar({
   })
   const toggle = (arr: string[], id: string) => (arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id])
   const [purging, setPurging] = useState(false)
-  const dueLocal = card.due_at ? toLocalInput(card.due_at) : ''
-  const startLocal = card.start_at ? toLocalInput(card.start_at) : ''
 
   return (
     <aside className="space-y-4 text-sm">
@@ -609,9 +610,13 @@ function Sidebar({
             >
               <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
               {s.name}
+              {s.is_done && <Check size={12} className="text-done" />}
             </button>
           ))}
         </div>
+        {card.done_at && data.statuses.find((s) => s.id === card.status_id)?.is_done && (
+          <p className="mt-1 text-xs text-done">{t('card.doneAt', { when: fmtDate(card.done_at, true) })}</p>
+        )}
       </Prop>
 
       <Prop label={t('card.priority')}>
@@ -675,19 +680,9 @@ function Sidebar({
 
       <Prop label={t('card.start')}>
         <div className="flex gap-1">
-          <Input
-            type="datetime-local"
-            disabled={!canDue}
-            defaultValue={startLocal}
-            key={startLocal}
-            max={dueLocal || undefined}
-            onBlur={(e) => {
-              const v = e.currentTarget.value
-              const iso = v ? new Date(v).toISOString() : null
-              if ((iso ?? '') !== (card.start_at ? new Date(card.start_at).toISOString() : '')) patch({ start_at: iso })
-            }}
-            className="h-8 text-xs"
-          />
+          <div className="min-w-0 flex-1">
+            <DateTimeInput value={card.start_at} disabled={!canDue} onChange={(iso) => patch({ start_at: iso })} />
+          </div>
           {card.start_at && canDue && (
             <Button variant="ghost" size="sm" onClick={() => patch({ start_at: null })} title={t('common.clear')}>
               <X size={14} />
@@ -698,18 +693,9 @@ function Sidebar({
 
       <Prop label={t('card.due')}>
         <div className="flex gap-1">
-          <Input
-            type="datetime-local"
-            disabled={!canDue}
-            defaultValue={dueLocal}
-            key={dueLocal}
-            onBlur={(e) => {
-              const v = e.currentTarget.value
-              const iso = v ? new Date(v).toISOString() : null
-              if ((iso ?? '') !== (card.due_at ? new Date(card.due_at).toISOString() : '')) patch({ due_at: iso })
-            }}
-            className="h-8 text-xs"
-          />
+          <div className="min-w-0 flex-1">
+            <DateTimeInput value={card.due_at} disabled={!canDue} onChange={(iso) => patch({ due_at: iso })} />
+          </div>
           {card.due_at && canDue && (
             <Button variant="ghost" size="sm" onClick={() => patch({ due_at: null })} title={t('common.clear')}>
               <X size={14} />
@@ -717,6 +703,8 @@ function Sidebar({
           )}
         </div>
       </Prop>
+
+      <CalendarPickButton cardId={cardId} />
 
       <Dependencies cardId={cardId} b={b} />
 
@@ -798,7 +786,7 @@ function LabelPicker({
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [name, setName] = useState('')
-  const [color, setColor] = useState<string | null>('#6366f1')
+  const [color, setColor] = useState<string | null>('#2f5bd3')
   const create = useMutation({
     mutationFn: () => api.post<Label>(`/boards/${boardId}/labels`, { name, color }),
     onSuccess: (l) => {
@@ -841,12 +829,6 @@ function LabelPicker({
       )}
     </div>
   )
-}
-
-function toLocalInput(iso: string) {
-  const d = new Date(iso)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 /** Description: always-on live-preview editor with debounced autosave (the server folds consecutive edits into one log entry). */
@@ -1018,7 +1000,8 @@ function Dependencies({ cardId, b }: { cardId: string; b: BoardHelpers }) {
   const chip = (c: CardSummary, onRemove?: () => void) => (
     <span key={c.id} className="flex max-w-full items-center gap-1 rounded-md border border-line py-0.5 pl-1.5 pr-0.5 text-xs">
       <button onClick={() => open(c.id)} className="min-w-0 truncate hover:underline cursor-pointer" title={`#${c.number} ${c.title}`}>
-        <span className="text-muted">#{c.number}</span> {c.title}
+        {c.done && <span className="text-done">✓ </span>}
+        <span className="text-muted">#{c.number}</span> <span className={c.done ? 'text-muted line-through' : ''}>{c.title}</span>
       </button>
       {onRemove && (
         <button onClick={onRemove} title={t('common.remove')} className="shrink-0 rounded p-0.5 text-muted hover:text-red-600 cursor-pointer">
@@ -1065,5 +1048,22 @@ function Dependencies({ cardId, b }: { cardId: string; b: BoardHelpers }) {
         </Prop>
       )}
     </>
+  )
+}
+
+function CalendarPickButton({ cardId }: { cardId: string }) {
+  const { t } = useTranslation()
+  const { picked, toggle } = useCalendarPick()
+  const on = picked.has(cardId)
+  return (
+    <button
+      onClick={() => toggle(cardId)}
+      className={clsx(
+        'flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs cursor-pointer',
+        on ? 'border-accent bg-accent/10 font-medium' : 'border-line text-muted hover:bg-black/5 dark:hover:bg-white/5',
+      )}
+    >
+      <CalendarCheck size={13} /> {on ? t('feed.inFeed') : t('feed.addCard')}
+    </button>
   )
 }

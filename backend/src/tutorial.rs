@@ -30,7 +30,7 @@ const EN: Content = Content {
     name: "👋 Getting started",
     description: "A guided tour created for you by the system. Play with it freely; archive or delete it when you're done.",
     lists: ["Start here", "Learn more", "Done"],
-    labels: [("Tutorial", "#6366f1"), ("Tip", "#22c55e")],
+    labels: [("Tutorial", "#2f5bd3"), ("Tip", "#22c55e")],
     cards: &[
         Card {
             list: 0,
@@ -242,7 +242,7 @@ const TH: Content = Content {
     name: "👋 เริ่มต้นใช้งาน",
     description: "บอร์ดแนะนำการใช้งานที่ระบบสร้างให้คุณ ลองเล่นได้ตามสบาย เสร็จแล้วจะเก็บหรือลบทิ้งก็ได้",
     lists: ["เริ่มที่นี่", "เรียนรู้เพิ่มเติม", "เสร็จแล้ว"],
-    labels: [("บทเรียน", "#6366f1"), ("เคล็ดลับ", "#22c55e")],
+    labels: [("บทเรียน", "#2f5bd3"), ("เคล็ดลับ", "#22c55e")],
     cards: &[
         Card {
             list: 0,

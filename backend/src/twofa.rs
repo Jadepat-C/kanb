@@ -45,7 +45,8 @@ fn check(secret_b32: &str, account: &str, code: &str, last_step: Option<i64>) ->
     if code.len() != 6 {
         return Ok(None);
     }
-    let t = totp(secret_b32, account)?;
+    let secret = crate::crypto::open(secret_b32).map_err(AppError::Internal)?;
+    let t = totp(&secret, account)?;
     Ok(t.check(&code, now()).map(|step| step as i64).filter(|step| last_step.is_none_or(|last| *step > last)))
 }
 
@@ -83,7 +84,7 @@ fn new_recovery_codes() -> (Vec<String>, Vec<String>) {
 /// Step 1: a new secret + QR code. Nothing changes until the first code is confirmed (step 2).
 pub async fn setup(State(state): State<AppState>, CurrentUser(u): CurrentUser) -> AppResult<Json<Value>> {
     let secret = Secret::generate().to_base32();
-    sqlx::query("UPDATE users SET totp_pending_secret = $2 WHERE id = $1").bind(u.id).bind(&secret).execute(&state.db).await?;
+    sqlx::query("UPDATE users SET totp_pending_secret = $2 WHERE id = $1").bind(u.id).bind(crate::crypto::seal(&secret)).execute(&state.db).await?;
     let account = u.email.clone().unwrap_or_else(|| u.username.clone());
     let url = totp(&secret, &account)?.to_url().map_err(|e| anyhow::anyhow!("{e:?}"))?;
     let qr = QrCode::new(url.as_bytes()).map_err(|e| anyhow::anyhow!(e))?;

@@ -93,6 +93,7 @@ fn delivered(state: &AppState, user_id: Uuid, id: i64) {
             tracing::warn!(error = %e, notification = id, "notification email failed");
         }
         crate::contacts::deliver(&st, &msg).await;
+        crate::push::deliver(&st, &msg).await;
     });
 }
 
@@ -229,9 +230,9 @@ async fn email(state: &AppState, m: &Message) -> Result<(), String> {
         format!(r#"<blockquote style="border-left:3px solid #c7d2fe;margin:12px 0;padding:4px 12px;color:#52525b">{}</blockquote>"#, esc(&m.snippet))
     };
     let html = format!(
-        r#"<div style="font-family:system-ui,'IBM Plex Sans Thai',sans-serif;max-width:520px;margin:auto;color:#18181b;line-height:1.6">
+        r#"<div style="font-family:system-ui,'Anuphan',sans-serif;max-width:520px;margin:auto;color:#18181b;line-height:1.6">
 <p>{}</p><p>{}</p>{quote_html}
-<p style="margin:20px 0"><a href="{}" style="background:#4f46e5;color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none;font-weight:600">{}</a></p>
+<p style="margin:20px 0"><a href="{}" style="background:#2f5bd3;color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none;font-weight:600">{}</a></p>
 <p style="color:#a1a1aa;font-size:12px">{off}</p></div>"#,
         esc(&hello),
         esc(&m.line),
@@ -342,6 +343,7 @@ pub fn spawn_due_job(state: AppState) {
                      JOIN boards b ON b.id = c.board_id
                      JOIN users u ON u.id = a.user_id AND u.is_active
                      WHERE {window} AND c.archived_at IS NULL AND l.archived_at IS NULL AND b.archived_at IS NULL
+                       AND NOT EXISTS (SELECT 1 FROM board_statuses s WHERE s.id = c.status_id AND s.is_done)
                      ON CONFLICT (user_id, card_id, kind, (data->>'due_at')) WHERE kind IN ('due_soon', 'overdue') DO NOTHING
                      RETURNING id, user_id"
                 ))

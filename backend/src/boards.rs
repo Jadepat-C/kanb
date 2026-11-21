@@ -36,6 +36,7 @@ pub struct BoardListItem {
     updated_at: DateTime<Utc>,
     is_member: bool,
     card_count: i64,
+    done_count: i64,
     member_count: i64,
     /// [{id, display_name, avatar_color}] of members holding the owner role
     owners: serde_json::Value,
@@ -64,6 +65,8 @@ pub async fn list_boards(
                 EXISTS (SELECT 1 FROM board_members m WHERE m.board_id = b.id AND m.user_id = $1) AS is_member,
                 (SELECT count(*) FROM cards c JOIN lists l ON l.id = c.list_id
                  WHERE c.board_id = b.id AND c.archived_at IS NULL AND l.archived_at IS NULL) AS card_count,
+                (SELECT count(*) FROM cards c JOIN lists l ON l.id = c.list_id JOIN board_statuses s ON s.id = c.status_id AND s.is_done
+                 WHERE c.board_id = b.id AND c.archived_at IS NULL AND l.archived_at IS NULL) AS done_count,
                 (SELECT count(*) FROM board_members m WHERE m.board_id = b.id) AS member_count,
                 COALESCE((SELECT json_agg(json_build_object('id', u.id, 'display_name', u.display_name, 'username', u.username, 'avatar_color', u.avatar_color, 'avatar_id', u.avatar_id)
                                           ORDER BY lower(u.display_name))
@@ -148,7 +151,7 @@ pub async fn insert_board(
     lists: &[String],
 ) -> AppResult<(Board, Vec<Uuid>, Vec<Uuid>)> {
     let board: Board = sqlx::query_as(
-        "INSERT INTO boards (id, name, description, color, created_by) VALUES ($1,$2,$3,COALESCE($4,'#6366f1'),$5)
+        "INSERT INTO boards (id, name, description, color, created_by) VALUES ($1,$2,$3,COALESCE($4,'#2f5bd3'),$5)
          RETURNING id, name, description, color, created_at, updated_at",
     )
     .bind(Uuid::now_v7())
@@ -180,20 +183,21 @@ pub async fn insert_board(
         .bind(owner_role)
         .execute(&mut **tx)
         .await?;
-    let statuses: [(&str, &str); 3] = if locale == "th" {
-        [("ปกติ", "#a1a1aa"), ("ติดปัญหา", "#ef4444"), ("พร้อม", "#22c55e")]
+    let statuses: [(&str, &str); 4] = if locale == "th" {
+        [("ปกติ", "#a1a1aa"), ("ติดปัญหา", "#ef4444"), ("พร้อม", "#22c55e"), ("เสร็จแล้ว", "#2f5bd3")]
     } else {
-        [("Normal", "#a1a1aa"), ("Blocked", "#ef4444"), ("Ready", "#22c55e")]
+        [("Normal", "#a1a1aa"), ("Blocked", "#ef4444"), ("Ready", "#22c55e"), ("Done", "#2f5bd3")]
     };
     let mut status_ids = Vec::new();
     for (i, (name, color)) in statuses.iter().enumerate() {
         let sid = Uuid::now_v7();
-        sqlx::query("INSERT INTO board_statuses (id, board_id, name, color, position) VALUES ($1,$2,$3,$4,$5)")
+        sqlx::query("INSERT INTO board_statuses (id, board_id, name, color, position, is_done) VALUES ($1,$2,$3,$4,$5,$6)")
             .bind(sid)
             .bind(board.id)
             .bind(name)
             .bind(color)
             .bind(i as i32)
+            .bind(i == 3)
             .execute(&mut **tx)
             .await?;
         status_ids.push(sid);
@@ -257,6 +261,8 @@ pub struct Status {
     pub name: String,
     pub color: String,
     pub position: i32,
+    /// cards with this status count as finished
+    pub is_done: bool,
 }
 
 #[derive(Serialize)]
@@ -301,7 +307,7 @@ pub async fn get_board(
         .fetch_all(db)
         .await?;
     let statuses: Vec<Status> =
-        sqlx::query_as("SELECT id, name, color, position FROM board_statuses WHERE board_id = $1 ORDER BY position, name")
+        sqlx::query_as("SELECT id, name, color, position, is_done FROM board_statuses WHERE board_id = $1 ORDER BY position, name")
             .bind(id)
             .fetch_all(db)
             .await?;
@@ -699,6 +705,7 @@ pub struct StatusReq {
     color: Option<String>,
     /// new index among the board's statuses
     index: Option<usize>,
+    is_done: Option<bool>,
 }
 
 pub async fn create_status(
@@ -715,7 +722,7 @@ pub async fn create_status(
     let st: Status = sqlx::query_as(
         "INSERT INTO board_statuses (id, board_id, name, color, position)
          VALUES ($1,$2,$3,$4,(SELECT coalesce(max(position),-1)+1 FROM board_statuses WHERE board_id = $2))
-         RETURNING id, name, color, position",
+         RETURNING id, name, color, position, is_done",
     )
     .bind(Uuid::now_v7())
     .bind(board_id)
@@ -752,14 +759,24 @@ pub async fn update_status(
         }
     }
     let st: Status = sqlx::query_as(
-        "UPDATE board_statuses SET name = COALESCE($2, name), color = COALESCE($3, color) WHERE id = $1
-         RETURNING id, name, color, position",
+        "UPDATE board_statuses SET name = COALESCE($2, name), color = COALESCE($3, color), is_done = COALESCE($4, is_done) WHERE id = $1
+         RETURNING id, name, color, position, is_done",
     )
     .bind(id)
     .bind(r.name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
     .bind(r.color)
+    .bind(r.is_done)
     .fetch_one(&mut *tx)
     .await?;
+    if r.is_done.is_some() {
+        sqlx::query(
+            "UPDATE cards SET done_at = CASE WHEN $2 THEN COALESCE(done_at, now()) END WHERE status_id = $1 AND (done_at IS NULL) = $2",
+        )
+        .bind(id)
+        .bind(st.is_done)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     state.hub.notify(board_id, "status", None, u.id);
     Ok(Json(st))

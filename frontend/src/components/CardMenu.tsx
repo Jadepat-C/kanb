@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
+  CalendarCheck,
   Archive,
   ArrowRightLeft,
   CalendarClock,
@@ -17,6 +18,7 @@ import {
   Trash2,
   UserCheck,
 } from 'lucide-react'
+import { useCalendarPick } from './CalendarFeed'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ask, askText } from './dialogs'
 import { useState, type ReactElement } from 'react'
@@ -76,6 +78,7 @@ export function CardContextMenu({
   const { data: me } = useMe()
   const [renaming, setRenaming] = useState(false)
   const [purging, setPurging] = useState(false)
+  const calendar = useCalendarPick()
   const can = (p: string) => (b ? b.can(p) : p === 'cards.edit' ? !!canEdit : true) // server enforces the rest
 
   const refresh = () => {
@@ -155,6 +158,9 @@ export function CardContextMenu({
           }
         >
           <Copy size={14} /> {t('menu.copyTitle')}
+        </MItem>
+        <MItem M={M} onSelect={() => calendar.toggle(card.id)}>
+          <CalendarCheck size={14} /> {calendar.picked.has(card.id) ? t('feed.removeCard') : t('feed.addCard')}
         </MItem>
 
         {(data || can('cards.edit') || can('cards.due')) && <MSep M={M} />}

@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Camera, Trash2 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { CalendarFeed } from '../components/CalendarFeed'
 import { NotificationPrefs } from '../components/ContactPoints'
 import { TwoFactorSection } from '../components/TwoFactor'
 import { toast, toastError, toastSuccess } from '../components/toast'
@@ -31,6 +32,9 @@ export function Profile() {
     onSuccess: () => (setCur(''), setNext(''), toast(t('profile.passwordChanged'))),
     onError: toastError,
   })
+  useEffect(() => {
+    if (location.hash) setTimeout(() => document.querySelector(location.hash)?.scrollIntoView({ behavior: 'smooth' }), 100)
+  }, [])
   if (!me) return null
   return (
     <div className="mx-auto max-w-xl space-y-8 p-4 sm:p-6">
@@ -86,6 +90,7 @@ export function Profile() {
         </Button>
       </form>
       <NotificationPrefs me={me} />
+      <CalendarFeed />
       <TwoFactorSection me={me} />
     </div>
   )

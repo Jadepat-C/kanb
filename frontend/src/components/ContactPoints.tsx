@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, Info, Pencil, Plus, Send, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import { api } from '../lib/api'
@@ -130,6 +130,7 @@ export function NotificationPrefs({ me }: { me: User }) {
         </label>
         {sys && !sys.email && <Remark>{t('contacts.emailSystemOff')}</Remark>}
       </div>
+      <BrowserPush />
       <div className="space-y-2 border-t border-line pt-4">
         <h3 className="text-sm font-semibold">{t('contacts.title')}</h3>
         <p className="text-xs text-muted">{t('contacts.hint')}</p>
@@ -357,7 +358,7 @@ function ContactDialog({ scope, contact, canTest, onClose }: { scope: ContactSco
 export function NotificationsAdminTab() {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  type S = { email: boolean; push: boolean; allow_private: boolean }
+  type S = { email: boolean; push: boolean; allow_private: boolean; browser: boolean }
   const q = useQuery({ queryKey: ['admin-notifications'], queryFn: () => api.get<{ settings: S; smtp_ready: boolean }>('/admin/notifications') })
   const save = useMutation({
     mutationFn: (s: S) => api.put<{ settings: S }>('/admin/notifications', s),
@@ -396,8 +397,85 @@ export function NotificationsAdminTab() {
         ),
       )}
       <div className="border-t border-line" />
+      {row('browser', t('push.adminTitle'), t('push.adminHint'))}
+      <div className="border-t border-line" />
       {row('push', t('contacts.adminPush'), t('contacts.adminPushHint'))}
       {row('allow_private', t('contacts.adminPrivate'), t('contacts.adminPrivateHint'), undefined, true, !s.push)}
+    </div>
+  )
+}
+
+function urlB64ToBytes(b64: string) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4)
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'))
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0))
+}
+
+/** Profile: notifications from this browser (Web Push), even when Kanban isn't open. */
+function BrowserPush() {
+  const { t } = useTranslation()
+  const supported = typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
+  const info = useQuery({ queryKey: ['push-info'], queryFn: () => api.get<{ public_key: string; enabled: boolean }>('/push'), enabled: supported })
+  const [sub, setSub] = useState<PushSubscription | null | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!supported) return
+    navigator.serviceWorker.ready.then((r) => r.pushManager.getSubscription()).then(setSub, () => setSub(null))
+  }, [supported])
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) && !('standalone' in navigator && (navigator as { standalone?: boolean }).standalone)
+  const denied = supported && Notification.permission === 'denied'
+  const turnOn = async () => {
+    setBusy(true)
+    try {
+      if ((await Notification.requestPermission()) !== 'granted') return toastError(new Error(t('push.denied')))
+      const reg = await navigator.serviceWorker.ready
+      const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToBytes(info.data!.public_key) })
+      await api.post('/me/push', s.toJSON())
+      setSub(s)
+      toastSuccess(t('push.on'))
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const turnOff = async () => {
+    if (!sub) return
+    setBusy(true)
+    try {
+      await api.del('/me/push', { endpoint: sub.endpoint })
+      await sub.unsubscribe()
+      setSub(null)
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const test = () =>
+    api.post<{ sent: number; failed: number }>('/me/push/test').then(
+      (r) => (r.sent ? toastSuccess(t('push.testSent')) : toastError(new Error(t('push.testFailed')))),
+      toastError,
+    )
+  return (
+    <div className="space-y-2 border-t border-line pt-4">
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold">{t('push.title')}</div>
+          <p className="text-xs text-muted">{t('push.hint')}</p>
+        </div>
+        {supported && info.data?.enabled && sub !== undefined && (
+          <Toggle checked={!!sub} disabled={busy || denied} onChange={(v) => (v ? turnOn() : turnOff())} />
+        )}
+      </div>
+      {!supported && <Remark>{ios ? t('push.ios') : t('push.unsupported')}</Remark>}
+      {supported && info.data && !info.data.enabled && <Remark>{t('push.systemOff')}</Remark>}
+      {denied && <Remark>{t('push.blocked')}</Remark>}
+      {sub && (
+        <Button size="sm" onClick={test}>
+          <Send size={13} /> {t('contacts.test')}
+        </Button>
+      )}
     </div>
   )
 }

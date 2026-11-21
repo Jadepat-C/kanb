@@ -27,7 +27,7 @@ use crate::{
 
 // ---------- system switches ----------
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct System {
     /// email notifications (users still choose for themselves in Profile)
     #[serde(default)]
@@ -38,6 +38,19 @@ pub struct System {
     /// let contact points reach private addresses (a self-hosted ntfy/Gotify on the LAN or tailnet)
     #[serde(default)]
     pub allow_private: bool,
+    /// browser (Web Push) notifications; each person still turns them on in their own browser
+    #[serde(default = "yes")]
+    pub browser: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for System {
+    fn default() -> Self {
+        Self { email: false, push: false, allow_private: false, browser: true }
+    }
 }
 
 const KEY: &str = "notifications";
@@ -94,6 +107,39 @@ fn spec(kind: &str) -> Option<&'static [FieldSpec]> {
         "webhook" => WEBHOOK,
         _ => return None,
     })
+}
+
+/// Encrypts the kind's secret fields for storage.
+pub(crate) fn seal_cfg(kind: &str, mut cfg: Map<String, Value>) -> Map<String, Value> {
+    for fs in spec(kind).unwrap_or(&[]) {
+        if fs.secret
+            && let Some(Value::String(v)) = cfg.get(fs.name)
+        {
+            let sealed = crate::crypto::seal(v);
+            cfg.insert(fs.name.into(), sealed.into());
+        }
+    }
+    cfg
+}
+
+/// Decrypts the kind's secret fields (plain old values pass through).
+pub(crate) fn open_cfg(kind: &str, mut cfg: Map<String, Value>) -> Map<String, Value> {
+    for fs in spec(kind).unwrap_or(&[]) {
+        if fs.secret
+            && let Some(Value::String(v)) = cfg.get(fs.name)
+        {
+            match crate::crypto::open(v) {
+                Ok(p) => {
+                    cfg.insert(fs.name.into(), p.into());
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "can't decrypt a contact point secret");
+                    cfg.insert(fs.name.into(), "".into());
+                }
+            }
+        }
+    }
+    cfg
 }
 
 const EVENTS: [&str; 5] = ["assigned", "mentioned", "commented", "due_soon", "overdue"];
@@ -200,7 +246,7 @@ pub(crate) const COLS: &str = "id, kind, name, config, events, enabled, last_sen
 
 /// What the browser sees: non-secret fields, which secrets are set, and a hint like "discord.com/…".
 pub(crate) fn view(r: &Row) -> Value {
-    let cfg = r.config.as_object().cloned().unwrap_or_default();
+    let cfg = open_cfg(&r.kind, r.config.as_object().cloned().unwrap_or_default());
     let mut public = Map::new();
     let mut set = Vec::new();
     for fs in spec(&r.kind).unwrap_or(&[]) {
@@ -261,7 +307,7 @@ async fn owned(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<Row> {
 /// New config = only the kind's fields; empty secrets fall back to the saved ones (when the kind didn't change).
 pub(crate) fn merge(kind: &str, incoming: &Map<String, Value>, saved: Option<&Row>) -> AppResult<Map<String, Value>> {
     let fields = spec(kind).ok_or(AppError::BadRequest("invalid_contact_kind"))?;
-    let old = saved.filter(|r| r.kind == kind).and_then(|r| r.config.as_object().cloned()).unwrap_or_default();
+    let old = open_cfg(kind, saved.filter(|r| r.kind == kind).and_then(|r| r.config.as_object().cloned()).unwrap_or_default());
     let mut out = Map::new();
     for fs in fields {
         let mut v = get(incoming, fs.name).to_string();
@@ -299,7 +345,7 @@ pub async fn create(State(state): State<AppState>, CurrentUser(u): CurrentUser, 
     .bind(u.id)
     .bind(&kind)
     .bind(name)
-    .bind(Value::Object(cfg))
+    .bind(Value::Object(seal_cfg(&kind, cfg)))
     .bind(clean_events(r.events, &EVENTS))
     .bind(r.enabled.unwrap_or(true))
     .fetch_one(&state.db)
@@ -312,7 +358,7 @@ pub async fn update(State(state): State<AppState>, CurrentUser(u): CurrentUser, 
     let kind = r.kind.clone().unwrap_or_else(|| old.kind.clone());
     let cfg = match &r.config {
         Some(c) => merge(&kind, c, Some(&old))?,
-        None if kind == old.kind => old.config.as_object().cloned().unwrap_or_default(),
+        None if kind == old.kind => open_cfg(&kind, old.config.as_object().cloned().unwrap_or_default()),
         None => return Err(AppError::BadRequest("contact_field_required")),
     };
     validate(&kind, &cfg).map_err(AppError::BadRequest)?;
@@ -328,7 +374,7 @@ pub async fn update(State(state): State<AppState>, CurrentUser(u): CurrentUser, 
     .bind(id)
     .bind(&kind)
     .bind(name)
-    .bind(Value::Object(cfg))
+    .bind(Value::Object(seal_cfg(&kind, cfg)))
     .bind(match r.events {
         Some(e) => clean_events(Some(e), &EVENTS),
         None => old.events.clone(),
@@ -358,7 +404,7 @@ pub async fn test(State(state): State<AppState>, CurrentUser(u): CurrentUser, Js
     let kind = r.kind.clone().or_else(|| saved.as_ref().map(|s| s.kind.clone())).unwrap_or_default();
     let cfg = match &r.config {
         Some(c) => merge(&kind, c, saved.as_ref())?,
-        None => saved.as_ref().and_then(|s| s.config.as_object().cloned()).unwrap_or_default(),
+        None => open_cfg(&kind, saved.as_ref().and_then(|s| s.config.as_object().cloned()).unwrap_or_default()),
     };
     validate(&kind, &cfg).map_err(AppError::BadRequest)?;
     let name = r.name.clone().or_else(|| saved.as_ref().map(|s| s.name.clone())).unwrap_or_default();
@@ -450,6 +496,7 @@ fn html_esc(s: &str) -> String {
 
 /// Builds the platform's request and sends it.
 pub(crate) async fn send(state: &AppState, sys: &System, kind: &str, cfg: &Map<String, Value>, m: &Message) -> Result<(), String> {
+    let cfg = &open_cfg(kind, cfg.clone());
     let quote = |pre: &str, post: &str| if m.snippet.is_empty() { String::new() } else { format!("{pre}{}{post}", m.snippet) };
     let mut headers: Vec<(&str, String)> = Vec::new();
     let (url, body): (String, Value) = match kind {
@@ -461,7 +508,7 @@ pub(crate) async fn send(state: &AppState, sys: &System, kind: &str, cfg: &Map<S
                 "username": "Kanban",
                 "allowed_mentions": { "parse": [] }, // a comment containing @everyone must not ping the server
                 "embeds": [{
-                    "title": trunc(&m.subject, 256), "url": m.link, "description": trunc(&desc, 4000), "color": 0x4f46e5,
+                    "title": trunc(&m.subject, 256), "url": m.link, "description": trunc(&desc, 4000), "color": 0x2f5bd3,
                     "footer": { "text": trunc(&m.board_name, 2048) }, "timestamp": m.created_at.to_rfc3339(),
                 }],
             });
@@ -585,6 +632,18 @@ fn is_public(ip: IpAddr) -> bool {
 }
 
 async fn post(state: &AppState, sys: &System, url: &str, headers: Vec<(&str, String)>, body: Vec<u8>) -> Result<(), String> {
+    let mut h: Vec<(String, String)> = vec![("Content-Type".into(), "application/json".into())];
+    h.extend(headers.into_iter().map(|(k, v)| (k.to_string(), v)));
+    let (status, text) = http_post(state, sys.allow_private, url, h, body).await?;
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    Err(format!("HTTP {status}: {}", trunc(text.trim(), 300)))
+}
+
+/// POST to a user-supplied URL safely: public addresses only (unless allowed), DNS pinned, no redirects, 10 s.
+/// Returns the status and body; Err only when the request couldn't be made.
+pub(crate) async fn http_post(state: &AppState, allow_private: bool, url: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<(u16, String), String> {
     let target = reqwest::Url::parse(url).map_err(|_| "invalid URL".to_string())?;
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -604,7 +663,7 @@ async fn post(state: &AppState, sys: &System, url: &str, headers: Vec<(&str, Str
             .map_err(|_| format!("can't resolve {host}"))?
             .collect();
         let addr = *addrs.first().ok_or_else(|| format!("can't resolve {host}"))?;
-        if !sys.allow_private && addrs.iter().any(|a| !is_public(a.ip())) {
+        if !allow_private && addrs.iter().any(|a| !is_public(a.ip())) {
             return Err(format!("{host} is a private/internal address (an admin can allow these in Admin → Notifications)"));
         }
         // pin the checked address so DNS can't change between the check and the request
@@ -612,7 +671,7 @@ async fn post(state: &AppState, sys: &System, url: &str, headers: Vec<(&str, Str
         target.clone()
     };
     let client = builder.build().map_err(|e| e.to_string())?;
-    let mut req = client.post(final_url).header("Content-Type", "application/json").body(body);
+    let mut req = client.post(final_url).body(body);
     if state.config.webhook_redirect.is_some() {
         req = req.header("X-Original-Url", target.as_str());
     }
@@ -621,12 +680,9 @@ async fn post(state: &AppState, sys: &System, url: &str, headers: Vec<(&str, Str
     }
     // without_url: the URL may contain a token
     let res = req.send().await.map_err(|e| e.without_url().to_string())?;
-    let status = res.status();
-    if status.is_success() {
-        return Ok(());
-    }
+    let status = res.status().as_u16();
     let text = res.text().await.unwrap_or_default();
-    Err(format!("HTTP {}: {}", status.as_u16(), trunc(text.trim(), 300)))
+    Ok((status, text))
 }
 
 fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {

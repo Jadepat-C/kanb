@@ -25,6 +25,12 @@ sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "migrate", "macros", "derive"] }
 thiserror = "2"
 totp-rs = { version = "6", features = ["otpauth", "gen_secret"] }
+aes-gcm = "0.10"
+web-push-native = "0.5"
+base64ct = { version = "1", features = ["alloc"] }
+zip = { version = "4", default-features = false, features = ["deflate"] }
+tempfile = "3"
+tokio-util = { version = "0.7", features = ["io"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
 qrcode = { version = "0.15", default-features = false, features = ["svg"] }
 time = "0.3"

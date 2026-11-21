@@ -33,6 +33,9 @@ pub struct TList {
 pub struct TNamed {
     pub name: String,
     pub color: String,
+    /// statuses only: counts as done
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub done: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -107,7 +110,7 @@ fn sanitize(mut d: Data) -> AppResult<Data> {
         v.into_iter()
             .filter(|x| !x.name.trim().is_empty())
             .take(50)
-            .map(|x| TNamed { name: trim_to(&x.name, 60), color: clean_color(&x.color).unwrap_or_else(|| "#a1a1aa".into()) })
+            .map(|x| TNamed { name: trim_to(&x.name, 60), color: clean_color(&x.color).unwrap_or_else(|| "#a1a1aa".into()), done: x.done })
             .collect()
     };
     d.statuses = named(d.statuses);
@@ -206,7 +209,7 @@ async fn insert(state: &AppState, u: &User, name: &str, description: &str, color
         .bind(id)
         .bind(name)
         .bind(trim_to(description, 500))
-        .bind(color.and_then(clean_color).unwrap_or_else(|| "#6366f1".into()))
+        .bind(color.and_then(clean_color).unwrap_or_else(|| "#2f5bd3".into()))
         .bind(serde_json::to_value(&data).map_err(|e| anyhow::anyhow!(e))?)
         .bind(u.id)
         .execute(&state.db)
@@ -267,8 +270,8 @@ pub async fn from_board(State(state): State<AppState>, CurrentUser(u): CurrentUs
     .bind(board_id)
     .fetch_all(&state.db)
     .await?;
-    let statuses: Vec<(String, String)> =
-        sqlx::query_as("SELECT name, color FROM board_statuses WHERE board_id = $1 ORDER BY position, name").bind(board_id).fetch_all(&state.db).await?;
+    let statuses: Vec<(String, String, bool)> =
+        sqlx::query_as("SELECT name, color, is_done FROM board_statuses WHERE board_id = $1 ORDER BY position, name").bind(board_id).fetch_all(&state.db).await?;
     let labels: Vec<(String, String)> = sqlx::query_as("SELECT name, color FROM labels WHERE board_id = $1 ORDER BY name").bind(board_id).fetch_all(&state.db).await?;
     let tpls: Vec<(String, String, String, i16, Option<String>, Vec<String>, Option<i32>)> = sqlx::query_as(
         "SELECT t.name, t.title, t.description, t.priority, s.name,
@@ -298,8 +301,8 @@ pub async fn from_board(State(state): State<AppState>, CurrentUser(u): CurrentUs
     }
     let data = sanitize(Data {
         lists: lists.into_iter().map(|(_, name, color, wip_limit)| TList { name, color, wip_limit }).collect(),
-        statuses: statuses.into_iter().map(|(name, color)| TNamed { name, color }).collect(),
-        labels: labels.into_iter().map(|(name, color)| TNamed { name, color }).collect(),
+        statuses: statuses.into_iter().map(|(name, color, done)| TNamed { name, color, done }).collect(),
+        labels: labels.into_iter().map(|(name, color)| TNamed { name, color, done: false }).collect(),
         card_templates: tpls
             .into_iter()
             .map(|(name, title, description, priority, status, labels, due_in_days)| TCardTemplate { name, title, description, priority, status, labels, due_in_days })
@@ -333,12 +336,13 @@ pub async fn apply(
         sqlx::query("DELETE FROM board_statuses WHERE id = ANY($1)").bind(default_status_ids).execute(&mut **tx).await?;
         for (i, s) in d.statuses.iter().enumerate() {
             let id = Uuid::now_v7();
-            sqlx::query("INSERT INTO board_statuses (id, board_id, name, color, position) VALUES ($1,$2,$3,$4,$5)")
+            sqlx::query("INSERT INTO board_statuses (id, board_id, name, color, position, is_done) VALUES ($1,$2,$3,$4,$5,$6)")
                 .bind(id)
                 .bind(board_id)
                 .bind(&s.name)
                 .bind(&s.color)
                 .bind(i as i32)
+                .bind(s.done)
                 .execute(&mut **tx)
                 .await?;
             statuses.push((s.name.clone(), id));
@@ -399,6 +403,10 @@ pub async fn apply(
         last_pos[c.list] = Some(pos);
     }
     sqlx::query("UPDATE boards SET card_seq = $2 WHERE id = $1").bind(board_id).bind(d.cards.len() as i32).execute(&mut **tx).await?;
+    sqlx::query("UPDATE cards c SET done_at = now() FROM board_statuses s WHERE s.id = c.status_id AND s.is_done AND c.board_id = $1")
+        .bind(board_id)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 

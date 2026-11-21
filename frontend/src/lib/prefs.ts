@@ -34,14 +34,15 @@ export const isDark = () => document.documentElement.classList.contains('dark')
 /** Thai UI shows Buddhist-era years (พ.ศ.), as Thai users expect; English uses Gregorian. */
 const loc = () => (i18n.language === 'th' ? 'th-TH' : 'en-GB')
 
+/** Years are shown in the Buddhist era in Thai (2026 → 2569). */
+export const yearOffset = () => (i18n.language === 'th' ? 543 : 0)
+
+/** dd/mm/yyyy, or dd/mm/yyyy HH:mm (24-hour) — the same in every language. */
 export function fmtDate(iso: string, withTime = false) {
   const d = new Date(iso)
-  return d.toLocaleDateString(loc(), {
-    day: 'numeric',
-    month: 'short',
-    year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
-    ...(withTime ? { hour: '2-digit', minute: '2-digit' } : {}),
-  })
+  const p = (n: number) => String(n).padStart(2, '0')
+  const date = `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear() + yearOffset()}`
+  return withTime ? `${date} ${p(d.getHours())}:${p(d.getMinutes())}` : date
 }
 
 export function fmtRelative(iso: string) {
