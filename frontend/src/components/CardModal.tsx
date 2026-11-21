@@ -19,16 +19,16 @@ import {
   X,
 } from 'lucide-react'
 import { Dialog as RDialog } from 'radix-ui'
-import { useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, fileUrl, upload } from '../lib/api'
 import { useMe } from '../lib/auth'
 import type { BoardHelpers } from '../lib/board'
 import { fmtDate, fmtRelative, fmtSize } from '../lib/prefs'
-import type { Attachment, CardDetail, CardStatus, Label, TimelineItem } from '../lib/types'
-import { STATUS_COLOR, Stars } from './CardTile'
-import { Markdown, toggleTask } from './Markdown'
-import { MarkdownEditor, type Uploader } from './MarkdownEditor'
+import type { Attachment, CardDetail, Label, TimelineItem } from '../lib/types'
+import { Stars } from './CardTile'
+import { LiveEditor, type LiveEditorHandle, type Uploader } from './editor/LiveEditor'
+import { Markdown } from './Markdown'
 import { toast, toastError } from './toast'
 import { Avatar, Button, ColorPicker, Input, Popover, Spinner } from './ui'
 
@@ -37,7 +37,6 @@ export function CardModal({ cardId, b, onClose }: { cardId: string; b: BoardHelp
   const qc = useQueryClient()
   const boardId = b.data!.board.id
   const q = useQuery({ queryKey: ['card', cardId], queryFn: () => api.get<CardDetail>(`/cards/${cardId}`), retry: false })
-  const [editingDesc, setEditingDesc] = useState(false)
   const [uploads, setUploads] = useState<{ name: string; pct: number }[]>([])
   const [dragOver, setDragOver] = useState(false)
   const canEdit = b.can('cards.edit')
@@ -125,40 +124,17 @@ export function CardModal({ cardId, b, onClose }: { cardId: string; b: BoardHelp
 
               <div className="grid gap-6 px-5 pb-6 md:grid-cols-[1fr_240px]">
                 <div className="min-w-0 space-y-6">
-                  <Section icon={<FileText size={15} />} title={t('card.description')}
-                    action={canEdit && !editingDesc && card.description ? (
-                      <Button variant="ghost" size="sm" onClick={() => setEditingDesc(true)}>
-                        <Pencil size={13} /> {t('common.edit')}
-                      </Button>
-                    ) : null}
-                  >
-                    {editingDesc ? (
-                      <MarkdownEditor
-                        value={card.description}
-                        upload={uploader}
-                        onCancel={() => setEditingDesc(false)}
-                        onSave={async (description) => {
-                          await patch.mutateAsync({ description })
-                          setEditingDesc(false)
-                        }}
-                        minHeight={220}
-                      />
-                    ) : card.description ? (
-                      <div onDoubleClick={() => canEdit && setEditingDesc(true)}>
-                        <Markdown
-                          source={card.description}
-                          onToggleTask={canEdit ? (i) => patch.mutate({ description: toggleTask(card.description, i) }) : undefined}
-                        />
-                      </div>
-                    ) : (
-                      <button
-                        disabled={!canEdit}
-                        onClick={() => setEditingDesc(true)}
-                        className="w-full rounded-lg border border-dashed border-line p-4 text-left text-sm text-muted enabled:hover:bg-black/5 enabled:cursor-pointer dark:enabled:hover:bg-white/5"
-                      >
-                        {t('card.noDescription')}
-                      </button>
-                    )}
+                  <Section icon={<FileText size={15} />} title={t('card.description')}>
+                    <DescriptionEditor
+                      cardId={cardId}
+                      value={card.description}
+                      canEdit={canEdit}
+                      upload={uploader}
+                      onSaved={() => {
+                        qc.invalidateQueries({ queryKey: ['timeline', cardId] })
+                        qc.invalidateQueries({ queryKey: ['board', boardId] })
+                      }}
+                    />
                   </Section>
 
                   <Attachments
@@ -347,6 +323,18 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
     onError: toastError,
   })
   const del = useMutation({ mutationFn: (id: string) => api.del(`/comments/${id}`), onSuccess: refresh, onError: toastError })
+  const composer = useRef<LiveEditorHandle>(null)
+  const [draft, setDraft] = useState('')
+  const post = () => {
+    const body = composer.current?.getValue() ?? ''
+    if (!body.trim() || add.isPending) return
+    add.mutate(body, {
+      onSuccess: () => {
+        composer.current?.setValue('')
+        setDraft('')
+      },
+    })
+  }
   const name = (id: string | null) => (id && b.members.get(id)?.display_name) || '—'
   const color = (id: string | null) => (id && b.members.get(id)?.avatar_color) || '#a1a1aa'
   const items = (q.data ?? []).filter((i) => showEvents || i.type === 'comment')
@@ -365,17 +353,24 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
       {b.can('comments.create') && me && (
         <div className="mb-4 flex gap-3">
           <Avatar name={me.display_name} color={me.avatar_color} size={30} />
-          <div className="min-w-0 flex-1">
-            <MarkdownEditor
+          <div className="min-w-0 flex-1 space-y-2">
+            <LiveEditor
+              ref={composer}
               value=""
               upload={uploader}
               placeholder={t('card.commentPlaceholder')}
-              saveLabel={t('card.post')}
-              onSave={(body) => (body.trim() ? add.mutateAsync(body) : undefined)}
-              minHeight={70}
-              autoFocus={false}
-              clearOnSave
+              onChange={(v) => setDraft(v)}
+              onSubmit={post}
+              minHeight={44}
             />
+            {draft.trim() && (
+              <div className="flex items-center gap-2">
+                <Button variant="primary" size="sm" onClick={post} disabled={add.isPending}>
+                  {t('card.post')}
+                </Button>
+                <span className="text-xs text-muted">Ctrl+Enter</span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -405,7 +400,7 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
                   </span>
                 </div>
                 {editing === i.id ? (
-                  <MarkdownEditor value={i.body} upload={uploader} onCancel={() => setEditing(null)} onSave={(body) => edit.mutateAsync({ id: i.id, body })} minHeight={70} />
+                  <CommentEdit body={i.body} upload={uploader} onCancel={() => setEditing(null)} onSave={(body) => edit.mutate({ id: i.id, body })} />
                 ) : (
                   <Markdown source={i.body} />
                 )}
@@ -445,7 +440,7 @@ function EventText({ kind, data }: { kind: string; data: Record<string, unknown>
   const d = data as Record<string, string & string[]>
   switch (kind) {
     case 'status':
-      return <>{t('event.status', { from: t(`card.status_${d.from}`), to: t(`card.status_${d.to}`) })}</>
+      return <>{t('event.status', { from: d.from ?? t('event.noStatus'), to: d.to ?? t('event.noStatus') })}</>
     case 'priority':
       return <>{t('event.priority', { from: '★'.repeat(Number(d.from)) || '0', to: '★'.repeat(Number(d.to)) || '0' })}</>
     case 'due':
@@ -525,19 +520,20 @@ function Sidebar({
       </Prop>
 
       <Prop label={t('card.status')}>
-        <div className="flex gap-1">
-          {(['normal', 'blocked', 'ready'] as CardStatus[]).map((s) => (
+        <div className="flex flex-wrap gap-1">
+          {data.statuses.map((s) => (
             <button
-              key={s}
+              key={s.id}
               disabled={!canEdit}
-              onClick={() => patch({ status: s })}
+              onClick={() => patch({ status_id: card.status_id === s.id ? null : s.id })}
               className={clsx(
-                'flex flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-md border px-1 py-1 text-[11px] enabled:cursor-pointer',
-                card.status === s ? 'border-transparent bg-black/5 font-semibold dark:bg-white/10' : 'border-line text-muted',
+                'flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs enabled:cursor-pointer',
+                card.status_id === s.id ? 'font-semibold' : 'border-line text-muted enabled:hover:bg-black/5 dark:enabled:hover:bg-white/5',
               )}
+              style={card.status_id === s.id ? { borderColor: s.color, background: `${s.color}22` } : undefined}
             >
-              <span className="h-2 w-2 rounded-full" style={{ background: STATUS_COLOR[s] }} />
-              {t(`card.status_${s}`)}
+              <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+              {s.name}
             </button>
           ))}
         </div>
@@ -726,4 +722,125 @@ function toLocalInput(iso: string) {
   const d = new Date(iso)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** Description: always-on live-preview editor with debounced autosave (the server folds consecutive edits into one log entry). */
+function DescriptionEditor({
+  cardId,
+  value,
+  canEdit,
+  upload,
+  onSaved,
+}: {
+  cardId: string
+  value: string
+  canEdit: boolean
+  upload: Uploader
+  onSaved: () => void
+}) {
+  const { t } = useTranslation()
+  const [state, setState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle')
+  const latest = useRef(value)
+  const saved = useRef(value)
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const inflight = useRef<Promise<unknown> | null>(null)
+  const onSavedRef = useRef(onSaved)
+  onSavedRef.current = onSaved
+
+  const save = useCallback(async (): Promise<void> => {
+    clearTimeout(timer.current)
+    if (inflight.current) await inflight.current.catch(() => {})
+    const v = latest.current
+    if (v === saved.current) {
+      setState((s) => (s === 'dirty' || s === 'error' ? 'saved' : s))
+      return
+    }
+    setState('saving')
+    const p = api.patch(`/cards/${cardId}`, { description: v })
+    inflight.current = p
+    try {
+      await p
+      saved.current = v
+      setState(latest.current === v ? 'saved' : 'dirty')
+      onSavedRef.current()
+    } catch (e) {
+      setState('error')
+      // retry network/server hiccups; a 4xx (no permission, card archived) won't fix itself
+      const status = (e as { status?: number }).status ?? 0
+      if (status === 0 || status >= 500) timer.current = setTimeout(save, 5000)
+      else toastError(e)
+    } finally {
+      inflight.current = null
+    }
+  }, [cardId])
+
+  // someone else changed it while we have no unsaved edits -> follow the server
+  useEffect(() => {
+    if (latest.current === saved.current) {
+      latest.current = value
+      saved.current = value
+    }
+  }, [value])
+
+  // flush on close / navigation; warn before leaving the page with unsaved text
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (latest.current !== saved.current) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => {
+      window.removeEventListener('beforeunload', warn)
+      clearTimeout(timer.current)
+      if (latest.current !== saved.current) {
+        api.patch(`/cards/${cardId}`, { description: latest.current }).then(() => onSavedRef.current(), toastError)
+      }
+    }
+  }, [cardId])
+
+  if (!canEdit && !value.trim()) return <p className="text-sm italic text-muted">{t('card.noDescription').split('.')[0]}</p>
+
+  const indicator =
+    state === 'saving' ? t('editor.saving') : state === 'saved' ? `✓ ${t('editor.saved')}` : state === 'dirty' ? t('editor.unsaved') : state === 'error' ? t('editor.saveFailed') : ''
+
+  return (
+    <LiveEditor
+      value={value}
+      readOnly={!canEdit}
+      upload={upload}
+      toolbar
+      toolbarExtra={<span className={state === 'error' ? 'text-red-600' : undefined}>{indicator}</span>}
+      placeholder={t('editor.placeholder')}
+      minHeight={120}
+      onChange={(v) => {
+        latest.current = v
+        setState('dirty')
+        clearTimeout(timer.current)
+        timer.current = setTimeout(save, 1200)
+      }}
+      onBlur={() => void save()}
+      onSubmit={() => void save()}
+    />
+  )
+}
+
+function CommentEdit({ body, upload, onSave, onCancel }: { body: string; upload: Uploader; onSave: (b: string) => void; onCancel: () => void }) {
+  const { t } = useTranslation()
+  const ref = useRef<LiveEditorHandle>(null)
+  const save = () => {
+    const v = ref.current?.getValue() ?? ''
+    if (v.trim()) onSave(v)
+  }
+  return (
+    <div className="space-y-2">
+      <LiveEditor ref={ref} value={body} upload={upload} autoFocus onSubmit={save} onEscape={() => (onCancel(), true)} minHeight={44} />
+      <div className="flex gap-2">
+        <Button variant="primary" size="sm" onClick={save}>
+          {t('common.save')}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onCancel}>
+          {t('common.cancel')}
+        </Button>
+      </div>
+    </div>
+  )
 }

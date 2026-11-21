@@ -31,6 +31,7 @@ export interface BoardListItem {
   is_member: boolean
   card_count: number
   member_count: number
+  owners: { id: string; display_name: string; avatar_color: string }[]
 }
 
 export interface Board {
@@ -51,7 +52,12 @@ export interface List {
   wip_limit: number | null
 }
 
-export type CardStatus = 'normal' | 'blocked' | 'ready'
+export interface Status {
+  id: string
+  name: string
+  color: string
+  position: number
+}
 
 export interface CardSummary {
   id: string
@@ -60,7 +66,7 @@ export interface CardSummary {
   title: string
   position: string
   priority: number
-  status: CardStatus
+  status_id: string | null
   color: string | null
   due_at: string | null
   updated_at: string
@@ -102,6 +108,7 @@ export interface BoardDetail {
   lists: List[]
   cards: CardSummary[]
   labels: Label[]
+  statuses: Status[]
   members: Member[]
   roles: Role[]
 }
@@ -114,7 +121,7 @@ export interface Card {
   title: string
   description: string
   priority: number
-  status: CardStatus
+  status_id: string | null
   color: string | null
   due_at: string | null
   created_by: string | null

@@ -27,6 +27,8 @@ export function SearchPalette() {
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      // inside the Markdown editor Ctrl+K means "insert link" (it marks the event as handled)
+      if (e.defaultPrevented || (e.target as HTMLElement | null)?.closest?.('.cm-editor')) return
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         setOpen((o) => !o)

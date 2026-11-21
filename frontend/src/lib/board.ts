@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
-import type { BoardDetail, CardSummary, Label, Member } from './types'
+import type { BoardDetail, CardSummary, Label, Member, Status } from './types'
 
 export function useBoard(boardId: string) {
   const q = useQuery({ queryKey: ['board', boardId], queryFn: () => api.get<BoardDetail>(`/boards/${boardId}`) })
@@ -9,8 +9,9 @@ export function useBoard(boardId: string) {
     const d = q.data
     const labels = new Map<string, Label>((d?.labels ?? []).map((l) => [l.id, l]))
     const members = new Map<string, Member>((d?.members ?? []).map((m) => [m.user_id, m]))
+    const statuses = new Map<string, Status>((d?.statuses ?? []).map((s) => [s.id, s]))
     const perms = new Set(d?.my_permissions ?? [])
-    return { labels, members, can: (p: string) => perms.has(p) }
+    return { labels, members, statuses, can: (p: string) => perms.has(p) }
   }, [q.data])
   return { ...q, ...helpers }
 }

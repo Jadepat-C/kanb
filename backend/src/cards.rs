@@ -18,8 +18,6 @@ use crate::{
     perms::{self, board_access, board_of_card, board_of_list},
 };
 
-const STATUSES: &[&str] = &["normal", "blocked", "ready"];
-
 #[derive(Serialize, sqlx::FromRow)]
 pub struct CardSummary {
     pub id: Uuid,
@@ -28,7 +26,7 @@ pub struct CardSummary {
     pub title: String,
     pub position: String,
     pub priority: i16,
-    pub status: String,
+    pub status_id: Option<Uuid>,
     pub color: Option<String>,
     pub due_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
@@ -47,7 +45,7 @@ pub struct CardSummary {
 }
 
 const SUMMARY_SELECT: &str = r#"
-SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status, c.color, c.due_at, c.updated_at, c.description,
+SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status_id, c.color, c.due_at, c.updated_at, c.description,
   COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{}') AS label_ids,
   COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{}') AS assignee_ids,
   (SELECT count(*) FROM comments WHERE card_id = c.id AND deleted_at IS NULL) AS comment_count,
@@ -166,7 +164,9 @@ pub async fn create_card(
     let pos = position_at(&keys, index);
     let id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, created_by, status_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
+                 (SELECT id FROM board_statuses WHERE board_id = $2 ORDER BY position, name LIMIT 1))",
     )
     .bind(id)
     .bind(board_id)
@@ -197,7 +197,7 @@ pub struct Card {
     title: String,
     description: String,
     priority: i16,
-    status: String,
+    status_id: Option<Uuid>,
     color: Option<String>,
     due_at: Option<DateTime<Utc>>,
     created_by: Option<Uuid>,
@@ -232,7 +232,7 @@ pub async fn get_card(
     let board_id = board_of_card(&state.db, id).await?;
     board_access(&state.db, &u, board_id).await?;
     let card: Card = sqlx::query_as(
-        "SELECT c.id, c.board_id, c.list_id, c.number, c.title, c.description, c.priority, c.status, c.color, c.due_at,
+        "SELECT c.id, c.board_id, c.list_id, c.number, c.title, c.description, c.priority, c.status_id, c.color, c.due_at,
                 c.created_by, c.created_at, c.updated_at,
                 COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{}') AS label_ids,
                 COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{}') AS assignee_ids
@@ -258,7 +258,8 @@ pub struct UpdateCard {
     title: Option<String>,
     description: Option<String>,
     priority: Option<i16>,
-    status: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    status_id: Option<Option<Uuid>>,
     #[serde(default, deserialize_with = "double_option")]
     color: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
@@ -270,7 +271,7 @@ struct CardRow {
     title: String,
     description: String,
     priority: i16,
-    status: String,
+    status_id: Option<Uuid>,
     color: Option<String>,
     due_at: Option<DateTime<Utc>>,
 }
@@ -289,12 +290,19 @@ pub async fn update_card(
     if r.priority.is_some_and(|p| !(0..=3).contains(&p)) {
         return Err(AppError::BadRequest("invalid_priority"));
     }
-    if r.status.as_deref().is_some_and(|s| !STATUSES.contains(&s)) {
-        return Err(AppError::BadRequest("invalid_status"));
+    if let Some(Some(sid)) = r.status_id {
+        let ok: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM board_statuses WHERE id = $1 AND board_id = $2")
+            .bind(sid)
+            .bind(board_id)
+            .fetch_optional(&state.db)
+            .await?;
+        if ok.is_none() {
+            return Err(AppError::BadRequest("invalid_status"));
+        }
     }
     let mut tx = state.db.begin().await?;
     let old: CardRow =
-        sqlx::query_as("SELECT title, description, priority, status, color, due_at FROM cards WHERE id = $1 FOR UPDATE")
+        sqlx::query_as("SELECT title, description, priority, status_id, color, due_at FROM cards WHERE id = $1 FOR UPDATE")
             .bind(id)
             .fetch_one(&mut *tx)
             .await?;
@@ -326,10 +334,16 @@ pub async fn update_card(
     {
         log_event(&mut tx, id, board_id, u.id, "priority", json!({ "from": old.priority, "to": p })).await?;
     }
-    if let Some(s) = &r.status
-        && *s != old.status
+    if let Some(s) = r.status_id
+        && s != old.status_id
     {
-        log_event(&mut tx, id, board_id, u.id, "status", json!({ "from": old.status, "to": s })).await?;
+        // log names (not ids) so the history still reads right after a status is renamed or deleted
+        let names: Vec<(Uuid, String)> = sqlx::query_as("SELECT id, name FROM board_statuses WHERE board_id = $1")
+            .bind(board_id)
+            .fetch_all(&mut *tx)
+            .await?;
+        let name = |x: Option<Uuid>| x.and_then(|x| names.iter().find(|n| n.0 == x).map(|n| n.1.clone()));
+        log_event(&mut tx, id, board_id, u.id, "status", json!({ "from": name(old.status_id), "to": name(s) })).await?;
     }
     if let Some(c) = &r.color
         && *c != old.color
@@ -343,7 +357,8 @@ pub async fn update_card(
     }
     sqlx::query(
         "UPDATE cards SET title = COALESCE($2, title), description = COALESCE($3, description),
-            priority = COALESCE($4, priority), status = COALESCE($5, status),
+            priority = COALESCE($4, priority),
+            status_id = CASE WHEN $10 THEN $5 ELSE status_id END,
             color = CASE WHEN $6 THEN $7 ELSE color END,
             due_at = CASE WHEN $8 THEN $9 ELSE due_at END,
             updated_at = now()
@@ -353,11 +368,12 @@ pub async fn update_card(
     .bind(title)
     .bind(r.description)
     .bind(r.priority)
-    .bind(r.status)
+    .bind(r.status_id.flatten())
     .bind(r.color.is_some())
     .bind(r.color.flatten())
     .bind(r.due_at.is_some())
     .bind(r.due_at.flatten())
+    .bind(r.status_id.is_some())
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;

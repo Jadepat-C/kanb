@@ -16,8 +16,9 @@ import {
 import { arrayMove, horizontalListSortingStrategy, SortableContext, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Check, Filter, Plus, Search, Settings, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
+import { Check, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import type React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams, useSearchParams } from 'react-router'
 import { BoardSettings } from '../components/BoardSettings'
@@ -25,7 +26,7 @@ import { CardModal } from '../components/CardModal'
 import { CardGhost } from '../components/CardTile'
 import { Column } from '../components/Column'
 import { toastError } from '../components/toast'
-import { Button, Input, Menu, MenuContent, MenuItem, MenuTrigger, Spinner } from '../components/ui'
+import { Button, Input, Menu, MenuContent, MenuItem, MenuTrigger, Popover, Spinner } from '../components/ui'
 import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { groupCards, useBoard, useBoardSocket } from '../lib/board'
@@ -49,7 +50,11 @@ export function BoardPage() {
   const [text, setText] = useState('')
   const [mine, setMine] = useState(false)
   const [labelFilter, setLabelFilter] = useState<string[]>([])
-  const filtering = !!text.trim() || mine || labelFilter.length > 0
+  const [statusFilter, setStatusFilter] = useState<string[]>([]) // status ids; '' = no status
+  const [minPriority, setMinPriority] = useState(0) // 0 = any, -1 = no stars
+  const [due, setDue] = useState<DueFilter>('any')
+  const extraFilters = statusFilter.length + (minPriority !== 0 ? 1 : 0) + (due !== 'any' ? 1 : 0)
+  const filtering = !!text.trim() || mine || labelFilter.length > 0 || extraFilters > 0
 
   const data = b.data
   const cardsById = useMemo(() => new Map((data?.cards ?? []).map((c) => [c.id, c])), [data])
@@ -60,6 +65,9 @@ export function BoardPage() {
     const match = (c: CardSummary) => {
       if (mine && !c.assignee_ids.includes(me?.id ?? '')) return false
       if (labelFilter.length && !labelFilter.some((l) => c.label_ids.includes(l))) return false
+      if (statusFilter.length && !statusFilter.includes(c.status_id ?? '')) return false
+      if (minPriority === -1 ? c.priority !== 0 : c.priority < minPriority) return false
+      if (!matchDue(c.due_at, due)) return false
       if (!q) return true
       const hay = [
         c.title,
@@ -75,7 +83,7 @@ export function BoardPage() {
     const out: Columns = {}
     for (const l of data?.lists ?? []) out[l.id] = (full[l.id] ?? []).filter((id) => match(cardsById.get(id)!))
     return out
-  }, [data, full, text, mine, labelFilter, me, cardsById, b.labels, b.members])
+  }, [data, full, text, mine, labelFilter, statusFilter, minPriority, due, me, cardsById, b.labels, b.members])
 
   // drag state: while dragging (and until the server confirms) we render from `override`
   const [override, setOverride] = useState<Columns | null>(null)
@@ -244,6 +252,46 @@ export function BoardPage() {
             </MenuContent>
           </Menu>
         )}
+        <Popover
+          trigger={
+            <Button variant={extraFilters ? 'primary' : 'outline'} size="sm">
+              <SlidersHorizontal size={14} /> {t('filter.title')}
+              {extraFilters > 0 && ` (${extraFilters})`}
+            </Button>
+          }
+        >
+          <div className="space-y-3">
+            <FilterGroup title={t('filter.status')}>
+              {[...data.statuses, { id: '', name: t('filter.noStatus'), color: '#d4d4d8' }].map((st) => (
+                <Chip
+                  key={st.id || 'none'}
+                  active={statusFilter.includes(st.id)}
+                  onClick={() => setStatusFilter((f) => (f.includes(st.id) ? f.filter((x) => x !== st.id) : [...f, st.id]))}
+                >
+                  <span className="h-2 w-2 rounded-full" style={{ background: st.color }} />
+                  {st.name}
+                </Chip>
+              ))}
+            </FilterGroup>
+            <FilterGroup title={t('filter.priority')}>
+              <Chip active={minPriority === 0} onClick={() => setMinPriority(0)}>{t('filter.any')}</Chip>
+              {[1, 2, 3].map((n) => (
+                <Chip key={n} active={minPriority === n} onClick={() => setMinPriority(n)}>
+                  {'★'.repeat(n)}
+                  {n < 3 ? '+' : ''}
+                </Chip>
+              ))}
+              <Chip active={minPriority === -1} onClick={() => setMinPriority(-1)}>{t('filter.noPriority')}</Chip>
+            </FilterGroup>
+            <FilterGroup title={t('filter.due')}>
+              {(['any', 'overdue', 'today', 'week', 'has', 'none'] as DueFilter[]).map((k) => (
+                <Chip key={k} active={due === k} onClick={() => setDue(k)}>
+                  {t(`filter.${k}`)}
+                </Chip>
+              ))}
+            </FilterGroup>
+          </div>
+        </Popover>
         {filtering && (
           <Button
             variant="ghost"
@@ -252,6 +300,9 @@ export function BoardPage() {
               setText('')
               setMine(false)
               setLabelFilter([])
+              setStatusFilter([])
+              setMinPriority(0)
+              setDue('any')
             }}
           >
             <X size={14} /> {t('board.clearFilters')}
@@ -367,5 +418,45 @@ function AddList({ boardId }: { boardId: string }) {
         </Button>
       </div>
     </form>
+  )
+}
+
+type DueFilter = 'any' | 'overdue' | 'today' | 'week' | 'has' | 'none'
+
+function matchDue(dueAt: string | null, f: DueFilter) {
+  if (f === 'any') return true
+  if (f === 'none') return !dueAt
+  if (!dueAt) return false
+  if (f === 'has') return true
+  const d = new Date(dueAt)
+  const now = new Date()
+  if (f === 'overdue') return d < now
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const endToday = new Date(startToday.getTime() + 86400000)
+  if (f === 'today') return d >= startToday && d < endToday
+  return d >= startToday && d < new Date(startToday.getTime() + 8 * 86400000) // week: today + next 7 days
+}
+
+function FilterGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1.5 text-xs font-medium text-muted">{title}</div>
+      <div className="flex flex-wrap gap-1">{children}</div>
+    </div>
+  )
+}
+
+function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={clsx(
+        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs cursor-pointer',
+        active ? 'border-accent bg-accent/10 font-medium text-accent dark:text-indigo-300' : 'border-line text-muted hover:bg-black/5 dark:hover:bg-white/5',
+      )}
+    >
+      {children}
+    </button>
   )
 }

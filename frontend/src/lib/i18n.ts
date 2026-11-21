@@ -43,13 +43,13 @@ const en = {
   event: {
     created: 'created this card in {{list}}', title: 'renamed the card from “{{from}}” to “{{to}}”',
     description: 'updated the description', priority: 'changed priority from {{from}} to {{to}}',
-    status: 'changed status from {{from}} to {{to}}', color: 'changed the color', due: 'changed the due date to {{to}}',
+    status: 'changed status from {{from}} to {{to}}', noStatus: 'none', color: 'changed the color', due: 'changed the due date to {{to}}',
     dueCleared: 'removed the due date', moved: 'moved this card from {{from}} to {{to}}', archived: 'archived this card',
     labels: 'changed labels', assignees: 'changed assignees', added: 'added {{items}}', removed: 'removed {{items}}',
     attachment_added: 'attached {{filename}}', attachment_removed: 'removed attachment {{filename}}',
   },
   settings: {
-    title: 'Board settings', general: 'General', members: 'Members', roles: 'Roles & permissions', labels: 'Labels',
+    title: 'Board settings', general: 'General', members: 'Members', roles: 'Roles & permissions', labels: 'Labels', statuses: 'Statuses', newStatus: 'New status', statusHint: 'Shown as a colored dot on cards and in the column progress bar. New cards get the first status.',
     addMember: 'Add member', role: 'Role', newRole: 'New role', owner: 'Owner (all permissions)', deleteBoard: 'Delete board',
     deleteBoardConfirm: 'Delete this board for everyone?', leave: 'Leave board', newLabel: 'New label',
   },
@@ -68,6 +68,22 @@ const en = {
   profile: {
     title: 'Profile', changePassword: 'Change password', currentPassword: 'Current password', newPassword: 'New password',
     passwordChanged: 'Password changed. Other sessions were signed out.',
+  },
+  editor: {
+    heading: 'Heading', bold: 'Bold', italic: 'Italic', strike: 'Strikethrough', code: 'Inline code', link: 'Link',
+    bullets: 'Bulleted list', numbers: 'Numbered list', tasks: 'Checklist', quote: 'Quote', codeBlock: 'Code block', rule: 'Divider',
+    saving: 'Saving…', saved: 'Saved', unsaved: 'Unsaved changes', saveFailed: 'Not saved, retrying…',
+    placeholder: 'Write in Markdown… paste images, type - [ ] for a checklist',
+  },
+  filter: {
+    title: 'Filters', status: 'Status', priority: 'Priority', due: 'Due date', any: 'Any', noStatus: 'No status',
+    minStars_one: '{{count}}+ star', minStars_other: '{{count}}+ stars', noPriority: 'No stars',
+    overdue: 'Overdue', today: 'Due today', week: 'Due within 7 days', none: 'No due date', has: 'Has a due date', owner: 'Owner',
+    allOwners: 'All owners', ownedBy: 'Owner',
+  },
+  sort: {
+    title: 'Sort cards by', priority: 'Priority (high first)', due: 'Due date (soonest first)', created: 'Newest first',
+    createdAsc: 'Oldest first', updated: 'Recently updated', title_: 'Title (A–Z)', number: 'Card number', dragHint: 'Drag to reorder',
   },
   errors: {
     unauthorized: 'Please sign in.', forbidden: 'You don’t have permission to do that.', not_found: 'Not found.',
@@ -126,13 +142,13 @@ const th: Dict = {
   event: {
     created: 'สร้างการ์ดนี้ใน {{list}}', title: 'เปลี่ยนชื่อการ์ดจาก “{{from}}” เป็น “{{to}}”',
     description: 'แก้ไขรายละเอียด', priority: 'เปลี่ยนความสำคัญจาก {{from}} เป็น {{to}}',
-    status: 'เปลี่ยนสถานะจาก {{from}} เป็น {{to}}', color: 'เปลี่ยนสี', due: 'เปลี่ยนกำหนดส่งเป็น {{to}}',
+    status: 'เปลี่ยนสถานะจาก {{from}} เป็น {{to}}', noStatus: 'ไม่มี', color: 'เปลี่ยนสี', due: 'เปลี่ยนกำหนดส่งเป็น {{to}}',
     dueCleared: 'ลบกำหนดส่ง', moved: 'ย้ายการ์ดจาก {{from}} ไป {{to}}', archived: 'เก็บการ์ดนี้',
     labels: 'เปลี่ยนป้ายกำกับ', assignees: 'เปลี่ยนผู้รับผิดชอบ', added: 'เพิ่ม {{items}}', removed: 'นำออก {{items}}',
     attachment_added: 'แนบไฟล์ {{filename}}', attachment_removed: 'ลบไฟล์แนบ {{filename}}',
   },
   settings: {
-    title: 'ตั้งค่าบอร์ด', general: 'ทั่วไป', members: 'สมาชิก', roles: 'บทบาทและสิทธิ์', labels: 'ป้ายกำกับ',
+    title: 'ตั้งค่าบอร์ด', general: 'ทั่วไป', members: 'สมาชิก', roles: 'บทบาทและสิทธิ์', labels: 'ป้ายกำกับ', statuses: 'สถานะ', newStatus: 'สถานะใหม่', statusHint: 'แสดงเป็นจุดสีบนการ์ดและแถบความคืบหน้าของคอลัมน์ การ์ดใหม่จะได้สถานะแรก',
     addMember: 'เพิ่มสมาชิก', role: 'บทบาท', newRole: 'บทบาทใหม่', owner: 'เจ้าของ (ทุกสิทธิ์)', deleteBoard: 'ลบบอร์ด',
     deleteBoardConfirm: 'ต้องการลบบอร์ดนี้สำหรับทุกคนหรือไม่?', leave: 'ออกจากบอร์ด', newLabel: 'ป้ายกำกับใหม่',
   },
@@ -150,6 +166,22 @@ const th: Dict = {
   profile: {
     title: 'โปรไฟล์', changePassword: 'เปลี่ยนรหัสผ่าน', currentPassword: 'รหัสผ่านปัจจุบัน', newPassword: 'รหัสผ่านใหม่',
     passwordChanged: 'เปลี่ยนรหัสผ่านแล้ว อุปกรณ์อื่นถูกออกจากระบบ',
+  },
+  editor: {
+    heading: 'หัวข้อ', bold: 'ตัวหนา', italic: 'ตัวเอียง', strike: 'ขีดฆ่า', code: 'โค้ด', link: 'ลิงก์',
+    bullets: 'รายการจุด', numbers: 'รายการตัวเลข', tasks: 'เช็กลิสต์', quote: 'อ้างอิง', codeBlock: 'บล็อกโค้ด', rule: 'เส้นคั่น',
+    saving: 'กำลังบันทึก…', saved: 'บันทึกแล้ว', unsaved: 'ยังไม่บันทึก', saveFailed: 'บันทึกไม่สำเร็จ กำลังลองใหม่…',
+    placeholder: 'เขียนด้วย Markdown… วางรูปได้ พิมพ์ - [ ] เพื่อสร้างเช็กลิสต์',
+  },
+  filter: {
+    title: 'ตัวกรอง', status: 'สถานะ', priority: 'ความสำคัญ', due: 'กำหนดส่ง', any: 'ทั้งหมด', noStatus: 'ไม่มีสถานะ',
+    minStars_one: '{{count}} ดาวขึ้นไป', minStars_other: '{{count}} ดาวขึ้นไป', noPriority: 'ไม่มีดาว',
+    overdue: 'เลยกำหนด', today: 'ครบกำหนดวันนี้', week: 'ครบกำหนดใน 7 วัน', none: 'ไม่มีกำหนดส่ง', has: 'มีกำหนดส่ง', owner: 'เจ้าของ',
+    allOwners: 'เจ้าของทั้งหมด', ownedBy: 'เจ้าของ',
+  },
+  sort: {
+    title: 'เรียงการ์ดตาม', priority: 'ความสำคัญ (มากไปน้อย)', due: 'กำหนดส่ง (ใกล้สุดก่อน)', created: 'ใหม่สุดก่อน',
+    createdAsc: 'เก่าสุดก่อน', updated: 'แก้ไขล่าสุด', title_: 'ชื่อ (ก–ฮ, A–Z)', number: 'หมายเลขการ์ด', dragHint: 'ลากเพื่อจัดลำดับ',
   },
   errors: {
     unauthorized: 'กรุณาเข้าสู่ระบบ', forbidden: 'คุณไม่มีสิทธิ์ทำรายการนี้', not_found: 'ไม่พบข้อมูล',

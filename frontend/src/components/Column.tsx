@@ -3,13 +3,14 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ChevronsLeftRight, ChevronsRightLeft, Gauge, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ArrowDownUp, ChevronsLeftRight, ChevronsRightLeft, Gauge, GripVertical, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
+import { DropdownMenu as RMenu } from 'radix-ui'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { BoardHelpers } from '../lib/board'
 import type { CardSummary, List } from '../lib/types'
-import { CardTile, STATUS_COLOR } from './CardTile'
+import { CardTile } from './CardTile'
 import { toastError } from './toast'
 import { Button, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from './ui'
 
@@ -43,6 +44,11 @@ export function Column({
     onSuccess: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
     onError: toastError,
   })
+  const sort = useMutation({
+    mutationFn: (p: { by: string; desc: boolean }) => api.post(`/lists/${list.id}/sort`, p),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
+    onError: toastError,
+  })
   const remove = useMutation({
     mutationFn: () => api.del(`/lists/${list.id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
@@ -51,8 +57,11 @@ export function Column({
 
   const style = { transform: CSS.Translate.toString(sortable.transform), transition: sortable.transition }
   const over = list.wip_limit != null && totalCount > list.wip_limit
-  const counts = { ready: 0, blocked: 0, normal: 0 } as Record<string, number>
-  cards.forEach((c) => counts[c.status]++)
+  // Odoo-style progress bar: share of cards per status, in the board's status order
+  const counts = new Map<string, number>()
+  cards.forEach((c) => counts.set(c.status_id ?? '', (counts.get(c.status_id ?? '') ?? 0) + 1))
+  const bar = [...b.statuses.values()].map((s) => ({ key: s.id, name: s.name, color: s.color, n: counts.get(s.id) ?? 0 }))
+  if (counts.get('')) bar.push({ key: '', name: t('filter.noStatus'), color: '#d4d4d8', n: counts.get('')! })
 
   if (list.folded) {
     return (
@@ -85,7 +94,10 @@ export function Column({
       className={clsx('flex max-h-full w-[288px] shrink-0 flex-col rounded-xl bg-column', sortable.isDragging && 'opacity-50')}
     >
       <div className="px-2 pt-2" {...sortable.attributes} {...sortable.listeners}>
-        <div className={clsx('flex items-center gap-1 px-1', canManage && 'cursor-grab')}>
+        <div className={clsx('group/col flex items-center gap-1 px-1', canManage && 'cursor-grab active:cursor-grabbing')}>
+          {canManage && (
+            <GripVertical size={14} className="-ml-1 shrink-0 text-muted opacity-40 group-hover/col:opacity-100" aria-label={t('sort.dragHint')} />
+          )}
           {list.color && <span className="h-2.5 w-2.5 rounded-full" style={{ background: list.color }} />}
           {renaming ? (
             <form
@@ -139,6 +151,32 @@ export function Column({
               <MenuItem onSelect={() => update.mutate({ folded: true })}>
                 <ChevronsRightLeft size={14} /> {t('board.fold')}
               </MenuItem>
+              {b.can('cards.move') && cards.length > 1 && (
+                <RMenu.Sub>
+                  <RMenu.SubTrigger className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-black/5 data-[state=open]:bg-black/5 dark:data-[highlighted]:bg-white/10 dark:data-[state=open]:bg-white/10">
+                    <ArrowDownUp size={14} /> {t('sort.title')}
+                  </RMenu.SubTrigger>
+                  <RMenu.Portal>
+                    <RMenu.SubContent sideOffset={4} className="z-50 min-w-48 rounded-lg border border-line bg-surface p-1 text-sm shadow-lg">
+                      {(
+                        [
+                          ['priority', true, 'sort.priority'],
+                          ['due', false, 'sort.due'],
+                          ['created', true, 'sort.created'],
+                          ['created', false, 'sort.createdAsc'],
+                          ['updated', true, 'sort.updated'],
+                          ['title', false, 'sort.title_'],
+                          ['number', false, 'sort.number'],
+                        ] as const
+                      ).map(([by, desc, label]) => (
+                        <MenuItem key={label} onSelect={() => sort.mutate({ by, desc })}>
+                          {t(label)}
+                        </MenuItem>
+                      ))}
+                    </RMenu.SubContent>
+                  </RMenu.Portal>
+                </RMenu.Sub>
+              )}
               {canManage && (
                 <>
                   <MenuItem onSelect={() => setRenaming(true)}>
@@ -166,14 +204,8 @@ export function Column({
         {/* Odoo-style status progress bar */}
         {cards.length > 0 && (
           <div className="mx-1 mt-2 flex h-1 overflow-hidden rounded-full bg-black/5 dark:bg-white/10">
-            {(['ready', 'blocked', 'normal'] as const).map((s) =>
-              counts[s] ? (
-                <div
-                  key={s}
-                  title={`${t(`card.status_${s}`)}: ${counts[s]}`}
-                  style={{ width: `${(counts[s] / cards.length) * 100}%`, background: STATUS_COLOR[s] }}
-                />
-              ) : null,
+            {bar.map((s) =>
+              s.n ? <div key={s.key} title={`${s.name}: ${s.n}`} style={{ width: `${(s.n / cards.length) * 100}%`, background: s.color }} /> : null,
             )}
           </div>
         )}

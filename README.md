@@ -13,12 +13,15 @@ A self-hosted Kanban board for **one organization**: no public sign-up. Accounts
 ## Features
 
 - **Roles.** *Super admin* sees and manages every board and all users. *Board roles* are per board and fully customizable: Owner / Admin / Editor / Commenter / Viewer are seeded, and you can add your own from a permission matrix (13 permissions).
-- **Cards are Markdown.** GFM tables and task lists are supported. Clicking a task checkbox in the preview edits the source, and `- [ ]` items double as the card's checklist progress. **Paste or drop images** into the editor: they upload and become `![](/api/files/…)`. Dropping other files attaches them and inserts a link.
+- **Cards are Markdown, edited Obsidian-style.** Live preview renders headings, bold/italic/strike, code, links, images, quotes, lists, checkboxes and dividers in place. An element's raw syntax shows only while the cursor is in it. There's a formatting toolbar, and Ctrl+B / I / E / K work. **Paste or drop images**: they upload and become `![](/api/files/…)`. Other dropped files are attached with a link. `- [ ]` items double as the card's checklist progress.
+- **Autosave** for descriptions: 1.2 s after you stop typing, on blur, and on close. A burst of edits by one person within 10 minutes becomes **one** "updated the description" log entry.
 - **Attachments** with upload progress, inline images, and Thai filenames (RFC 5987 headers).
 - **Comments and activity log** in one timeline. Every change (title, status, priority, due date, move, labels, assignees, attachments) is logged in the same DB transaction.
 - **Search.** Ctrl+K searches every visible board and card (title, description, `#number`). Each page also has its own filter bar. Matching is case-insensitive *substring*, so Thai works without word segmentation.
 - **Hover preview.** Pausing on a card shows its rendered description excerpt, status, due date and assignees.
-- **Drag and drop** cards between columns, and reorder columns. Positions use fractional indexing, so one move rewrites one row.
+- **Custom statuses per board** (name, colour, order). They appear as the card dot and in the column progress bar. New boards start with Normal / Blocked / Ready, in the creator's language.
+- **Board filters:** text, assigned to me, labels, status, priority (★+, ★★+, ★★★, none), due date (overdue / today / 7 days / has / none). **Boards page:** shows owners and filters by owner.
+- **Drag and drop** cards between columns, and reorder columns by their grip handle. **Sort a column** (priority, due date, newest/oldest, recently updated, title, number) from its ⋯ menu. This is a one-off reorder; you can keep dragging afterwards. Positions use fractional indexing, so one move rewrites one row.
 - **Realtime.** Other people's changes appear live over a WebSocket per board.
 - Labels, assignees, due dates (overdue highlighting), card colours, archive.
 

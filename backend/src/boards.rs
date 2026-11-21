@@ -37,6 +37,8 @@ pub struct BoardListItem {
     is_member: bool,
     card_count: i64,
     member_count: i64,
+    /// [{id, display_name, avatar_color}] of members holding the owner role
+    owners: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -55,7 +57,11 @@ pub async fn list_boards(
         "SELECT b.id, b.name, b.description, b.color, b.updated_at,
                 EXISTS (SELECT 1 FROM board_members m WHERE m.board_id = b.id AND m.user_id = $1) AS is_member,
                 (SELECT count(*) FROM cards c WHERE c.board_id = b.id AND c.archived_at IS NULL) AS card_count,
-                (SELECT count(*) FROM board_members m WHERE m.board_id = b.id) AS member_count
+                (SELECT count(*) FROM board_members m WHERE m.board_id = b.id) AS member_count,
+                COALESCE((SELECT json_agg(json_build_object('id', u.id, 'display_name', u.display_name, 'avatar_color', u.avatar_color)
+                                          ORDER BY lower(u.display_name))
+                          FROM board_members m JOIN board_roles r ON r.id = m.role_id JOIN users u ON u.id = m.user_id
+                          WHERE m.board_id = b.id AND r.is_owner), '[]'::json) AS owners
          FROM boards b
          WHERE b.archived_at IS NULL
            AND ($2 OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id = b.id AND m.user_id = $1))
@@ -126,6 +132,21 @@ pub async fn create_board(
         .bind(owner_role)
         .execute(&mut *tx)
         .await?;
+    let statuses: [(&str, &str); 3] = if u.locale == "th" {
+        [("ปกติ", "#a1a1aa"), ("ติดปัญหา", "#ef4444"), ("พร้อม", "#22c55e")]
+    } else {
+        [("Normal", "#a1a1aa"), ("Blocked", "#ef4444"), ("Ready", "#22c55e")]
+    };
+    for (i, (name, color)) in statuses.iter().enumerate() {
+        sqlx::query("INSERT INTO board_statuses (id, board_id, name, color, position) VALUES ($1,$2,$3,$4,$5)")
+            .bind(Uuid::now_v7())
+            .bind(board.id)
+            .bind(name)
+            .bind(color)
+            .bind(i as i32)
+            .execute(&mut *tx)
+            .await?;
+    }
     let names = r.lists.unwrap_or_else(|| vec!["To Do".into(), "In Progress".into(), "Done".into()]);
     let mut prev: Option<String> = None;
     for n in names.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -177,6 +198,14 @@ pub struct Role {
     pub is_owner: bool,
 }
 
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Status {
+    pub id: Uuid,
+    pub name: String,
+    pub color: String,
+    pub position: i32,
+}
+
 #[derive(Serialize)]
 pub struct BoardDetail {
     board: Board,
@@ -186,6 +215,7 @@ pub struct BoardDetail {
     lists: Vec<List>,
     cards: Vec<CardSummary>,
     labels: Vec<Label>,
+    statuses: Vec<Status>,
     members: Vec<Member>,
     roles: Vec<Role>,
 }
@@ -213,6 +243,11 @@ pub async fn get_board(
         .bind(id)
         .fetch_all(db)
         .await?;
+    let statuses: Vec<Status> =
+        sqlx::query_as("SELECT id, name, color, position FROM board_statuses WHERE board_id = $1 ORDER BY position, name")
+            .bind(id)
+            .fetch_all(db)
+            .await?;
     let members: Vec<Member> = sqlx::query_as(
         "SELECT u.id AS user_id, u.username, u.display_name, u.avatar_color, m.role_id
          FROM board_members m JOIN users u ON u.id = m.user_id WHERE m.board_id = $1 ORDER BY lower(u.display_name)",
@@ -233,6 +268,7 @@ pub async fn get_board(
         lists,
         cards,
         labels,
+        statuses,
         members,
         roles,
     }))
@@ -466,6 +502,148 @@ pub async fn delete_label(
     board_access(&state.db, &u, board_id).await?.require(perms::LABELS_MANAGE)?;
     sqlx::query("DELETE FROM labels WHERE id = $1").bind(id).execute(&state.db).await?;
     state.hub.notify(board_id, "label", None, u.id);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------- statuses ----------
+
+#[derive(Deserialize)]
+pub struct StatusReq {
+    name: Option<String>,
+    color: Option<String>,
+    /// new index among the board's statuses
+    index: Option<usize>,
+}
+
+pub async fn create_status(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(board_id): Path<Uuid>,
+    Json(r): Json<StatusReq>,
+) -> AppResult<Json<Status>> {
+    board_access(&state.db, &u, board_id).await?.require(perms::BOARD_MANAGE)?;
+    let name = r.name.unwrap_or_default().trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("name_required"));
+    }
+    let st: Status = sqlx::query_as(
+        "INSERT INTO board_statuses (id, board_id, name, color, position)
+         VALUES ($1,$2,$3,$4,(SELECT coalesce(max(position),-1)+1 FROM board_statuses WHERE board_id = $2))
+         RETURNING id, name, color, position",
+    )
+    .bind(Uuid::now_v7())
+    .bind(board_id)
+    .bind(name)
+    .bind(r.color.unwrap_or_else(|| "#64748b".into()))
+    .fetch_one(&state.db)
+    .await?;
+    state.hub.notify(board_id, "status", None, u.id);
+    Ok(Json(st))
+}
+
+pub async fn update_status(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(r): Json<StatusReq>,
+) -> AppResult<Json<Status>> {
+    let (board_id,): (Uuid,) =
+        sqlx::query_as("SELECT board_id FROM board_statuses WHERE id = $1").bind(id).fetch_one(&state.db).await?;
+    board_access(&state.db, &u, board_id).await?.require(perms::BOARD_MANAGE)?;
+    let mut tx = state.db.begin().await?;
+    if let Some(index) = r.index {
+        // renumber all statuses with this one at `index`
+        let mut ids: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM board_statuses WHERE board_id = $1 AND id <> $2 ORDER BY position, name FOR UPDATE",
+        )
+        .bind(board_id)
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+        ids.insert(index.min(ids.len()), (id,));
+        for (i, (sid,)) in ids.iter().enumerate() {
+            sqlx::query("UPDATE board_statuses SET position = $2 WHERE id = $1").bind(sid).bind(i as i32).execute(&mut *tx).await?;
+        }
+    }
+    let st: Status = sqlx::query_as(
+        "UPDATE board_statuses SET name = COALESCE($2, name), color = COALESCE($3, color) WHERE id = $1
+         RETURNING id, name, color, position",
+    )
+    .bind(id)
+    .bind(r.name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+    .bind(r.color)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    state.hub.notify(board_id, "status", None, u.id);
+    Ok(Json(st))
+}
+
+pub async fn delete_status(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<serde_json::Value>> {
+    let (board_id,): (Uuid,) =
+        sqlx::query_as("SELECT board_id FROM board_statuses WHERE id = $1").bind(id).fetch_one(&state.db).await?;
+    board_access(&state.db, &u, board_id).await?.require(perms::BOARD_MANAGE)?;
+    // cards using it fall back to "no status" (FK ON DELETE SET NULL)
+    sqlx::query("DELETE FROM board_statuses WHERE id = $1").bind(id).execute(&state.db).await?;
+    state.hub.notify(board_id, "status", None, u.id);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------- sort a column ----------
+
+#[derive(Deserialize)]
+pub struct SortReq {
+    /// priority | due | created | updated | title | number
+    by: String,
+    #[serde(default)]
+    desc: bool,
+}
+
+/// One-off reorder of a column's cards (like Trello's "Sort by…"); manual dragging keeps working afterwards.
+pub async fn sort_list(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(r): Json<SortReq>,
+) -> AppResult<Json<serde_json::Value>> {
+    let board_id = board_of_list(&state.db, id).await?;
+    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_MOVE)?;
+    // NULL due dates always go last; ties keep their current order
+    let order = match (r.by.as_str(), r.desc) {
+        ("priority", false) => "priority ASC",
+        ("priority", true) => "priority DESC",
+        ("due", false) => "due_at ASC NULLS LAST",
+        ("due", true) => "due_at DESC NULLS LAST",
+        ("created", false) => "created_at ASC",
+        ("created", true) => "created_at DESC",
+        ("updated", false) => "updated_at ASC",
+        ("updated", true) => "updated_at DESC",
+        ("title", false) => "lower(title) ASC",
+        ("title", true) => "lower(title) DESC",
+        ("number", false) => "number ASC",
+        ("number", true) => "number DESC",
+        _ => return Err(AppError::BadRequest("invalid_sort")),
+    };
+    let mut tx = state.db.begin().await?;
+    sqlx::query("SELECT 1 FROM lists WHERE id = $1 FOR UPDATE").bind(id).execute(&mut *tx).await?;
+    let ids: Vec<(Uuid,)> = sqlx::query_as(sqlf!(
+        r#"SELECT id FROM cards WHERE list_id = $1 AND archived_at IS NULL ORDER BY {order}, position COLLATE "C""#
+    ))
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut prev: Option<String> = None;
+    for (cid,) in ids {
+        let pos = position::between(prev.as_deref(), None);
+        sqlx::query("UPDATE cards SET position = $2 WHERE id = $1").bind(cid).bind(&pos).execute(&mut *tx).await?;
+        prev = Some(pos);
+    }
+    tx.commit().await?;
+    state.hub.notify(board_id, "list", None, u.id);
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

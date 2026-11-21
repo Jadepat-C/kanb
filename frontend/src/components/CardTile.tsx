@@ -11,8 +11,6 @@ import type { CardSummary } from '../lib/types'
 import { Markdown } from './Markdown'
 import { Avatar } from './ui'
 
-export const STATUS_COLOR: Record<string, string> = { normal: '#a1a1aa', blocked: '#ef4444', ready: '#22c55e' }
-
 export function Stars({ value, onChange, size = 13 }: { value: number; onChange?: (v: number) => void; size?: number }) {
   return (
     <span className="inline-flex">
@@ -29,12 +27,14 @@ export function Stars({ value, onChange, size = 13 }: { value: number; onChange?
 }
 
 function isOverdue(c: CardSummary) {
-  return !!c.due_at && new Date(c.due_at).getTime() < Date.now() && c.status !== 'ready'
+  return !!c.due_at && new Date(c.due_at).getTime() < Date.now()
 }
 
 function TileBody({ card, b }: { card: CardSummary; b: BoardHelpers }) {
   const { t } = useTranslation()
   const labels = card.label_ids.map((id) => b.labels.get(id)).filter(Boolean)
+  const status = card.status_id ? b.statuses.get(card.status_id) : undefined
+  void t
   return (
     <>
       {card.color && <div className="absolute inset-y-0 left-0 w-1 rounded-l-lg" style={{ background: card.color }} />}
@@ -49,11 +49,7 @@ function TileBody({ card, b }: { card: CardSummary; b: BoardHelpers }) {
       )}
       <div className="flex items-start gap-1.5">
         <span className="min-w-0 flex-1 text-sm leading-snug [overflow-wrap:anywhere]">{card.title}</span>
-        <span
-          className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
-          style={{ background: STATUS_COLOR[card.status] }}
-          title={t(`card.status_${card.status}`)}
-        />
+        {status && <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: status.color }} title={status.name} />}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-muted">
         <span>#{card.number}</span>
@@ -96,6 +92,7 @@ function TileBody({ card, b }: { card: CardSummary; b: BoardHelpers }) {
 /** Hover preview ("glimpse") of a card: rendered description excerpt + key facts. */
 function Preview({ card, b }: { card: CardSummary; b: BoardHelpers }) {
   const { t } = useTranslation()
+  const status = card.status_id ? b.statuses.get(card.status_id) : undefined
   return (
     <div className="space-y-2">
       <div className="flex items-baseline gap-2">
@@ -103,10 +100,12 @@ function Preview({ card, b }: { card: CardSummary; b: BoardHelpers }) {
         <span className="font-semibold leading-snug">{card.title}</span>
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-        <span className="inline-flex items-center gap-1">
-          <span className="h-2 w-2 rounded-full" style={{ background: STATUS_COLOR[card.status] }} />
-          {t(`card.status_${card.status}`)}
-        </span>
+        {status && (
+          <span className="inline-flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full" style={{ background: status.color }} />
+            {status.name}
+          </span>
+        )}
         {card.due_at && <span>· {t('card.due')}: {fmtDate(card.due_at, true)}</span>}
         {card.assignee_ids.length > 0 && (
           <span>· {card.assignee_ids.map((id) => b.members.get(id)?.display_name).filter(Boolean).join(', ')}</span>

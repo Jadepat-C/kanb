@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
@@ -11,7 +11,7 @@ import type { Role, UserBrief } from '../lib/types'
 import { toast, toastError } from './toast'
 import { Avatar, Button, ColorPicker, Dialog, Field, Input } from './ui'
 
-type Tab = 'general' | 'members' | 'roles' | 'labels'
+type Tab = 'general' | 'members' | 'roles' | 'statuses' | 'labels'
 
 export function BoardSettings({
   open,
@@ -31,7 +31,7 @@ export function BoardSettings({
     <Dialog open={open} onOpenChange={onOpenChange} title={t('settings.title')} wide>
       <div className="flex flex-col sm:flex-row">
         <nav className="flex gap-1 border-b border-line p-2 sm:w-48 sm:flex-col sm:border-b-0 sm:border-r">
-          {(['general', 'members', 'roles', 'labels'] as Tab[]).map((k) => (
+          {(['general', 'members', 'roles', 'statuses', 'labels'] as Tab[]).map((k) => (
             <button
               key={k}
               onClick={() => setTab(k)}
@@ -48,6 +48,7 @@ export function BoardSettings({
           {tab === 'general' && <General b={b} boardId={boardId} onClose={() => onOpenChange(false)} />}
           {tab === 'members' && <Members b={b} boardId={boardId} />}
           {tab === 'roles' && <Roles b={b} boardId={boardId} />}
+          {tab === 'statuses' && <Statuses b={b} boardId={boardId} />}
           {tab === 'labels' && <Labels b={b} boardId={boardId} />}
         </div>
       </div>
@@ -354,6 +355,87 @@ function Labels({ b, boardId }: { b: BoardHelpers; boardId: string }) {
           }}
         >
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('settings.newLabel')} />
+          <ColorPicker value={color} onChange={setColor} />
+          <Button variant="primary">
+            <Plus size={14} /> {t('common.create')}
+          </Button>
+        </form>
+      )}
+    </div>
+  )
+}
+
+const COLORS = ['#a1a1aa', '#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#6366f1', '#a855f7', '#ec4899']
+
+function Statuses({ b, boardId }: { b: BoardHelpers; boardId: string }) {
+  const { t } = useTranslation()
+  const refresh = useRefresh(boardId)
+  const can = b.can('board.manage')
+  const list = b.data!.statuses
+  const [name, setName] = useState('')
+  const [color, setColor] = useState<string | null>('#0ea5e9')
+  const create = useMutation({
+    mutationFn: () => api.post(`/boards/${boardId}/statuses`, { name, color }),
+    onSuccess: () => (setName(''), refresh()),
+    onError: toastError,
+  })
+  const update = useMutation({
+    mutationFn: (p: { id: string; name?: string; color?: string; index?: number }) => api.patch(`/statuses/${p.id}`, p),
+    onSuccess: refresh,
+    onError: toastError,
+  })
+  const del = useMutation({ mutationFn: (id: string) => api.del(`/statuses/${id}`), onSuccess: refresh, onError: toastError })
+  return (
+    <div className="max-w-lg space-y-4">
+      <p className="text-xs text-muted">{t('settings.statusHint')}</p>
+      <div className="space-y-2">
+        {list.map((st, i) => (
+          <div key={st.id} className="flex items-center gap-2">
+            <select
+              value={st.color}
+              disabled={!can}
+              onChange={(e) => update.mutate({ id: st.id, color: e.target.value })}
+              className="h-8 w-12 rounded-md border border-line bg-surface text-center text-lg"
+              style={{ color: st.color }}
+            >
+              {[...new Set([st.color, ...COLORS])].map((c) => (
+                <option key={c} value={c} style={{ color: c }}>
+                  ●
+                </option>
+              ))}
+            </select>
+            <Input
+              key={st.name}
+              defaultValue={st.name}
+              disabled={!can}
+              onBlur={(e) => e.currentTarget.value.trim() && e.currentTarget.value !== st.name && update.mutate({ id: st.id, name: e.currentTarget.value })}
+              className="h-8"
+            />
+            {can && (
+              <>
+                <button disabled={i === 0} onClick={() => update.mutate({ id: st.id, index: i - 1 })} className="rounded p-1.5 text-muted enabled:hover:bg-black/5 disabled:opacity-30 enabled:cursor-pointer dark:enabled:hover:bg-white/10">
+                  <ArrowUp size={15} />
+                </button>
+                <button disabled={i === list.length - 1} onClick={() => update.mutate({ id: st.id, index: i + 1 })} className="rounded p-1.5 text-muted enabled:hover:bg-black/5 disabled:opacity-30 enabled:cursor-pointer dark:enabled:hover:bg-white/10">
+                  <ArrowDown size={15} />
+                </button>
+                <button onClick={() => confirm(t('common.confirmDelete')) && del.mutate(st.id)} className="rounded p-1.5 text-muted hover:text-red-600 cursor-pointer">
+                  <Trash2 size={15} />
+                </button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      {can && (
+        <form
+          className="space-y-2 border-t border-line pt-4"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (name.trim()) create.mutate()
+          }}
+        >
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('settings.newStatus')} />
           <ColorPicker value={color} onChange={setColor} />
           <Button variant="primary">
             <Plus size={14} /> {t('common.create')}
