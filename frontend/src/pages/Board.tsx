@@ -17,7 +17,7 @@ import { arrayMove, horizontalListSortingStrategy, SortableContext, sortableKeyb
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { CalendarDays, Check, Columns3, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams, useSearchParams } from 'react-router'
@@ -29,11 +29,11 @@ import { NewCardDialog, type NewCardPreset } from '../components/NewCardDialog'
 import { CardModal } from '../components/CardModal'
 import { CardGhost } from '../components/CardTile'
 import { Column } from '../components/Column'
-import { toastError } from '../components/toast'
-import { Button, Input, Menu, MenuContent, MenuItem, MenuTrigger, Popover, Spinner } from '../components/ui'
+import { toastActivity, toastError } from '../components/toast'
+import { Avatar, Button, Input, Menu, MenuContent, MenuItem, MenuTrigger, Popover, Spinner } from '../components/ui'
 import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
-import { groupCards, useBoard, useBoardSocket } from '../lib/board'
+import { groupCards, useBoard, useBoardSocket, type ChangeEvent, type Viewer } from '../lib/board'
 import { errorText } from '../lib/i18n'
 import type { CardSummary } from '../lib/types'
 
@@ -50,10 +50,63 @@ export function BoardPage() {
     setSp(sp)
   }
   const b = useBoard(boardId)
-  const online = useBoardSocket(boardId)
   const { data: me } = useMe()
+  // "X did Y" toasts for other people's changes; repeated events (e.g. someone typing a description) are collapsed
+  const latest = useRef({ b, me })
+  latest.current = { b, me }
+  const lastToast = useRef(new Map<string, number>())
+  const onChange = useCallback(
+    (ev: ChangeEvent) => {
+      const { b: cur, me: self } = latest.current
+      if (!ev.actor_id || !self || ev.actor_id === self.id || ev.kind === 'resync') return
+      const who = cur.members.get(ev.actor_id)
+      if (!who) return
+      const key = `${ev.actor_id}:${ev.card_id ?? ev.kind}`
+      const now = Date.now()
+      if (now - (lastToast.current.get(key) ?? 0) < 20000) return
+      lastToast.current.set(key, now)
+      const card = ev.card_id ? cur.data?.cards.find((c) => c.id === ev.card_id) : undefined
+      const title = card?.title ?? ''
+      let text: string
+      if (ev.kind === 'card') text = card ? t('activity.updated', { title }) : t('activity.card')
+      else if (ev.kind === 'comment') text = card ? t('activity.comment', { title }) : t('activity.card')
+      else if (ev.kind === 'attachment') text = card ? t('activity.attachment', { title }) : t('activity.card')
+      else if (ev.kind === 'list') text = t('activity.columns')
+      else if (ev.kind === 'board_deleted') text = t('activity.archivedBoard')
+      else text = t('activity.settings')
+      toastActivity({ name: who.display_name, color: who.avatar_color }, text)
+    },
+    [t],
+  )
+  const { online, viewers, report } = useBoardSocket(boardId, onChange)
+  const [editing, setEditing] = useState(false)
+  useEffect(() => {
+    report({ card_id: openCard, editing: !!openCard && editing })
+  }, [openCard, editing, report])
+  // other people here (one entry per person; their open card / editing state merged across tabs)
+  const others = useMemo(() => {
+    const m = new Map<string, Viewer>()
+    for (const v of viewers) {
+      if (v.user_id === me?.id) continue
+      const prev = m.get(v.user_id)
+      if (!prev || (v.card_id && !prev.card_id) || (v.editing && !prev.editing)) m.set(v.user_id, v)
+    }
+    return [...m.values()]
+  }, [viewers, me?.id])
+  const viewersByCard = useMemo(() => {
+    const m = new Map<string, Viewer[]>()
+    for (const v of others) if (v.card_id) m.set(v.card_id, [...(m.get(v.card_id) ?? []), v])
+    return m
+  }, [others])
   const qc = useQueryClient()
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpenState] = useState(() => sp.get('settings') === '1')
+  const setSettingsOpen = (o: boolean) => {
+    setSettingsOpenState(o)
+    if (!o && sp.has('settings')) {
+      sp.delete('settings')
+      setSp(sp, { replace: true })
+    }
+  }
   const [newCard, setNewCard] = useState<NewCardPreset | null>(null)
 
   // filters
@@ -366,6 +419,7 @@ export function BoardPage() {
             ))}
           </div>
           {filtering && <Filter size={14} className="text-accent" />}
+          <PresenceStack viewers={others} cards={cardsById} />
           <span title={online ? t('board.live') : t('board.offline')} className={online ? 'text-green-600' : 'text-muted'}>
             {online ? <Wifi size={15} /> : <WifiOff size={15} />}
           </span>
@@ -451,6 +505,7 @@ export function BoardPage() {
                   boardId={boardId}
                   onOpen={openCardId}
                   dragDisabled={dragDisabled}
+                  viewersByCard={viewersByCard}
                 />
               )
             })}
@@ -465,6 +520,8 @@ export function BoardPage() {
         <CardModal
           key={openCard}
           cardId={openCard}
+          viewers={viewersByCard.get(openCard) ?? []}
+          onEditingChange={setEditing}
           b={b}
           onClose={() => {
             sp.delete('card')
@@ -570,5 +627,33 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
     >
       {children}
     </button>
+  )
+}
+
+/** Avatars of the other people on this board; hover shows what each is doing. */
+function PresenceStack({ viewers, cards }: { viewers: Viewer[]; cards: Map<string, CardSummary> }) {
+  const { t } = useTranslation()
+  if (!viewers.length) return null
+  const shown = viewers.slice(0, 5)
+  const what = (v: Viewer) => {
+    const c = v.card_id ? cards.get(v.card_id) : undefined
+    if (!c) return t('presence.viewing')
+    return t(v.editing ? 'presence.editingCard' : 'presence.onCard', { number: c.number, title: c.title })
+  }
+  return (
+    <div className="flex items-center -space-x-1.5" aria-label={t('presence.here')}>
+      {shown.map((v) => (
+        <span key={v.user_id} className="relative" title={`${v.display_name} · ${what(v)}`}>
+          <Avatar name={v.display_name} color={v.avatar_color} size={26} />
+          <span
+            className={clsx(
+              'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-[var(--surface)]',
+              v.editing ? 'animate-pulse bg-amber-500' : 'bg-green-500',
+            )}
+          />
+        </span>
+      ))}
+      {viewers.length > shown.length && <span className="pl-2.5 text-xs text-muted">+{viewers.length - shown.length}</span>}
+    </div>
   )
 }

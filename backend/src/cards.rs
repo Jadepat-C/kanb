@@ -95,6 +95,7 @@ fn finish(mut c: CardSummary) -> CardSummary {
 pub async fn load_card_summaries(db: &PgPool, board_id: Uuid, card_id: Option<Uuid>) -> AppResult<Vec<CardSummary>> {
     let rows: Vec<CardSummary> = sqlx::query_as(sqlf!(
         r#"{SUMMARY_SELECT} WHERE c.board_id = $1 AND c.archived_at IS NULL AND ($2::uuid IS NULL OR c.id = $2)
+             AND EXISTS (SELECT 1 FROM lists l WHERE l.id = c.list_id AND l.archived_at IS NULL)
            ORDER BY c.position COLLATE "C""#
     ))
     .bind(board_id)
@@ -732,9 +733,9 @@ pub async fn calendar(
          LEFT JOIN board_statuses s ON s.id = c.status_id
          LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2
          LEFT JOIN board_roles r ON r.id = m.role_id
-         WHERE c.archived_at IS NULL AND b.archived_at IS NULL
+         WHERE c.archived_at IS NULL AND b.archived_at IS NULL AND l.archived_at IS NULL
            AND c.due_at >= $3 AND c.due_at < $4
-           AND ($1 OR m.user_id IS NOT NULL)
+           AND (($1 AND NOT b.is_tutorial) OR m.user_id IS NOT NULL)
            AND ($5::uuid IS NULL OR c.board_id = $5)
          ORDER BY c.due_at, c.number
          LIMIT 3000",
@@ -806,4 +807,86 @@ pub async fn duplicate_card(
     state.hub.notify(board_id, "card", Some(new_id), u.id);
     let card = load_card_summaries(&state.db, board_id, Some(new_id)).await?.pop().ok_or(AppError::NotFound)?;
     Ok(Json(card))
+}
+
+// ---------- archive view, restore, permanent delete ----------
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ArchivedCard {
+    id: Uuid,
+    number: i32,
+    title: String,
+    list_name: String,
+    archived_at: DateTime<Utc>,
+    archived_by: Option<String>,
+}
+
+pub async fn archived_cards(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(board_id): Path<Uuid>,
+) -> AppResult<Json<Vec<ArchivedCard>>> {
+    board_access(&state.db, &u, board_id).await?;
+    let rows: Vec<ArchivedCard> = sqlx::query_as(
+        "SELECT c.id, c.number, c.title, l.name AS list_name, c.archived_at,
+                (SELECT us.display_name FROM card_events e JOIN users us ON us.id = e.actor_id
+                 WHERE e.card_id = c.id AND e.kind = 'archived' ORDER BY e.id DESC LIMIT 1) AS archived_by
+         FROM cards c JOIN lists l ON l.id = c.list_id
+         WHERE c.board_id = $1 AND c.archived_at IS NOT NULL AND l.archived_at IS NULL
+         ORDER BY c.archived_at DESC",
+    )
+    .bind(board_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows))
+}
+
+/// Brings an archived card back, at the bottom of its column (a fresh position, so ordering keys never collide).
+pub async fn restore_card(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Value>> {
+    let board_id = crate::perms::board_of_card_any(&state.db, id).await?;
+    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_DELETE)?;
+    let mut tx = state.db.begin().await?;
+    let (list_id,): (Uuid,) = sqlx::query_as("SELECT list_id FROM cards WHERE id = $1 AND archived_at IS NOT NULL")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("SELECT 1 FROM lists WHERE id = $1 FOR UPDATE").bind(list_id).execute(&mut *tx).await?;
+    let last: Option<(String,)> = sqlx::query_as(
+        r#"SELECT position FROM cards WHERE list_id = $1 AND archived_at IS NULL ORDER BY position COLLATE "C" DESC LIMIT 1"#,
+    )
+    .bind(list_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let pos = crate::position::between(last.as_ref().map(|l| l.0.as_str()), None);
+    sqlx::query("UPDATE cards SET archived_at = NULL, position = $2, updated_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(pos)
+        .execute(&mut *tx)
+        .await?;
+    log_event(&mut tx, id, board_id, u.id, "restored", json!({})).await?;
+    tx.commit().await?;
+    state.hub.notify(board_id, "card", Some(id), u.id);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Deletes a card for good: comments, activity, attachments (database rows and stored files).
+pub async fn purge_card(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Value>> {
+    let board_id = crate::perms::board_of_card_any(&state.db, id).await?;
+    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_DELETE)?;
+    let mut tx = state.db.begin().await?;
+    let keys = crate::files::purge_card_rows(&mut tx, id, board_id).await?;
+    tx.commit().await?;
+    let n = keys.len();
+    crate::files::delete_objects(&state.store, keys).await;
+    tracing::info!(card = %id, user = %u.username, files = n, "card permanently deleted");
+    state.hub.notify(board_id, "card", Some(id), u.id);
+    Ok(Json(json!({ "ok": true, "files_deleted": n })))
 }

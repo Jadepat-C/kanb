@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { KeyRound, Plus } from 'lucide-react'
+import { KeyRound, Pencil, Plus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Navigate } from 'react-router'
@@ -17,6 +17,7 @@ export function Admin() {
   const qc = useQueryClient()
   const [creating, setCreating] = useState(false)
   const [resetting, setResetting] = useState<User | null>(null)
+  const [editing, setEditing] = useState<User | null>(null)
   const q = useQuery({ queryKey: ['admin-users'], queryFn: () => api.get<User[]>('/admin/users'), enabled: !!me?.is_super_admin })
   const update = useMutation({
     mutationFn: (p: Partial<User> & { id: string }) => api.patch(`/admin/users/${p.id}`, p),
@@ -77,6 +78,9 @@ export function Admin() {
                   </td>
                   <td className="p-3 text-xs text-muted">{fmtDate(u.created_at)}</td>
                   <td className="p-3 text-right">
+                    <Button variant="ghost" size="sm" onClick={() => setEditing(u)}>
+                      <Pencil size={14} /> {t('common.edit')}
+                    </Button>
                     <Button variant="ghost" size="sm" onClick={() => setResetting(u)}>
                       <KeyRound size={14} /> {t('admin.resetPassword')}
                     </Button>
@@ -89,6 +93,7 @@ export function Admin() {
       )}
       <CreateUser open={creating} onOpenChange={setCreating} />
       {resetting && <ResetPassword user={resetting} onClose={() => setResetting(null)} />}
+      {editing && <EditUser user={editing} onClose={() => setEditing(null)} />}
     </div>
   )
 }
@@ -110,7 +115,8 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
 function CreateUser({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const empty = { username: '', display_name: '', email: '', password: '', is_super_admin: false, can_create_boards: true }
+  const { i18n } = useTranslation()
+  const empty = { username: '', display_name: '', email: '', password: '', is_super_admin: false, can_create_boards: true, locale: i18n.language === 'th' ? 'th' : 'en' }
   const [f, setF] = useState(empty)
   const m = useMutation({
     mutationFn: () => api.post('/admin/users', f),
@@ -140,6 +146,12 @@ function CreateUser({ open, onOpenChange }: { open: boolean; onOpenChange: (o: b
         </Field>
         <Field label={t('auth.password')} hint={t('errors.password_too_short')}>
           <Input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required minLength={8} autoComplete="new-password" />
+        </Field>
+        <Field label={t('nav.language')} hint={t('admin.languageHint')}>
+          <select value={f.locale} onChange={(e) => setF({ ...f, locale: e.target.value })} className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm">
+            <option value="en">English</option>
+            <option value="th">ไทย</option>
+          </select>
         </Field>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={f.can_create_boards} onChange={(e) => setF({ ...f, can_create_boards: e.target.checked })} className="accent-[var(--color-accent)]" />
@@ -181,6 +193,49 @@ function ResetPassword({ user, onClose }: { user: User; onClose: () => void }) {
       >
         <Field label={t('admin.newPassword')} hint={t('errors.password_too_short')}>
           <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} required minLength={8} autoFocus autoComplete="new-password" />
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            {t('common.cancel')}
+          </Button>
+          <Button variant="primary" disabled={m.isPending}>
+            {t('common.save')}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  )
+}
+
+function EditUser({ user, onClose }: { user: User; onClose: () => void }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const [name, setName] = useState(user.display_name)
+  const [email, setEmail] = useState(user.email ?? '')
+  const m = useMutation({
+    mutationFn: () => api.patch(`/admin/users/${user.id}`, { display_name: name, email }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
+      qc.invalidateQueries({ queryKey: ['me'] })
+      toast(t('common.saved'), 'success')
+      onClose()
+    },
+    onError: toastError,
+  })
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title={`${t('common.edit')}: @${user.username}`}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          m.mutate()
+        }}
+        className="space-y-3 p-5"
+      >
+        <Field label={t('admin.displayName')}>
+          <Input value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+        </Field>
+        <Field label={t('admin.email')} hint={t('admin.emailHint')}>
+          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
         </Field>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>

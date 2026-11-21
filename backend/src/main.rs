@@ -14,6 +14,7 @@ mod perms;
 mod position;
 mod realtime;
 mod search;
+mod tutorial;
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -65,6 +66,9 @@ enum Cmd {
         username: String,
         #[arg(long, default_value = "")]
         display_name: String,
+        /// UI language (en or th), also used for the tutorial board
+        #[arg(long, default_value = "en")]
+        locale: String,
     },
     /// Reset a user's password (same password input as create-admin).
     SetPassword {
@@ -101,9 +105,9 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!("./migrations").run(&db).await.context("running migrations")?;
 
     match cli.cmd.unwrap_or(Cmd::Serve) {
-        Cmd::CreateAdmin { username, display_name } => {
+        Cmd::CreateAdmin { username, display_name, locale } => {
             let pw = read_password()?;
-            let u = admin::insert_user(&db, &username, &display_name, None, &pw, true, true)
+            let u = admin::insert_user(&db, &username, &display_name, None, &pw, true, true, &locale)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("created super admin {} ({})", u.username, u.id);
@@ -152,6 +156,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/auth/logout", post(auth::logout))
         .route("/me", get(auth::me).patch(auth::update_me))
         .route("/me/password", post(auth::change_password))
+        .route("/me/tutorial", post(tutorial::create_for_me))
         .route("/users", get(admin::directory))
         .route("/admin/users", get(admin::list_users).post(admin::create_user))
         .route("/admin/users/{id}", patch(admin::update_user))
@@ -159,12 +164,19 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/boards", get(boards::list_boards).post(boards::create_board))
         .route("/boards/{id}", get(boards::get_board).patch(boards::update_board).delete(boards::delete_board))
         .route("/boards/{id}/ws", get(realtime::board_ws))
+        .route("/boards/{id}/restore", post(boards::restore_board))
+        .route("/boards/{id}/permanent", axum::routing::delete(boards::purge_board))
+        .route("/boards/{id}/archived-cards", get(cards::archived_cards))
         .route("/boards/{id}/lists", post(boards::create_list))
         .route("/boards/{id}/labels", post(boards::create_label))
         .route("/boards/{id}/roles", post(boards::create_role))
         .route("/boards/{id}/statuses", post(boards::create_status))
         .route("/statuses/{id}", patch(boards::update_status).delete(boards::delete_status))
         .route("/lists/{id}/sort", post(boards::sort_list))
+        .route("/lists/{id}/archive", post(boards::archive_list))
+        .route("/lists/{id}/restore", post(boards::restore_list))
+        .route("/boards/{id}/archived-lists", get(boards::archived_lists))
+        .route("/boards-order", put(boards::set_board_order))
         .route("/boards/{id}/members", post(boards::add_member))
         .route("/boards/{id}/members/{user_id}", patch(boards::update_member).delete(boards::remove_member))
         .route("/lists/{id}", patch(boards::update_list).delete(boards::delete_list))
@@ -174,6 +186,8 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/cards/{id}", get(cards::get_card).patch(cards::update_card).delete(cards::archive_card))
         .route("/cards/{id}/move", post(cards::move_card))
         .route("/cards/{id}/duplicate", post(cards::duplicate_card))
+        .route("/cards/{id}/restore", post(cards::restore_card))
+        .route("/cards/{id}/permanent", axum::routing::delete(cards::purge_card))
         .route("/cards/{id}/labels", put(cards::set_labels))
         .route("/cards/{id}/assignees", put(cards::set_assignees))
         .route("/cards/{id}/timeline", get(cards::timeline))

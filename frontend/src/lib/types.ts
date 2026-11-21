@@ -32,6 +32,9 @@ export interface BoardListItem {
   card_count: number
   member_count: number
   owners: { id: string; display_name: string; avatar_color: string }[]
+  archived_at: string | null
+  can_manage: boolean
+  can_delete: boolean
 }
 
 export interface Board {

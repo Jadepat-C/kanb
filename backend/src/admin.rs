@@ -32,6 +32,8 @@ pub struct CreateUser {
     is_super_admin: bool,
     #[serde(default = "yes")]
     can_create_boards: bool,
+    /// UI language for the new user (and of their tutorial board)
+    locale: Option<String>,
 }
 fn yes() -> bool {
     true
@@ -46,28 +48,39 @@ pub async fn insert_user(
     password: &str,
     is_super_admin: bool,
     can_create_boards: bool,
+    locale: &str,
 ) -> AppResult<User> {
+    let locale = if locale == "th" { "th" } else { "en" };
     let username = validate_username(username)?;
     validate_password(password)?;
+    let email = crate::auth::normalize_email(email)?.flatten();
+    if let Some(e) = &email {
+        crate::auth::ensure_email_free(db, e, None).await?;
+    }
     let display_name = if display_name.trim().is_empty() { username.clone() } else { display_name.trim().to_string() };
     let pw = password.to_string();
     let hash = tokio::task::spawn_blocking(move || hash_password(&pw)).await.map_err(|e| anyhow::anyhow!(e))??;
     let id = Uuid::now_v7();
     let color = AVATAR_COLORS[(id.as_u128() % AVATAR_COLORS.len() as u128) as usize];
     let user: User = sqlx::query_as(sqlf!(
-        "INSERT INTO users (id, username, display_name, email, password_hash, is_super_admin, can_create_boards, avatar_color)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING {USER_COLUMNS}"
+        "INSERT INTO users (id, username, display_name, email, password_hash, is_super_admin, can_create_boards, avatar_color, locale)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING {USER_COLUMNS}"
     ))
     .bind(id)
     .bind(&username)
     .bind(display_name)
-    .bind(email.map(|e| e.trim().to_string()).filter(|e| !e.is_empty()))
+    .bind(email)
     .bind(hash)
     .bind(is_super_admin)
     .bind(can_create_boards)
     .bind(color)
+    .bind(locale)
     .fetch_one(db)
     .await?;
+    // every new account starts with its own "Getting started" board (best effort: never block account creation)
+    if let Err(e) = crate::tutorial::create(db, user.id, locale).await {
+        tracing::warn!(error = %e, user = %user.username, "could not create tutorial board");
+    }
     Ok(user)
 }
 
@@ -80,13 +93,14 @@ pub async fn list_users(State(state): State<AppState>, _a: SuperAdmin) -> AppRes
 
 pub async fn create_user(
     State(state): State<AppState>,
-    _a: SuperAdmin,
+    SuperAdmin(admin): SuperAdmin,
     Json(r): Json<CreateUser>,
 ) -> AppResult<Json<User>> {
-    let u = insert_user(&state.db, &r.username, &r.display_name, r.email, &r.password, r.is_super_admin, r.can_create_boards)
+    let locale = r.locale.clone().unwrap_or_else(|| admin.locale.clone());
+    let u = insert_user(&state.db, &r.username, &r.display_name, r.email, &r.password, r.is_super_admin, r.can_create_boards, &locale)
         .await
         .map_err(|e| match e {
-            AppError::Conflict(_) => AppError::Conflict("username_taken"),
+            AppError::Conflict("already_exists") => AppError::Conflict("username_taken"),
             e => e,
         })?;
     Ok(Json(u))
@@ -110,17 +124,22 @@ pub async fn update_user(
     if id == me.id && (r.is_super_admin == Some(false) || r.is_active == Some(false)) {
         return Err(AppError::BadRequest("cannot_demote_self"));
     }
+    let email = crate::auth::normalize_email(r.email.clone())?;
+    if let Some(Some(e)) = &email {
+        crate::auth::ensure_email_free(&state.db, e, Some(id)).await?;
+    }
     let user: User = sqlx::query_as(sqlf!(
-        "UPDATE users SET display_name = COALESCE($2, display_name), email = COALESCE($3, email),
+        "UPDATE users SET display_name = COALESCE($2, display_name), email = CASE WHEN $7 THEN $3 ELSE email END,
          is_super_admin = COALESCE($4, is_super_admin), can_create_boards = COALESCE($5, can_create_boards),
          is_active = COALESCE($6, is_active), updated_at = now() WHERE id = $1 RETURNING {USER_COLUMNS}"
     ))
     .bind(id)
     .bind(r.display_name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
-    .bind(r.email.map(|s| s.trim().to_string()))
+    .bind(email.clone().flatten())
     .bind(r.is_super_admin)
     .bind(r.can_create_boards)
     .bind(r.is_active)
+    .bind(email.is_some())
     .fetch_one(&state.db)
     .await?;
     if !user.is_active {

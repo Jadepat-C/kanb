@@ -53,7 +53,7 @@ pub async fn search(
 
     // boards the user can see
     let visible = "SELECT b.id FROM boards b WHERE b.archived_at IS NULL AND
-        ($1 OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id = b.id AND m.user_id = $2))";
+        (($1 AND NOT b.is_tutorial) OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id = b.id AND m.user_id = $2))";
 
     let boards: Vec<BoardHit> = if q.board_id.is_some() {
         vec![]
@@ -76,7 +76,7 @@ pub async fn search(
                  THEN substr(c.description, greatest(strpos(lower(c.description), $3) - 40, 1), 120)
                  ELSE left(c.description, 120) END AS snippet
          FROM cards c JOIN boards b ON b.id = c.board_id JOIN lists l ON l.id = c.list_id
-         WHERE c.archived_at IS NULL AND c.board_id IN ({visible})
+         WHERE c.archived_at IS NULL AND l.archived_at IS NULL AND c.board_id IN ({visible})
            AND ($4::uuid IS NULL OR c.board_id = $4)
            AND (strpos(lower(c.title), $3) > 0 OR strpos(lower(c.description), $3) > 0 OR c.number = $5)
          ORDER BY (c.number = $5) DESC NULLS LAST, (strpos(lower(c.title), $3) > 0) DESC, c.updated_at DESC

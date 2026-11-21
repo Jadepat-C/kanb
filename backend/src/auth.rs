@@ -63,6 +63,33 @@ pub fn validate_password(p: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Request field semantics: absent = leave unchanged, "" = remove the email, otherwise a validated address.
+pub fn normalize_email(e: Option<String>) -> AppResult<Option<Option<String>>> {
+    let Some(e) = e else { return Ok(None) };
+    let e = e.trim().to_string();
+    if e.is_empty() {
+        return Ok(Some(None));
+    }
+    let valid = e.len() <= 254
+        && !e.chars().any(char::is_whitespace)
+        && matches!(e.split_once('@'), Some((local, domain)) if !local.is_empty() && !domain.contains('@')
+            && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.'));
+    if !valid {
+        return Err(AppError::BadRequest("invalid_email"));
+    }
+    Ok(Some(Some(e)))
+}
+
+/// Emails sign people in, so they must be unique (case-insensitive).
+pub async fn ensure_email_free(db: &sqlx::PgPool, email: &str, except: Option<Uuid>) -> AppResult<()> {
+    let taken: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE lower(email) = lower($1) AND ($2::uuid IS NULL OR id <> $2)")
+        .bind(email)
+        .bind(except)
+        .fetch_optional(db)
+        .await?;
+    if taken.is_some() { Err(AppError::Conflict("email_taken")) } else { Ok(()) }
+}
+
 fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
@@ -154,6 +181,7 @@ fn origin_ok(headers: &HeaderMap, allowed: &[String]) -> bool {
 
 #[derive(Deserialize)]
 pub struct LoginReq {
+    /// username or email address
     username: String,
     password: String,
 }
@@ -165,7 +193,11 @@ pub async fn login(
     Json(req): Json<LoginReq>,
 ) -> AppResult<(CookieJar, Json<User>)> {
     let row: Option<(Uuid, Option<String>, bool)> =
-        sqlx::query_as("SELECT id, password_hash, is_active FROM users WHERE lower(username) = lower($1)")
+        // usernames can't contain '@', so anything with '@' is looked up as an email
+        sqlx::query_as(
+            "SELECT id, password_hash, is_active FROM users
+             WHERE CASE WHEN strpos($1, '@') > 0 THEN lower(email) = lower($1) ELSE lower(username) = lower($1) END",
+        )
             .bind(req.username.trim())
             .fetch_optional(&state.db)
             .await?;
@@ -261,17 +293,22 @@ pub async fn update_me(
     {
         return Err(AppError::BadRequest("name_required"));
     }
+    let email = normalize_email(req.email.clone())?;
+    if let Some(Some(e)) = &email {
+        ensure_email_free(&state.db, e, Some(u.id)).await?;
+    }
     let user: User = sqlx::query_as(sqlf!(
-        "UPDATE users SET display_name = COALESCE($2, display_name), email = COALESCE($3, email), \
+        "UPDATE users SET display_name = COALESCE($2, display_name), email = CASE WHEN $7 THEN $3 ELSE email END, \
          locale = COALESCE($4, locale), theme = COALESCE($5, theme), avatar_color = COALESCE($6, avatar_color), \
          updated_at = now() WHERE id = $1 RETURNING {USER_COLUMNS}"
     ))
     .bind(u.id)
     .bind(req.display_name.map(|s| s.trim().to_string()))
-    .bind(req.email.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+    .bind(email.clone().flatten())
     .bind(req.locale)
     .bind(req.theme)
     .bind(req.avatar_color)
+    .bind(email.is_some())
     .fetch_one(&state.db)
     .await?;
     Ok(Json(user))

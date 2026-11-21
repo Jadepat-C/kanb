@@ -16,12 +16,13 @@ import {
   Quote,
   SquareCode,
   Strikethrough,
+  Table,
 } from 'lucide-react'
 import { forwardRef, useEffect, useImperativeHandle, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { fileUrl } from '../../lib/api'
 import { toast, toastError } from '../toast'
-import { livePreview, readOnlyLinks } from './livePreview'
+import { livePreview, liveTables, readOnlyLinks } from './livePreview'
 
 export type Uploader = (file: File, inline: boolean, onProgress: (pct: number) => void) => Promise<{ id: string; filename: string }>
 
@@ -100,6 +101,19 @@ function insertBlock(view: EditorView, text: string, cursorOffset: number) {
     changes: { from: r.from, to: r.to, insert: lead + body },
     selection: { anchor: r.from + lead.length + cursorOffset + sel.length },
   })
+  view.focus()
+  return true
+}
+
+/** Inserts a 2×1 table on its own lines and selects the first header so typing replaces it. */
+function insertTable(view: EditorView, h1: string, h2: string) {
+  const r = view.state.selection.main
+  const line = view.state.doc.lineAt(r.head)
+  const at = line.text.trim() ? line.to : line.from
+  const lead = line.text.trim() ? '\n\n' : at > 0 && view.state.doc.lineAt(at - 1).text.trim() ? '\n' : ''
+  const table = `| ${h1} | ${h2} |\n| --- | --- |\n|  |  |\n`
+  const start = at + lead.length + 2
+  view.dispatch({ changes: { from: at, insert: lead + table }, selection: { anchor: start, head: start + h1.length } })
   view.focus()
   return true
 }
@@ -198,6 +212,7 @@ export const LiveEditor = forwardRef<
           EditorView.lineWrapping,
           markdown({ base: markdownLanguage }), // GFM; Enter continues lists, Backspace removes markers
           livePreview,
+          liveTables,
           readOnlyLinks,
           cmPlaceholder(props.placeholder ?? ''),
           roCompartment.current.of([EditorState.readOnly.of(!!props.readOnly), EditorView.editable.of(!props.readOnly)]),
@@ -269,6 +284,12 @@ export const LiveEditor = forwardRef<
     { icon: <Quote size={15} />, title: t('editor.quote'), run: run((v) => prefix(v, '> ')) },
     { icon: <SquareCode size={15} />, title: t('editor.codeBlock'), run: run((v) => insertBlock(v, '```\n$SEL\n```\n', 4)) },
     { icon: <Minus size={15} />, title: t('editor.rule'), run: run((v) => insertBlock(v, '\n---\n', 5)) },
+    {
+      icon: <Table size={15} />,
+      title: t('editor.table'),
+      // cursor lands in the first header cell; the table renders once you click outside it
+      run: run((v) => insertTable(v, `${t('editor.column')} 1`, `${t('editor.column')} 2`)),
+    },
   ]
 
   return (

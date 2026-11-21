@@ -3,6 +3,7 @@ import { StrictMode, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, Navigate, RouterProvider, useLocation } from 'react-router'
 import { Layout } from './components/Layout'
+import { DialogHost } from './components/dialogs'
 import { Toaster } from './components/toast'
 import { Spinner } from './components/ui'
 import './index.css'
@@ -58,6 +59,7 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
       <Toaster />
+      <DialogHost />
     </QueryClientProvider>
   </StrictMode>,
 )

@@ -4,7 +4,7 @@
  * The document itself is always plain Markdown.
  */
 import { syntaxTree } from '@codemirror/language'
-import { Facet, type Range } from '@codemirror/state'
+import { EditorState, Facet, StateEffect, StateField, type Range } from '@codemirror/state'
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from '@codemirror/view'
 
 class CheckboxWidget extends WidgetType {
@@ -287,3 +287,178 @@ export const readOnlyLinks = EditorView.domEventHandlers({
   },
 })
 
+
+// ---------- tables ----------
+// A rendered table spans several lines, and CodeMirror only accepts such (block) replacements from a
+// StateField, not from a view plugin. The field also needs to know whether the editor has focus.
+
+const setFocus = StateEffect.define<boolean>()
+const focusField = StateField.define<boolean>({
+  create: () => false,
+  update(v, tr) {
+    for (const e of tr.effects) if (e.is(setFocus)) v = e.value
+    return v
+  },
+})
+
+/** Split a table row on unescaped pipes that aren't inside `code`. */
+function splitRow(line: string): string[] {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
+  const cells: string[] = []
+  let cur = ''
+  let code = false
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (ch === '\\' && s[i + 1] === '|') {
+      cur += '|'
+      i++
+    } else if (ch === '`') {
+      code = !code
+      cur += ch
+    } else if (ch === '|' && !code) {
+      cells.push(cur.trim())
+      cur = ''
+    } else cur += ch
+  }
+  cells.push(cur.trim())
+  return cells
+}
+
+const SAFE_URL = /^(https?:|mailto:|\/)/i
+const INLINE =
+  /(`[^`]+`)|(!\[[^\]]*\]\([^)\s]+\))|(\[[^\]]+\]\([^)\s]+\))|(\*\*[^*]+\*\*|__[^_]+__)|(~~[^~]+~~)|(\*[^*\s][^*]*\*|_[^_\s][^_]*_)/
+
+/** Minimal inline Markdown for table cells, built as DOM nodes (never innerHTML). */
+function renderInline(text: string, parent: HTMLElement) {
+  let rest = text
+  while (rest) {
+    const m = INLINE.exec(rest)
+    if (!m) {
+      parent.append(rest)
+      break
+    }
+    if (m.index > 0) parent.append(rest.slice(0, m.index))
+    const tok = m[0]
+    if (m[1]) {
+      const c = document.createElement('code')
+      c.className = 'cm-lp-code'
+      c.textContent = tok.slice(1, -1)
+      parent.append(c)
+    } else if (m[2]) {
+      const [, alt, url] = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(tok)!
+      if (/^(\/api\/files\/|https?:\/\/)/.test(url)) {
+        const img = document.createElement('img')
+        img.src = url
+        img.alt = alt
+        img.className = 'cm-lp-tableimg'
+        parent.append(img)
+      } else parent.append(alt)
+    } else if (m[3]) {
+      const [, label, url] = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(tok)!
+      const a = document.createElement('span')
+      a.className = 'cm-lp-link'
+      if (SAFE_URL.test(url)) {
+        a.dataset.href = url
+        a.title = `${url} — Ctrl+click`
+      }
+      renderInline(label, a)
+      parent.append(a)
+    } else {
+      const el = document.createElement(m[4] ? 'strong' : m[5] ? 's' : 'em')
+      renderInline(tok.slice(m[4] || m[5] ? 2 : 1, m[4] || m[5] ? -2 : -1), el)
+      parent.append(el)
+    }
+    rest = rest.slice(m.index + tok.length)
+  }
+}
+
+class TableWidget extends WidgetType {
+  readonly source: string
+  constructor(source: string) {
+    super()
+    this.source = source
+  }
+  eq(o: TableWidget) {
+    return o.source === this.source
+  }
+  toDOM(view: EditorView) {
+    const lines = this.source.split('\n').filter((l) => l.trim())
+    const head = splitRow(lines[0] ?? '')
+    const align = splitRow(lines[1] ?? '').map((c) =>
+      c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : c.startsWith(':') ? 'left' : '',
+    )
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-lp-tablewrap'
+    const table = document.createElement('table')
+    table.className = 'cm-lp-tablerender'
+    const thead = table.createTHead().insertRow()
+    head.forEach((h, i) => {
+      const th = document.createElement('th')
+      if (align[i]) th.style.textAlign = align[i]
+      renderInline(h, th)
+      thead.append(th)
+    })
+    const tbody = table.createTBody()
+    for (const line of lines.slice(2)) {
+      const tr = tbody.insertRow()
+      const cells = splitRow(line)
+      head.forEach((_, i) => {
+        const td = tr.insertCell()
+        if (align[i]) td.style.textAlign = align[i]
+        renderInline(cells[i] ?? '', td)
+      })
+    }
+    wrap.append(table)
+    // click → edit the Markdown source (Ctrl+click on a link opens it instead)
+    wrap.addEventListener('mousedown', (e) => {
+      const link = (e.target as HTMLElement).closest('[data-href]') as HTMLElement | null
+      if (link && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        window.open(link.dataset.href, '_blank', 'noopener')
+        return
+      }
+      if (view.state.readOnly) return
+      e.preventDefault()
+      const pos = view.posAtDOM(wrap)
+      view.dispatch({ selection: { anchor: pos } })
+      view.focus()
+    })
+    return wrap
+  }
+  ignoreEvent() {
+    return true
+  }
+}
+
+function tableDecorations(state: EditorState): DecorationSet {
+  const focused = state.field(focusField)
+  const sel = state.selection.ranges
+  const out: Range<Decoration>[] = []
+  syntaxTree(state).iterate({
+    enter: (node) => {
+      if (node.name !== 'Table') return
+      const from = state.doc.lineAt(node.from).from
+      const to = state.doc.lineAt(node.to).to
+      const editing = focused && sel.some((r) => r.from <= to && r.to >= from)
+      if (!editing) out.push(Decoration.replace({ widget: new TableWidget(state.sliceDoc(from, to)), block: true }).range(from, to))
+      return false
+    },
+  })
+  return Decoration.set(out, true)
+}
+
+const tableField = StateField.define<DecorationSet>({
+  create: tableDecorations,
+  update(deco, tr) {
+    if (tr.docChanged || tr.selection || tr.effects.some((e) => e.is(setFocus)) || syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
+      return tableDecorations(tr.state)
+    }
+    return deco
+  },
+  provide: (f) => EditorView.decorations.from(f),
+})
+
+/** GFM tables render as real tables; the Markdown source shows while the cursor is inside the table. */
+export const liveTables = [focusField, EditorView.focusChangeEffect.of((_s, focusing) => setFocus.of(focusing)), tableField]

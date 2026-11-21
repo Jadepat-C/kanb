@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Plus, Search, Trash2 } from 'lucide-react'
+import { ConfirmDialog } from './ConfirmDialog'
+import { ask } from './dialogs'
+import { fmtRelative } from '../lib/prefs'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
@@ -11,7 +14,7 @@ import type { Role, UserBrief } from '../lib/types'
 import { toast, toastError } from './toast'
 import { Avatar, Button, ColorPicker, Dialog, Field, Input } from './ui'
 
-type Tab = 'general' | 'members' | 'roles' | 'statuses' | 'labels'
+type Tab = 'general' | 'members' | 'roles' | 'statuses' | 'labels' | 'archive'
 
 export function BoardSettings({
   open,
@@ -31,7 +34,7 @@ export function BoardSettings({
     <Dialog open={open} onOpenChange={onOpenChange} title={t('settings.title')} wide>
       <div className="flex flex-col sm:flex-row">
         <nav className="flex gap-1 border-b border-line p-2 sm:w-48 sm:flex-col sm:border-b-0 sm:border-r">
-          {(['general', 'members', 'roles', 'statuses', 'labels'] as Tab[]).map((k) => (
+          {(['general', 'members', 'roles', 'statuses', 'labels', 'archive'] as Tab[]).map((k) => (
             <button
               key={k}
               onClick={() => setTab(k)}
@@ -50,6 +53,7 @@ export function BoardSettings({
           {tab === 'roles' && <Roles b={b} boardId={boardId} />}
           {tab === 'statuses' && <Statuses b={b} boardId={boardId} />}
           {tab === 'labels' && <Labels b={b} boardId={boardId} />}
+          {tab === 'archive' && <ArchivedCards b={b} boardId={boardId} />}
         </div>
       </div>
     </Dialog>
@@ -78,11 +82,9 @@ function General({ b, boardId, onClose }: { b: BoardHelpers; boardId: string; on
     onSuccess: () => (refresh(), toast(t('common.saved'))),
     onError: toastError,
   })
-  const del = useMutation({
-    mutationFn: () => api.del(`/boards/${boardId}`),
-    onSuccess: () => (refresh(), onClose(), nav('/')),
-    onError: toastError,
-  })
+  const [confirm, setConfirm] = useState<'archive' | 'purge' | null>(null)
+  const archive = () => api.del(`/boards/${boardId}`).then(() => (refresh(), onClose(), nav('/')), toastError)
+  const purge = () => api.del(`/boards/${boardId}/permanent`).then(() => (refresh(), onClose(), nav('/')), toastError)
   return (
     <div className="max-w-md space-y-4">
       <Field label={t('common.name')}>
@@ -106,11 +108,37 @@ function General({ b, boardId, onClose }: { b: BoardHelpers; boardId: string; on
         </Button>
       )}
       {b.can('board.delete') && (
-        <div className="border-t border-line pt-4">
-          <Button variant="danger" onClick={() => confirm(t('settings.deleteBoardConfirm')) && del.mutate()}>
-            <Trash2 size={14} /> {t('settings.deleteBoard')}
-          </Button>
+        <div className="space-y-2 border-t border-line pt-4">
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => setConfirm('archive')}>
+              <Archive size={14} /> {t('archive.archiveBoard')}
+            </Button>
+            <Button variant="danger" onClick={() => setConfirm('purge')}>
+              <Trash2 size={14} /> {t('archive.deleteForever')}
+            </Button>
+          </div>
+          <p className="text-xs text-muted">{t('archive.archiveVsDelete')}</p>
         </div>
+      )}
+      {confirm === 'archive' && (
+        <ConfirmDialog
+          title={t('archive.archiveBoard')}
+          message={t('archive.archiveBoardMsg', { name: board.name })}
+          confirmLabel={t('archive.archiveBoard')}
+          danger={false}
+          onConfirm={archive}
+          onClose={() => setConfirm(null)}
+        />
+      )}
+      {confirm === 'purge' && (
+        <ConfirmDialog
+          title={t('archive.deleteForever')}
+          message={t('archive.purgeBoardMsg', { name: board.name, cards: b.data!.cards.length })}
+          confirmLabel={t('archive.deleteForever')}
+          typeToConfirm="Delete"
+          onConfirm={purge}
+          onClose={() => setConfirm(null)}
+        />
       )}
     </div>
   )
@@ -170,7 +198,7 @@ function Members({ b, boardId }: { b: BoardHelpers; boardId: string }) {
             {(can || m.user_id === me?.id) && (
               <button
                 title={m.user_id === me?.id ? t('settings.leave') : t('common.remove')}
-                onClick={() => confirm(t('common.confirmDelete')) && remove.mutate(m.user_id)}
+                onClick={async () => (await ask({ title: m.user_id === me?.id ? t('settings.leave') : t('common.remove'), message: t('settings.removeMemberMsg', { name: m.display_name }), confirmLabel: m.user_id === me?.id ? t('settings.leave') : t('common.remove'), danger: true })) && remove.mutate(m.user_id)}
                 className="rounded p-1.5 text-muted hover:bg-red-500/10 hover:text-red-600 cursor-pointer"
               >
                 <Trash2 size={15} />
@@ -239,7 +267,7 @@ function Roles({ b, boardId }: { b: BoardHelpers; boardId: string }) {
                   <div className="flex items-center justify-center gap-1">
                     {r.name}
                     {can && !r.is_owner && (
-                      <button onClick={() => confirm(t('common.confirmDelete')) && del.mutate(r.id)} className="text-muted hover:text-red-600 cursor-pointer">
+                      <button onClick={async () => (await ask({ title: t('common.delete'), message: t('settings.deleteRoleMsg', { name: r.name }), confirmLabel: t('common.delete'), danger: true })) && del.mutate(r.id)} className="text-muted hover:text-red-600 cursor-pointer">
                         <Trash2 size={12} />
                       </button>
                     )}
@@ -338,7 +366,7 @@ function Labels({ b, boardId }: { b: BoardHelpers; boardId: string }) {
                     </option>
                   ))}
                 </select>
-                <button onClick={() => confirm(t('common.confirmDelete')) && del.mutate(l.id)} className="rounded p-1.5 text-muted hover:text-red-600 cursor-pointer">
+                <button onClick={async () => (await ask({ title: t('common.delete'), message: t('settings.deleteLabelMsg', { name: l.name }), confirmLabel: t('common.delete'), danger: true })) && del.mutate(l.id)} className="rounded p-1.5 text-muted hover:text-red-600 cursor-pointer">
                   <Trash2 size={15} />
                 </button>
               </>
@@ -419,7 +447,7 @@ function Statuses({ b, boardId }: { b: BoardHelpers; boardId: string }) {
                 <button disabled={i === list.length - 1} onClick={() => update.mutate({ id: st.id, index: i + 1 })} className="rounded p-1.5 text-muted enabled:hover:bg-black/5 disabled:opacity-30 enabled:cursor-pointer dark:enabled:hover:bg-white/10">
                   <ArrowDown size={15} />
                 </button>
-                <button onClick={() => confirm(t('common.confirmDelete')) && del.mutate(st.id)} className="rounded p-1.5 text-muted hover:text-red-600 cursor-pointer">
+                <button onClick={async () => (await ask({ title: t('common.delete'), message: t('settings.deleteStatusMsg', { name: st.name }), confirmLabel: t('common.delete'), danger: true })) && del.mutate(st.id)} className="rounded p-1.5 text-muted hover:text-red-600 cursor-pointer">
                   <Trash2 size={15} />
                 </button>
               </>
@@ -441,6 +469,146 @@ function Statuses({ b, boardId }: { b: BoardHelpers; boardId: string }) {
             <Plus size={14} /> {t('common.create')}
           </Button>
         </form>
+      )}
+    </div>
+  )
+}
+
+interface ArchivedCard {
+  id: string
+  number: number
+  title: string
+  list_name: string
+  archived_at: string
+  archived_by: string | null
+}
+
+function ArchivedCards({ b, boardId }: { b: BoardHelpers; boardId: string }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const [q, setQ] = useState('')
+  const [purging, setPurging] = useState<ArchivedCard | null>(null)
+  const list = useQuery({ queryKey: ['archived-cards', boardId], queryFn: () => api.get<ArchivedCard[]>(`/boards/${boardId}/archived-cards`) })
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['archived-cards', boardId] })
+    qc.invalidateQueries({ queryKey: ['board', boardId] })
+  }
+  const restore = useMutation({ mutationFn: (id: string) => api.post(`/cards/${id}/restore`), onSuccess: () => (refresh(), toast(t('toast.restored'), 'success')), onError: toastError })
+  const can = b.can('cards.delete')
+  const f = q.trim().toLowerCase().replace(/^#/, '')
+  const items = (list.data ?? []).filter((c) => !f || `${c.title} ${c.number} ${c.list_name}`.toLowerCase().includes(f))
+  return (
+    <div className="space-y-3">
+      <ArchivedColumns b={b} boardId={boardId} />
+      <h3 className="pt-2 text-sm font-semibold">{t('archive.cards')}</h3>
+      <p className="text-xs text-muted">{t('archive.cardsHint')}</p>
+      <div className="relative max-w-xs">
+        <Search size={14} className="absolute left-2.5 top-2.5 text-muted" />
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('search.filterCards')} className="h-8 pl-8" />
+      </div>
+      {list.data && items.length === 0 && <p className="text-sm text-muted">{t('archive.noCards')}</p>}
+      <div className="divide-y divide-[var(--border)] rounded-lg border border-line">
+        {items.map((c) => (
+          <div key={c.id} className="flex items-center gap-3 px-3 py-2">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm">
+                <span className="text-muted">#{c.number}</span> {c.title}
+              </div>
+              <div className="text-xs text-muted">
+                {c.list_name} · {t('archive.archivedAgo', { when: fmtRelative(c.archived_at) })}
+                {c.archived_by && ` · ${c.archived_by}`}
+              </div>
+            </div>
+            {can && (
+              <>
+                <Button size="sm" onClick={() => restore.mutate(c.id)}>
+                  <ArchiveRestore size={13} /> {t('archive.restore')}
+                </Button>
+                <Button size="sm" variant="danger" onClick={() => setPurging(c)} title={t('archive.deleteForever')}>
+                  <Trash2 size={13} />
+                </Button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      {purging && (
+        <ConfirmDialog
+          title={t('archive.deleteForever')}
+          message={t('archive.purgeCardMsg', { title: `#${purging.number} ${purging.title}` })}
+          confirmLabel={t('archive.deleteForever')}
+          onConfirm={() => api.del(`/cards/${purging.id}/permanent`).then(() => (refresh(), toast(t('toast.deleted'), 'success')), toastError)}
+          onClose={() => setPurging(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+interface ArchivedList {
+  id: string
+  name: string
+  card_count: number
+  archived_at: string
+}
+
+function ArchivedColumns({ b, boardId }: { b: BoardHelpers; boardId: string }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const list = useQuery({ queryKey: ['archived-lists', boardId], queryFn: () => api.get<ArchivedList[]>(`/boards/${boardId}/archived-lists`) })
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['archived-lists', boardId] })
+    qc.invalidateQueries({ queryKey: ['board', boardId] })
+  }
+  const run = useMutation({
+    mutationFn: (p: { f: () => Promise<unknown>; msg: string }) => p.f(),
+    onSuccess: (_, p) => (refresh(), toast(p.msg, 'success')),
+    onError: toastError,
+  })
+  const can = b.can('lists.manage')
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold">{t('archive.columns')}</h3>
+      {list.data && list.data.length === 0 && <p className="text-sm text-muted">{t('archive.noColumns')}</p>}
+      {!!list.data?.length && (
+        <div className="divide-y divide-[var(--border)] rounded-lg border border-line">
+          {list.data.map((l) => (
+            <div key={l.id} className="flex items-center gap-3 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{l.name}</div>
+                <div className="text-xs text-muted">
+                  {t('boards.cards', { count: l.card_count })} · {t('archive.archivedAgo', { when: fmtRelative(l.archived_at) })}
+                </div>
+              </div>
+              {can && (
+                <>
+                  <Button size="sm" onClick={() => run.mutate({ f: () => api.post(`/lists/${l.id}/restore`), msg: t('toast.restored') })}>
+                    <ArchiveRestore size={13} /> {t('archive.restore')}
+                  </Button>
+                  {(l.card_count === 0 || b.can('cards.delete')) && (
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      title={t('archive.deleteForever')}
+                      onClick={async () => {
+                        const ok = await ask({
+                          title: t('board.deleteList'),
+                          message: l.card_count ? t('column.deleteMsg', { name: l.name, count: l.card_count }) : t('column.deleteEmptyMsg', { name: l.name }),
+                          confirmLabel: t('archive.deleteForever'),
+                          danger: true,
+                          typeToConfirm: l.card_count ? 'Delete' : undefined,
+                        })
+                        if (ok) run.mutate({ f: () => api.del(`/lists/${l.id}`), msg: t('toast.deleted') })
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   )

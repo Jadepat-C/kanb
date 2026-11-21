@@ -248,3 +248,66 @@ pub async fn delete_attachment(
     state.hub.notify(board_id, "attachment", card_id, u.id);
     Ok(Json(json!({ "ok": true })))
 }
+
+// ---------- permanent deletion helpers ----------
+
+/// Best-effort removal of stored objects after their rows are gone (a failure only leaves an orphan file).
+pub async fn delete_objects(store: &Arc<dyn ObjectStore>, keys: Vec<String>) {
+    for key in keys {
+        match store.delete(&ObjPath::from(key.as_str())).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+            Err(e) => tracing::warn!(error = %e, %key, "object delete failed"),
+        }
+    }
+}
+
+/// Deletes every object under `boards/<id>/` (catches anything not tracked in the database too).
+pub async fn delete_board_objects(store: &Arc<dyn ObjectStore>, board_id: Uuid) -> usize {
+    let prefix = ObjPath::from(format!("boards/{board_id}"));
+    let keys: Vec<String> = match store.list(Some(&prefix)).map_ok(|m| m.location.to_string()).try_collect().await {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::warn!(error = %e, %board_id, "listing board objects failed");
+            return 0;
+        }
+    };
+    let n = keys.len();
+    delete_objects(store, keys).await;
+    n
+}
+
+/// Permanently deletes a card and its comments/log/attachments, inside `tx`.
+/// Returns the object keys to delete once the transaction commits. Images that another card or
+/// comment on the board still references (e.g. after "Duplicate") are kept and detached instead.
+pub async fn purge_card_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    card_id: Uuid,
+    board_id: Uuid,
+) -> AppResult<Vec<String>> {
+    let atts: Vec<(Uuid, String)> = sqlx::query_as("SELECT id, object_key FROM attachments WHERE card_id = $1")
+        .bind(card_id)
+        .fetch_all(&mut **tx)
+        .await?;
+    let mut keys = Vec::new();
+    for (aid, key) in atts {
+        let needle = aid.to_string();
+        let (used,): (bool,) = sqlx::query_as(
+            "SELECT EXISTS (SELECT 1 FROM cards WHERE board_id = $1 AND id <> $2 AND strpos(description, $3) > 0)
+                 OR EXISTS (SELECT 1 FROM comments cm JOIN cards c ON c.id = cm.card_id
+                            WHERE c.board_id = $1 AND cm.card_id <> $2 AND strpos(cm.body, $3) > 0)",
+        )
+        .bind(board_id)
+        .bind(card_id)
+        .bind(&needle)
+        .fetch_one(&mut **tx)
+        .await?;
+        if used {
+            sqlx::query("UPDATE attachments SET card_id = NULL WHERE id = $1").bind(aid).execute(&mut **tx).await?;
+        } else {
+            keys.push(key);
+        }
+    }
+    // comments, events, labels, assignees and attachment rows go with the card (ON DELETE CASCADE)
+    sqlx::query("DELETE FROM cards WHERE id = $1").bind(card_id).execute(&mut **tx).await?;
+    Ok(keys)
+}

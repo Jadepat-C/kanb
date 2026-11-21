@@ -158,6 +158,12 @@ body {
 .cm-lp-fence { color: var(--muted); }
 .cm-lp-lang { float: right; font-size: 0.8em; color: var(--muted); font-family: var(--font-sans); }
 .cm-lp-table { font-family: ui-monospace, 'IBM Plex Mono', monospace; font-size: 0.88em; }
+.cm-lp-tablewrap { overflow-x: auto; margin: 4px 0; cursor: text; }
+.cm-lp-tablerender { border-collapse: collapse; font-size: 0.95em; }
+.cm-lp-tablerender th, .cm-lp-tablerender td { border: 1px solid var(--border); padding: 4px 10px; vertical-align: top; }
+.cm-lp-tablerender th { background: color-mix(in srgb, var(--text) 5%, transparent); font-weight: 600; text-align: left; }
+.cm-lp-tablerender tr:nth-child(even) td { background: color-mix(in srgb, var(--text) 2%, transparent); }
+.cm-lp-tableimg { max-height: 120px; border-radius: 4px; display: inline-block; }
 .cm-lp-bullet { color: var(--muted); display: inline-block; width: 0.9em; }
 .cm-lp-hr {
   display: inline-block;
@@ -191,3 +197,8 @@ body {
 /* pptx-preview: show all slides stacked (its wrapper is a fixed-height black box by default) */
 .pptx-host .pptx-preview-wrapper { height: auto !important; overflow: visible !important; background: transparent !important; }
 .pptx-host .pptx-preview-slide-wrapper { margin: 0 auto 16px !important; box-shadow: 0 1px 6px rgb(0 0 0 / 0.25); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}

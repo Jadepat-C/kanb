@@ -65,7 +65,7 @@ export function Login() {
             <p className="text-sm text-muted">{t('auth.welcome')}</p>
           </div>
         </div>
-        <Field label={t('auth.username')}>
+        <Field label={t('auth.usernameOrEmail')}>
           <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" required />
         </Field>
         <Field label={t('auth.password')}>

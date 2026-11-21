@@ -84,15 +84,25 @@ impl BoardAccess {
 
 /// Returns NotFound (not Forbidden) for boards the user cannot see, so board ids don't leak.
 pub async fn board_access(db: &PgPool, user: &User, board_id: Uuid) -> AppResult<BoardAccess> {
+    access(db, user, board_id, false).await
+}
+
+/// Same as [`board_access`] but also for archived boards (restore / permanent delete / archive view).
+pub async fn board_access_incl_archived(db: &PgPool, user: &User, board_id: Uuid) -> AppResult<BoardAccess> {
+    access(db, user, board_id, true).await
+}
+
+async fn access(db: &PgPool, user: &User, board_id: Uuid, include_archived: bool) -> AppResult<BoardAccess> {
     let row: Option<(Option<Uuid>, Option<Vec<String>>, Option<bool>)> = sqlx::query_as(
         "SELECT m.role_id, r.permissions, r.is_owner
          FROM boards b
          LEFT JOIN board_members m ON m.board_id = b.id AND m.user_id = $2
          LEFT JOIN board_roles r ON r.id = m.role_id
-         WHERE b.id = $1 AND b.archived_at IS NULL",
+         WHERE b.id = $1 AND ($3 OR b.archived_at IS NULL)",
     )
     .bind(board_id)
     .bind(user.id)
+    .bind(include_archived)
     .fetch_optional(db)
     .await?;
     let (role_id, perms, is_owner) = row.ok_or(AppError::NotFound)?;
@@ -106,6 +116,15 @@ pub async fn board_access(db: &PgPool, user: &User, board_id: Uuid) -> AppResult
 }
 
 pub async fn board_of_list(db: &PgPool, list_id: Uuid) -> AppResult<Uuid> {
+    let (b,): (Uuid,) = sqlx::query_as("SELECT board_id FROM lists WHERE id = $1 AND archived_at IS NULL")
+        .bind(list_id)
+        .fetch_one(db)
+        .await?;
+    Ok(b)
+}
+
+/// Board of a column, including archived columns (archive view: restore / delete).
+pub async fn board_of_list_any(db: &PgPool, list_id: Uuid) -> AppResult<Uuid> {
     let (b,): (Uuid,) = sqlx::query_as("SELECT board_id FROM lists WHERE id = $1").bind(list_id).fetch_one(db).await?;
     Ok(b)
 }
@@ -115,5 +134,11 @@ pub async fn board_of_card(db: &PgPool, card_id: Uuid) -> AppResult<Uuid> {
         .bind(card_id)
         .fetch_one(db)
         .await?;
+    Ok(b)
+}
+
+/// Board of a card, including archived cards (for restore / permanent delete).
+pub async fn board_of_card_any(db: &PgPool, card_id: Uuid) -> AppResult<Uuid> {
+    let (b,): (Uuid,) = sqlx::query_as("SELECT board_id FROM cards WHERE id = $1").bind(card_id).fetch_one(db).await?;
     Ok(b)
 }

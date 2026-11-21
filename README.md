@@ -12,6 +12,7 @@ A self-hosted Kanban board for **one organization**: no public sign-up. Accounts
 
 ## Features
 
+- **Sign in with username or email.** Emails are unique (case-insensitive) and validated. Users set theirs in Profile, or a super admin sets it in Users → Edit.
 - **Roles.** *Super admin* sees and manages every board and all users. *Board roles* are per board and fully customizable: Owner / Admin / Editor / Commenter / Viewer are seeded, and you can add your own from a permission matrix (13 permissions).
 - **Cards are Markdown, edited Obsidian-style.** Live preview renders headings, bold/italic/strike, code, links, images, quotes, lists, checkboxes and dividers in place. An element's raw syntax shows only while the cursor is in it. There's a formatting toolbar, and Ctrl+B / I / E / K work. **Paste or drop images**: they upload and become `![](/api/files/…)`. Other dropped files are attached with a link. `- [ ]` items double as the card's checklist progress.
 - **Autosave** for descriptions: 1.2 s after you stop typing, on blur, and on close. A burst of edits by one person within 10 minutes becomes **one** "updated the description" log entry.
@@ -28,9 +29,21 @@ A self-hosted Kanban board for **one organization**: no public sign-up. Accounts
 - **Drag and drop** cards between columns, and reorder columns by their grip handle. **Sort a column** (priority, due date, newest/oldest, recently updated, title, number) from its ⋯ menu. This is a one-off reorder; you can keep dragging afterwards. Positions use fractional indexing, so one move rewrites one row.
 - **Realtime.** Other people's changes appear live over a WebSocket per board.
 - Labels, assignees, due dates (overdue highlighting), card colours, archive.
+- **Columns can be archived** (hidden with their cards, restorable) **or deleted with everything in them** (cards, comments, files). Deleting a column that still has cards requires typing **Delete**, and so does deleting a board permanently.
+- **No browser pop-ups:** every confirmation and input is an in-app dialog. **Toasts** confirm your own actions, and tell you when someone else changes the board you're viewing ("Somchai updated …"; a burst of edits is collapsed).
+- **Presence:**
+  - The board header shows who else is on the board right now: green dot = viewing, amber = typing.
+  - A card that someone has open shows their avatar, and the open card says who's there and whether they're editing.
+  - It's carried over the same per-board WebSocket.
+- **Boards page:** drag boards to arrange them. The order is saved **per user**, and dragging is paused while a filter is active.
+- **Archive and permanent delete:**
+  - **Archive** hides a card or board but keeps everything. Archived cards are under Board settings → Archive (restore puts a card back at the bottom of its column). Archived boards are on the Boards page → Archived.
+  - **Delete permanently** removes the rows and the stored files in S3. Boards require typing the board name to confirm. Pasted images that another card still references (e.g. a duplicate) are kept. Deleting a column also purges the files of archived cards in it.
+- **Tutorial board:** every new account gets its own "👋 Getting started" board, in the language chosen when the account is created (English or ไทย). It has 11 cards covering every feature. You can add another copy at any time from the Boards page (right-click → *Add tutorial board*).
 - **Right-click menus:**
   - **Cards** (Kanban and both calendars): open, rename, new card, duplicate, copy link / title, move to column, status, priority, due date (today / tomorrow / in a week / clear), labels, assign to me, colour, archive. Only actions you have permission for are shown.
   - **Columns:** new card at top or bottom, fold, sort, rename, WIP limit, delete.
+  - **Boards** (Boards page): open, open in a new tab, copy link, rename, colour, board settings, leave, archive or restore, delete permanently. Right-clicking the page itself gives *New board* and *Add tutorial board*.
 - **Calendar:**
   - Each board has a Board / Calendar switch, and the calendar uses the same filters.
   - There's also a cross-board **Calendar** page with board and "assigned to me" filters.
@@ -66,7 +79,7 @@ Tests: `cargo test` (ordering keys, checklist parsing) · `npx tsc -b` (types).
 
 ```
 kanban serve                                   # default
-kanban create-admin --username NAME [--display-name "..."]   # password from KANBAN_ADMIN_PASSWORD or stdin
+kanban create-admin --username NAME [--display-name "..."] [--locale th]   # password from KANBAN_ADMIN_PASSWORD or stdin
 kanban set-password --username NAME            # also signs that user out everywhere
 ```
 

@@ -39,11 +39,17 @@ pub struct BoardListItem {
     member_count: i64,
     /// [{id, display_name, avatar_color}] of members holding the owner role
     owners: serde_json::Value,
+    archived_at: Option<DateTime<Utc>>,
+    can_manage: bool,
+    can_delete: bool,
 }
 
 #[derive(Deserialize)]
 pub struct BoardsQuery {
     q: Option<String>,
+    /// list archived boards instead of active ones
+    #[serde(default)]
+    archived: bool,
 }
 
 /// Boards visible to the user (super admins see all). `q` filters by name/description (substring; works for Thai).
@@ -52,25 +58,33 @@ pub async fn list_boards(
     CurrentUser(u): CurrentUser,
     Query(q): Query<BoardsQuery>,
 ) -> AppResult<Json<Vec<BoardListItem>>> {
-    let q = q.q.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
     let rows: Vec<BoardListItem> = sqlx::query_as(
         "SELECT b.id, b.name, b.description, b.color, b.updated_at,
                 EXISTS (SELECT 1 FROM board_members m WHERE m.board_id = b.id AND m.user_id = $1) AS is_member,
-                (SELECT count(*) FROM cards c WHERE c.board_id = b.id AND c.archived_at IS NULL) AS card_count,
+                (SELECT count(*) FROM cards c JOIN lists l ON l.id = c.list_id
+                 WHERE c.board_id = b.id AND c.archived_at IS NULL AND l.archived_at IS NULL) AS card_count,
                 (SELECT count(*) FROM board_members m WHERE m.board_id = b.id) AS member_count,
                 COALESCE((SELECT json_agg(json_build_object('id', u.id, 'display_name', u.display_name, 'avatar_color', u.avatar_color)
                                           ORDER BY lower(u.display_name))
                           FROM board_members m JOIN board_roles r ON r.id = m.role_id JOIN users u ON u.id = m.user_id
-                          WHERE m.board_id = b.id AND r.is_owner), '[]'::json) AS owners
+                          WHERE m.board_id = b.id AND r.is_owner), '[]'::json) AS owners,
+                b.archived_at,
+                ($2 OR COALESCE((SELECT r.is_owner OR 'board.manage' = ANY(r.permissions) FROM board_members m
+                                 JOIN board_roles r ON r.id = m.role_id WHERE m.board_id = b.id AND m.user_id = $1), false)) AS can_manage,
+                ($2 OR COALESCE((SELECT r.is_owner OR 'board.delete' = ANY(r.permissions) FROM board_members m
+                                 JOIN board_roles r ON r.id = m.role_id WHERE m.board_id = b.id AND m.user_id = $1), false)) AS can_delete
          FROM boards b
-         WHERE b.archived_at IS NULL
-           AND ($2 OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id = b.id AND m.user_id = $1))
+         LEFT JOIN board_prefs p ON p.board_id = b.id AND p.user_id = $1
+         WHERE (b.archived_at IS NOT NULL) = $4
+           -- super admins see every board except other people's personal tutorial boards
+           AND (($2 AND NOT b.is_tutorial) OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id = b.id AND m.user_id = $1))
            AND ($3::text IS NULL OR strpos(lower(b.name || ' ' || b.description), $3) > 0)
-         ORDER BY b.updated_at DESC",
+         ORDER BY CASE WHEN $4 THEN NULL ELSE p.position END NULLS FIRST, COALESCE(b.archived_at, b.updated_at) DESC",
     )
     .bind(u.id)
     .bind(u.is_super_admin)
-    .bind(q)
+    .bind(q.q.as_ref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()))
+    .bind(q.archived)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(rows))
@@ -99,16 +113,35 @@ pub async fn create_board(
         return Err(AppError::BadRequest("name_required"));
     }
     let mut tx = state.db.begin().await?;
+    let names = r.lists.unwrap_or_else(|| vec!["To Do".into(), "In Progress".into(), "Done".into()]);
+    let (board, _, _) = insert_board(&mut tx, Some(u.id), u.id, &u.locale, name, r.description.trim(), r.color.as_deref(), &names).await?;
+    tx.commit().await?;
+    Ok(Json(board))
+}
+
+/// Creates a board with the default roles, `owner` as Owner, localized default statuses and the given columns.
+/// Returns the board, its column ids and its status ids (both in order).
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_board(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    created_by: Option<Uuid>,
+    owner: Uuid,
+    locale: &str,
+    name: &str,
+    description: &str,
+    color: Option<&str>,
+    lists: &[String],
+) -> AppResult<(Board, Vec<Uuid>, Vec<Uuid>)> {
     let board: Board = sqlx::query_as(
         "INSERT INTO boards (id, name, description, color, created_by) VALUES ($1,$2,$3,COALESCE($4,'#6366f1'),$5)
          RETURNING id, name, description, color, created_at, updated_at",
     )
     .bind(Uuid::now_v7())
     .bind(name)
-    .bind(r.description.trim())
-    .bind(r.color)
-    .bind(u.id)
-    .fetch_one(&mut *tx)
+    .bind(description)
+    .bind(color)
+    .bind(created_by)
+    .fetch_one(&mut **tx)
     .await?;
     let mut owner_role = None;
     for (i, (role_name, is_owner, perms)) in perms::default_roles().into_iter().enumerate() {
@@ -120,7 +153,7 @@ pub async fn create_board(
             .bind(perms)
             .bind(is_owner)
             .bind(i as i32)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         if is_owner {
             owner_role = Some(id);
@@ -128,40 +161,44 @@ pub async fn create_board(
     }
     sqlx::query("INSERT INTO board_members (board_id, user_id, role_id) VALUES ($1,$2,$3)")
         .bind(board.id)
-        .bind(u.id)
+        .bind(owner)
         .bind(owner_role)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    let statuses: [(&str, &str); 3] = if u.locale == "th" {
+    let statuses: [(&str, &str); 3] = if locale == "th" {
         [("ปกติ", "#a1a1aa"), ("ติดปัญหา", "#ef4444"), ("พร้อม", "#22c55e")]
     } else {
         [("Normal", "#a1a1aa"), ("Blocked", "#ef4444"), ("Ready", "#22c55e")]
     };
+    let mut status_ids = Vec::new();
     for (i, (name, color)) in statuses.iter().enumerate() {
+        let sid = Uuid::now_v7();
         sqlx::query("INSERT INTO board_statuses (id, board_id, name, color, position) VALUES ($1,$2,$3,$4,$5)")
-            .bind(Uuid::now_v7())
+            .bind(sid)
             .bind(board.id)
             .bind(name)
             .bind(color)
             .bind(i as i32)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
+        status_ids.push(sid);
     }
-    let names = r.lists.unwrap_or_else(|| vec!["To Do".into(), "In Progress".into(), "Done".into()]);
+    let mut list_ids = Vec::new();
     let mut prev: Option<String> = None;
-    for n in names.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    for n in lists.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let pos = position::between(prev.as_deref(), None);
+        let lid = Uuid::now_v7();
         sqlx::query("INSERT INTO lists (id, board_id, name, position) VALUES ($1,$2,$3,$4)")
-            .bind(Uuid::now_v7())
+            .bind(lid)
             .bind(board.id)
             .bind(n)
             .bind(&pos)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
+        list_ids.push(lid);
         prev = Some(pos);
     }
-    tx.commit().await?;
-    Ok(Json(board))
+    Ok((board, list_ids, status_ids))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -233,7 +270,8 @@ pub async fn get_board(
             .fetch_one(db)
             .await?;
     let lists: Vec<List> = sqlx::query_as(
-        r#"SELECT id, name, position, color, folded, wip_limit FROM lists WHERE board_id = $1 ORDER BY position COLLATE "C""#,
+        r#"SELECT id, name, position, color, folded, wip_limit FROM lists WHERE board_id = $1 AND archived_at IS NULL
+           ORDER BY position COLLATE "C""#,
     )
     .bind(id)
     .fetch_all(db)
@@ -305,6 +343,7 @@ pub async fn update_board(
     Ok(Json(b))
 }
 
+/// Archive (soft delete). The board can be restored or deleted permanently from the archive.
 pub async fn delete_board(
     State(state): State<AppState>,
     CurrentUser(u): CurrentUser,
@@ -314,6 +353,32 @@ pub async fn delete_board(
     sqlx::query("UPDATE boards SET archived_at = now() WHERE id = $1").bind(id).execute(&state.db).await?;
     state.hub.notify(id, "board_deleted", None, u.id);
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn restore_board(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<serde_json::Value>> {
+    crate::perms::board_access_incl_archived(&state.db, &u, id).await?.require(perms::BOARD_DELETE)?;
+    sqlx::query("UPDATE boards SET archived_at = NULL, updated_at = now() WHERE id = $1").bind(id).execute(&state.db).await?;
+    state.hub.notify(id, "board", None, u.id);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Deletes a board for good: every column, card, comment, log entry and attachment (rows and stored files).
+pub async fn purge_board(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<serde_json::Value>> {
+    crate::perms::board_access_incl_archived(&state.db, &u, id).await?.require(perms::BOARD_DELETE)?;
+    let (name,): (String,) = sqlx::query_as("SELECT name FROM boards WHERE id = $1").bind(id).fetch_one(&state.db).await?;
+    sqlx::query("DELETE FROM boards WHERE id = $1").bind(id).execute(&state.db).await?;
+    let files = crate::files::delete_board_objects(&state.store, id).await;
+    tracing::info!(board = %id, %name, user = %u.username, files, "board permanently deleted");
+    state.hub.notify(id, "board_deleted", None, u.id);
+    Ok(Json(serde_json::json!({ "ok": true, "files_deleted": files })))
 }
 
 // ---------- lists ----------
@@ -379,7 +444,8 @@ pub async fn update_list(
     let new_pos = match r.index {
         Some(index) => {
             let others: Vec<(String,)> = sqlx::query_as(
-                r#"SELECT position FROM lists WHERE board_id = $1 AND id <> $2 ORDER BY position COLLATE "C" FOR UPDATE"#,
+                r#"SELECT position FROM lists WHERE board_id = $1 AND id <> $2 AND archived_at IS NULL
+                   ORDER BY position COLLATE "C" FOR UPDATE"#,
             )
             .bind(board_id)
             .bind(id)
@@ -411,22 +477,121 @@ pub async fn update_list(
     Ok(Json(list))
 }
 
+/// Deletes a column permanently together with ALL its cards (and their attachments' stored files).
+/// Works for active and archived columns. Needs `lists.manage`, plus `cards.delete` when it has cards.
 pub async fn delete_list(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<serde_json::Value>> {
+    let board_id = crate::perms::board_of_list_any(&state.db, id).await?;
+    let access = board_access(&state.db, &u, board_id).await?;
+    access.require(perms::LISTS_MANAGE)?;
+    let mut tx = state.db.begin().await?;
+    let cards: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM cards WHERE list_id = $1").bind(id).fetch_all(&mut *tx).await?;
+    if !cards.is_empty() {
+        access.require(perms::CARDS_DELETE)?;
+    }
+    let mut keys = Vec::new();
+    for (cid,) in &cards {
+        keys.extend(crate::files::purge_card_rows(&mut tx, *cid, board_id).await?);
+    }
+    sqlx::query("DELETE FROM lists WHERE id = $1").bind(id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    let files = keys.len();
+    crate::files::delete_objects(&state.store, keys).await;
+    tracing::info!(list = %id, user = %u.username, cards = cards.len(), files, "column permanently deleted");
+    state.hub.notify(board_id, "list", None, u.id);
+    Ok(Json(serde_json::json!({ "ok": true, "cards_deleted": cards.len(), "files_deleted": files })))
+}
+
+/// Hides a column and everything in it; it can be restored from Board settings → Archive.
+pub async fn archive_list(
     State(state): State<AppState>,
     CurrentUser(u): CurrentUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
     let board_id = board_of_list(&state.db, id).await?;
     board_access(&state.db, &u, board_id).await?.require(perms::LISTS_MANAGE)?;
-    let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM cards WHERE list_id = $1 AND archived_at IS NULL")
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
-    if n > 0 {
-        return Err(AppError::Conflict("list_not_empty"));
-    }
-    sqlx::query("DELETE FROM lists WHERE id = $1").bind(id).execute(&state.db).await?;
+    sqlx::query("UPDATE lists SET archived_at = now() WHERE id = $1").bind(id).execute(&state.db).await?;
+    touch_board(&state, board_id).await?;
     state.hub.notify(board_id, "list", None, u.id);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Brings a column back, as the last column (fresh position so ordering keys never collide).
+pub async fn restore_list(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<serde_json::Value>> {
+    let board_id = crate::perms::board_of_list_any(&state.db, id).await?;
+    board_access(&state.db, &u, board_id).await?.require(perms::LISTS_MANAGE)?;
+    let mut tx = state.db.begin().await?;
+    let last: Option<(String,)> = sqlx::query_as(
+        r#"SELECT position FROM lists WHERE board_id = $1 AND archived_at IS NULL ORDER BY position COLLATE "C" DESC LIMIT 1 FOR UPDATE"#,
+    )
+    .bind(board_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let pos = position::between(last.as_ref().map(|l| l.0.as_str()), None);
+    sqlx::query("UPDATE lists SET archived_at = NULL, position = $2 WHERE id = $1").bind(id).bind(pos).execute(&mut *tx).await?;
+    tx.commit().await?;
+    state.hub.notify(board_id, "list", None, u.id);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ArchivedList {
+    id: Uuid,
+    name: String,
+    card_count: i64,
+    archived_at: DateTime<Utc>,
+}
+
+pub async fn archived_lists(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(board_id): Path<Uuid>,
+) -> AppResult<Json<Vec<ArchivedList>>> {
+    board_access(&state.db, &u, board_id).await?;
+    let rows: Vec<ArchivedList> = sqlx::query_as(
+        "SELECT l.id, l.name, l.archived_at,
+                (SELECT count(*) FROM cards c WHERE c.list_id = l.id AND c.archived_at IS NULL) AS card_count
+         FROM lists l WHERE l.board_id = $1 AND l.archived_at IS NOT NULL ORDER BY l.archived_at DESC",
+    )
+    .bind(board_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows))
+}
+
+// ---------- personal board order ----------
+
+#[derive(Deserialize)]
+pub struct BoardOrder {
+    ids: Vec<Uuid>,
+}
+
+/// Saves the current user's arrangement of the Boards page.
+pub async fn set_board_order(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Json(r): Json<BoardOrder>,
+) -> AppResult<Json<serde_json::Value>> {
+    let mut tx = state.db.begin().await?;
+    sqlx::query("DELETE FROM board_prefs WHERE user_id = $1").bind(u.id).execute(&mut *tx).await?;
+    // only boards that exist (unknown ids are ignored); visibility is checked when listing anyway
+    sqlx::query(
+        "INSERT INTO board_prefs (user_id, board_id, position)
+         SELECT $1, t.id, t.ord::int FROM unnest($2::uuid[]) WITH ORDINALITY AS t(id, ord)
+         WHERE EXISTS (SELECT 1 FROM boards WHERE id = t.id)",
+    )
+    .bind(u.id)
+    .bind(&r.ids)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

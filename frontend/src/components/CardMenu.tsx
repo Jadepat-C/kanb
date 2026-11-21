@@ -13,14 +13,17 @@ import {
   Plus,
   Star,
   Tag,
+  Trash2,
   UserCheck,
 } from 'lucide-react'
+import { ConfirmDialog } from './ConfirmDialog'
+import { ask } from './dialogs'
 import { useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import type { BoardHelpers } from '../lib/board'
-import { toast, toastError } from './toast'
+import { toast, toastError, toastSuccess } from './toast'
 import { Button, Dialog, Input, PALETTE } from './ui'
 import { ContextMenu, CTX, MItem, MLabel, MSep, MSub } from './menu'
 
@@ -71,6 +74,7 @@ export function CardContextMenu({
   const qc = useQueryClient()
   const { data: me } = useMe()
   const [renaming, setRenaming] = useState(false)
+  const [purging, setPurging] = useState(false)
   const can = (p: string) => (b ? b.can(p) : p === 'cards.edit' ? !!canEdit : true) // server enforces the rest
 
   const refresh = () => {
@@ -114,7 +118,7 @@ export function CardContextMenu({
           </MItem>
         )}
         {can('cards.create') && (
-          <MItem M={M} onSelect={() => run.mutate(() => api.post(`/cards/${card.id}/duplicate`))}>
+          <MItem M={M} onSelect={() => run.mutate(() => api.post(`/cards/${card.id}/duplicate`).then(() => toastSuccess(t('toast.duplicated', { title: card.title }))))}>
             <CopyPlus size={14} /> {t('menu.duplicate')}
           </MItem>
         )}
@@ -146,7 +150,7 @@ export function CardContextMenu({
                 key={l.id}
                 M={M}
                 checked={l.id === card.list_id}
-                onSelect={() => l.id !== card.list_id && run.mutate(() => api.post(`/cards/${card.id}/move`, { list_id: l.id, index: 1e9 }))}
+                onSelect={() => l.id !== card.list_id && run.mutate(() => api.post(`/cards/${card.id}/move`, { list_id: l.id, index: 1e9 }).then(() => toastSuccess(t('toast.moved', { title: card.title, to: l.name }))))}
               >
                 {l.name}
               </MItem>
@@ -240,12 +244,24 @@ export function CardContextMenu({
         {can('cards.delete') && (
           <>
             <MSep M={M} />
-            <MItem M={M} danger onSelect={() => confirm(t('card.archiveConfirm')) && run.mutate(() => api.del(`/cards/${card.id}`))}>
+            <MItem M={M} danger onSelect={async () => (await ask({ title: t('card.archive'), message: t('card.archiveConfirm'), confirmLabel: t('card.archive') })) && run.mutate(() => api.del(`/cards/${card.id}`).then(() => toastSuccess(t('toast.archived', { title: card.title }))))}>
               <Archive size={14} /> {t('card.archive')}
+            </MItem>
+            <MItem M={M} danger onSelect={() => setPurging(true)}>
+              <Trash2 size={14} /> {t('archive.deleteForever')}
             </MItem>
           </>
         )}
       </ContextMenu>
+      {purging && (
+        <ConfirmDialog
+          title={t('archive.deleteForever')}
+          message={t('archive.purgeCardMsg', { title: `#${card.number} ${card.title}` })}
+          confirmLabel={t('archive.deleteForever')}
+          onConfirm={() => run.mutateAsync(() => api.del(`/cards/${card.id}/permanent`).then(() => toastSuccess(t('toast.deleted'))))}
+          onClose={() => setPurging(false)}
+        />
+      )}
       {renaming && (
         <RenameDialog
           value={card.title}

@@ -23,17 +23,33 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, fileUrl, upload } from '../lib/api'
 import { useMe } from '../lib/auth'
-import type { BoardHelpers } from '../lib/board'
+import type { BoardHelpers, Viewer } from '../lib/board'
 import { fmtDate, fmtRelative, fmtSize } from '../lib/prefs'
 import type { Attachment, CardDetail, Label, TimelineItem } from '../lib/types'
 import { Stars } from './CardTile'
+import { ConfirmDialog } from './ConfirmDialog'
+import { ask } from './dialogs'
 import { FilePreview, previewKind } from './FilePreview'
 import { LiveEditor, type LiveEditorHandle, type Uploader } from './editor/LiveEditor'
 import { Markdown } from './Markdown'
-import { toast, toastError } from './toast'
+import { toast, toastError, toastSuccess } from './toast'
 import { Avatar, Button, ColorPicker, Input, Popover, Spinner } from './ui'
 
-export function CardModal({ cardId, b, onClose }: { cardId: string; b: BoardHelpers; onClose: () => void }) {
+export function CardModal({
+  cardId,
+  b,
+  onClose,
+  viewers = [],
+  onEditingChange,
+}: {
+  cardId: string
+  b: BoardHelpers
+  onClose: () => void
+  /** other people who have this card open */
+  viewers?: Viewer[]
+  /** tells the board (and so everyone else) whether you're typing in this card */
+  onEditingChange?: (editing: boolean) => void
+}) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const boardId = b.data!.board.id
@@ -73,9 +89,22 @@ export function CardModal({ cardId, b, onClose }: { cardId: string; b: BoardHelp
       }
     }
     refresh()
+    if (files.length) toastSuccess(t('toast.uploaded', { count: files.length }))
   }
 
   const card = q.data?.card
+
+  // "editing" = focus is in one of the card's text fields
+  const editingRef = useRef(false)
+  const updateEditing = () => {
+    const el = document.activeElement as HTMLElement | null
+    const now = !!el?.closest('[role=dialog]') && !!el.closest('.cm-editor, textarea, input[type=text], input:not([type])')
+    if (now !== editingRef.current) {
+      editingRef.current = now
+      onEditingChange?.(now)
+    }
+  }
+  useEffect(() => () => onEditingChange?.(false), [onEditingChange])
 
   return (
     <RDialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -87,6 +116,8 @@ export function CardModal({ cardId, b, onClose }: { cardId: string; b: BoardHelp
             // ignore clicks inside portaled popovers
             if ((e.target as HTMLElement).closest('[data-radix-popper-content-wrapper]')) e.preventDefault()
           }}
+          onFocus={updateEditing}
+          onBlur={() => setTimeout(updateEditing, 0)}
           className="fixed left-1/2 top-[3vh] z-50 max-h-[94vh] w-[calc(100vw-16px)] max-w-5xl -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-surface shadow-2xl outline-none"
           onDragOver={(e) => {
             if (e.dataTransfer.types.includes('Files') && b.can('attachments.upload')) {
@@ -118,6 +149,22 @@ export function CardModal({ cardId, b, onClose }: { cardId: string; b: BoardHelp
                   </div>
                   <Title value={card.title} disabled={!canEdit} onSave={(title) => patch.mutate({ title })} />
                 </div>
+                {viewers.length > 0 && (
+                  <div className="flex shrink-0 items-center gap-1.5 self-center rounded-full bg-black/5 py-1 pl-1 pr-2.5 text-xs dark:bg-white/10">
+                    <span className="flex -space-x-1.5">
+                      {viewers.slice(0, 4).map((v) => (
+                        <span key={v.user_id} title={v.display_name} className={clsx('rounded-full', v.editing && 'ring-2 ring-amber-500')}>
+                          <Avatar name={v.display_name} color={v.avatar_color} size={22} />
+                        </span>
+                      ))}
+                    </span>
+                    <span className="text-muted">
+                      {viewers.some((v) => v.editing)
+                        ? `${viewers.filter((v) => v.editing).map((v) => v.display_name).join(', ')} ${t('presence.editing')}`
+                        : t('presence.here')}
+                    </span>
+                  </div>
+                )}
                 <RDialog.Close className="rounded p-1.5 text-muted hover:bg-black/5 dark:hover:bg-white/10" aria-label={t('common.close')}>
                   <X size={18} />
                 </RDialog.Close>
@@ -287,7 +334,7 @@ function Attachments({
               </a>
               {(canDeleteAny || a.uploaded_by === me?.id) && (
                 <button
-                  onClick={() => confirm(t('common.confirmDelete')) && del.mutate(a.id)}
+                  onClick={async () => (await ask({ title: t('common.delete'), message: t('card.deleteAttachmentMsg', { name: a.filename }), confirmLabel: t('common.delete'), danger: true })) && del.mutate(a.id)}
                   className="rounded p-1 text-muted opacity-0 hover:bg-red-500/10 hover:text-red-600 group-hover:opacity-100 cursor-pointer"
                 >
                   <Trash2 size={15} />
@@ -400,7 +447,7 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
                       </button>
                     )}
                     {(i.author_id === me?.id || b.can('comments.moderate')) && (
-                      <button onClick={() => confirm(t('common.confirmDelete')) && del.mutate(i.id)} className="text-muted hover:text-red-600 cursor-pointer">
+                      <button onClick={async () => (await ask({ title: t('common.delete'), message: t('card.deleteCommentMsg'), confirmLabel: t('common.delete'), danger: true })) && del.mutate(i.id)} className="text-muted hover:text-red-600 cursor-pointer">
                         <Trash2 size={13} />
                       </button>
                     )}
@@ -502,11 +549,13 @@ function Sidebar({
     mutationFn: () => api.del(`/cards/${cardId}`),
     onSuccess: () => {
       refresh()
+      toastSuccess(t('toast.archived', { title: card.title }))
       onArchived()
     },
     onError: toastError,
   })
   const toggle = (arr: string[], id: string) => (arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id])
+  const [purging, setPurging] = useState(false)
   const dueLocal = card.due_at ? toLocalInput(card.due_at) : ''
 
   return (
@@ -642,9 +691,29 @@ function Sidebar({
       </div>
 
       {b.can('cards.delete') && (
-        <Button variant="outline" size="sm" className="w-full text-red-600" onClick={() => confirm(t('card.archiveConfirm')) && archive.mutate()}>
-          <Archive size={14} /> {t('card.archive')}
-        </Button>
+        <div className="space-y-1.5">
+          <Button variant="outline" size="sm" className="w-full" onClick={async () => (await ask({ title: t('card.archive'), message: t('card.archiveConfirm'), confirmLabel: t('card.archive') })) && archive.mutate()}>
+            <Archive size={14} /> {t('card.archive')}
+          </Button>
+          <Button variant="outline" size="sm" className="w-full text-red-600" onClick={() => setPurging(true)}>
+            <Trash2 size={14} /> {t('archive.deleteForever')}
+          </Button>
+        </div>
+      )}
+      {purging && (
+        <ConfirmDialog
+          title={t('archive.deleteForever')}
+          message={t('archive.purgeCardMsg', { title: `#${card.number} ${card.title}` })}
+          confirmLabel={t('archive.deleteForever')}
+          onConfirm={() =>
+            api.del(`/cards/${cardId}/permanent`).then(() => {
+              qc.invalidateQueries({ queryKey: ['board', data.board.id] })
+              toastSuccess(t('toast.deleted'))
+              onArchived()
+            }, toastError)
+          }
+          onClose={() => setPurging(false)}
+        />
       )}
       {detail.attachments.length === 0 && !b.can('attachments.upload') ? null : (
         <p className="flex items-center gap-1 text-[11px] text-muted">

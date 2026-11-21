@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { BoardDetail, BoardListItem, CardSummary } from '../lib/types'
-import { toastError } from './toast'
+import { toastError, toastSuccess } from './toast'
 import { Button, Dialog, Field, Input } from './ui'
 
 export interface NewCardPreset {
@@ -56,6 +56,7 @@ export function NewCardDialog({
       const card = await api.post<CardSummary>(`/lists/${listId}/cards`, { title: title.trim(), due_at })
       qc.invalidateQueries({ queryKey: ['board', boardId] })
       qc.invalidateQueries({ queryKey: ['calendar'] })
+      toastSuccess(t('toast.cardCreated', { title: card.title }))
       onCreated?.(card, boardId, openAfter)
       onClose()
     } catch (err) {

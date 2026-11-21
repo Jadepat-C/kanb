@@ -5,7 +5,7 @@ import { CalendarClock, CheckSquare, MessageSquare, Paperclip, Star } from 'luci
 import { HoverCard } from 'radix-ui'
 import { memo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { BoardHelpers } from '../lib/board'
+import type { BoardHelpers, Viewer } from '../lib/board'
 import { fmtDate } from '../lib/prefs'
 import type { CardSummary } from '../lib/types'
 import { Markdown } from './Markdown'
@@ -129,7 +129,9 @@ export const CardTile = memo(function CardTile({
   onOpen,
   disabled,
   onNew,
+  viewers,
 }: {
+  viewers?: Viewer[]
   card: CardSummary
   b: BoardHelpers
   onOpen: (id: string) => void
@@ -174,6 +176,15 @@ export const CardTile = memo(function CardTile({
           )}
         >
           <TileBody card={card} b={b} />
+          {!!viewers?.length && (
+            <span className="absolute -right-1.5 -top-1.5 flex -space-x-1.5">
+              {viewers.slice(0, 3).map((v) => (
+                <span key={v.user_id} title={`${v.display_name}${v.editing ? ' · ✎' : ''}`} className={clsx('rounded-full', v.editing && 'ring-2 ring-amber-500')}>
+                  <Avatar name={v.display_name} color={v.avatar_color} size={18} />
+                </span>
+              ))}
+            </span>
+          )}
         </div>
       </HoverCard.Trigger>
       </CardContextMenu>

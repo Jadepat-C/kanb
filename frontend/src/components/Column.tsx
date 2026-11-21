@@ -3,14 +3,15 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ArrowDownUp, ChevronsLeftRight, ChevronsRightLeft, Gauge, GripVertical, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Archive, ArrowDownUp, ChevronsLeftRight, ChevronsRightLeft, Gauge, GripVertical, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import type { BoardHelpers } from '../lib/board'
+import type { BoardHelpers, Viewer } from '../lib/board'
 import type { CardSummary, List } from '../lib/types'
 import { CardTile } from './CardTile'
-import { toastError } from './toast'
+import { ask, askText } from './dialogs'
+import { toastError, toastSuccess } from './toast'
 import { ContextMenu, CTX, DROP, MItem, MSep, MSub, type MenuKit } from './menu'
 import { Button, Menu, MenuContent, MenuTrigger } from './ui'
 
@@ -22,7 +23,9 @@ export function Column({
   boardId,
   onOpen,
   dragDisabled,
+  viewersByCard,
 }: {
+  viewersByCard?: Map<string, Viewer[]>
   list: List
   cards: CardSummary[]
   totalCount: number
@@ -47,14 +50,44 @@ export function Column({
   })
   const sort = useMutation({
     mutationFn: (p: { by: string; desc: boolean }) => api.post(`/lists/${list.id}/sort`, p),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
+    onSuccess: () => (qc.invalidateQueries({ queryKey: ['board', boardId] }), toastSuccess(t('toast.sorted', { name: list.name }))),
     onError: toastError,
   })
   const remove = useMutation({
     mutationFn: () => api.del(`/lists/${list.id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['board', boardId] }),
+    onSuccess: () => (qc.invalidateQueries({ queryKey: ['board', boardId] }), toastSuccess(t('toast.columnDeleted', { name: list.name }))),
     onError: toastError,
   })
+  const archive = useMutation({
+    mutationFn: () => api.post(`/lists/${list.id}/archive`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['board', boardId] })
+      qc.invalidateQueries({ queryKey: ['archived-lists', boardId] })
+      toastSuccess(t('toast.columnArchived', { name: list.name }))
+    },
+    onError: toastError,
+  })
+  const confirmDelete = async () => {
+    const ok = await ask({
+      title: t('board.deleteList'),
+      message: totalCount ? t('column.deleteMsg', { name: list.name, count: totalCount }) : t('column.deleteEmptyMsg', { name: list.name }),
+      confirmLabel: t('board.deleteList'),
+      danger: true,
+      typeToConfirm: totalCount ? 'Delete' : undefined,
+    })
+    if (ok) remove.mutate()
+  }
+  const setWip = async () => {
+    const v = await askText({
+      title: t('board.wipLimit'),
+      label: t('board.wipPrompt'),
+      defaultValue: list.wip_limit?.toString() ?? '',
+      inputType: 'number',
+    })
+    if (v === null) return
+    const n = parseInt(v, 10)
+    update.mutate({ wip_limit: Number.isFinite(n) && n > 0 ? n : null })
+  }
 
   const style = { transform: CSS.Translate.toString(sortable.transform), transition: sortable.transition }
   const over = list.wip_limit != null && totalCount > list.wip_limit
@@ -105,21 +138,18 @@ export function Column({
           <MItem M={M} onSelect={() => setRenaming(true)}>
             <Pencil size={14} /> {t('common.rename')}
           </MItem>
-          <MItem
-            M={M}
-            onSelect={() => {
-              const v = prompt(t('board.wipPrompt'), list.wip_limit?.toString() ?? '')
-              if (v === null) return
-              const n = parseInt(v, 10)
-              update.mutate({ wip_limit: Number.isFinite(n) && n > 0 ? n : null })
-            }}
-          >
+          <MItem M={M} onSelect={setWip}>
             <Gauge size={14} /> {t('board.wipLimit')}
           </MItem>
           <MSep M={M} />
-          <MItem M={M} danger onSelect={() => confirm(t('common.confirmDelete')) && remove.mutate()}>
-            <Trash2 size={14} /> {t('board.deleteList')}
+          <MItem M={M} onSelect={() => archive.mutate()}>
+            <Archive size={14} /> {t('column.archive')}
           </MItem>
+          {(totalCount === 0 || b.can('cards.delete')) && (
+            <MItem M={M} danger onSelect={confirmDelete}>
+              <Trash2 size={14} /> {t('board.deleteList')}
+            </MItem>
+          )}
         </>
       )}
     </>
@@ -236,7 +266,7 @@ export function Column({
         {adding === 'top' && <QuickAdd listId={list.id} boardId={boardId} at="top" onDone={() => setAdding(null)} />}
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((c) => (
-            <CardTile key={c.id} card={c} b={b} onOpen={onOpen} disabled={dragDisabled} onNew={openBottom} />
+            <CardTile key={c.id} card={c} b={b} onOpen={onOpen} disabled={dragDisabled} onNew={openBottom} viewers={viewersByCard?.get(c.id)} />
           ))}
         </SortableContext>
         {adding === 'bottom' && <QuickAdd listId={list.id} boardId={boardId} at="bottom" onDone={() => setAdding(null)} />}
