@@ -1,0 +1,11 @@
+# cargo audit settings (used by .github/workflows/security.yml)
+
+[advisories]
+ignore = [
+  # crypto-bigint < 0.7.6: some operations meant to be constant-time aren't (timing side channel).
+  # Only the old 0.5.5 copy is affected, pulled in by web-push-native 0.5 → jwt-simple 0.12 → p256 0.13. Kanb uses it
+  # to sign its Web Push (VAPID) requests. Exploiting it needs precise timing of many signatures, and the most it
+  # could reveal is the push key (letting someone send fake notifications to subscribers). web-push-native 0.5.0 is
+  # the latest release; remove this line when an update moves to elliptic-curve 0.14.
+  "RUSTSEC-2026-0387",
+]

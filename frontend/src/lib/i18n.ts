@@ -669,6 +669,9 @@ i18n.use(initReactI18next).init({
 })
 
 export function setLocale(l: 'en' | 'th') {
+  // useMe() calls this from every component that uses it (one per card tile on a board), and i18next announces a
+  // "change" even to the same language, re-rendering everything that translates: thousands of times on a big board.
+  if (i18n.language === l && document.documentElement.lang === l) return
   i18n.changeLanguage(l)
   document.documentElement.lang = l
   try {

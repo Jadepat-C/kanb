@@ -11,6 +11,7 @@ function apply() {
 media.addEventListener('change', apply)
 
 export function setTheme(t: Theme) {
+  if (current === t) return // called from every useMe() user; nothing to do when unchanged
   current = t
   try {
     localStorage.setItem('theme', t)

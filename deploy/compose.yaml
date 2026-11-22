@@ -1,7 +1,7 @@
 # Kanb: app + PostgreSQL + SeaweedFS (S3-compatible file storage).
 #
 #   cd deploy
-#   ./setup.sh https://kanb.example.com     # writes .env with random passwords and prints a setup code (once)
+#   ./setup.sh                              # asks a few questions, writes .env (random passwords), prints a setup code
 #   docker compose up -d --build
 #   open the site and enter the setup code to create the first admin
 #

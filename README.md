@@ -59,7 +59,7 @@ You need [Docker](https://docs.docker.com/get-docker/) with Compose v2 (included
 ```bash
 git clone https://github.com/Jadepat-C/kanb.git
 cd kanb/deploy
-./setup.sh                 # writes deploy/.env with random passwords and prints a setup code
+./setup.sh --defaults      # writes deploy/.env with random passwords and prints a setup code
 docker compose up -d
 ```
 
@@ -78,10 +78,20 @@ that serves HTTPS in front of it (a reverse proxy). Browser notifications and se
    ```bash
    git clone https://github.com/Jadepat-C/kanb.git
    cd kanb/deploy
-   ./setup.sh https://kanb.example.com          # your real address
+   ./setup.sh
    ```
-   This writes `deploy/.env` and prints a setup code. Open `.env` to change where data is stored (`KANB_DATA`)
-   or the time zone (`TZ`); every setting is listed under [Configuration](#configuration).
+   It asks a few questions, each with a default you can accept with Enter:
+   - the address people will use (e.g. `https://kanb.example.com`)
+   - the port, and who may connect to it directly: only this machine (a reverse proxy here serves HTTPS), your
+     network or VPN, or one specific address such as a Tailscale IP
+   - where to keep the data, the time zone, and the largest upload
+   - the database password, storage keys, encryption key and setup code: generated for you, or type your own
+     (paste your old `SECRET_KEY` when restoring a backup)
+   - whether to download the published image or build from this checkout
+
+   Then it writes `deploy/.env` and prints the setup code. Run it again any time to change the settings; passwords
+   and keys are kept. `./setup.sh --defaults [URL]` skips the questions. Every setting is listed under
+   [Configuration](#configuration).
 2. **Start it.**
    ```bash
    docker compose up -d
@@ -114,7 +124,7 @@ Everything else is set up in the app. Admin and Profile are in the menu under yo
 
 ## Configuration
 
-All settings live in `deploy/.env`. `./setup.sh` fills in the passwords; [`deploy/.env.example`](deploy/.env.example)
+All settings live in `deploy/.env`. `./setup.sh` asks for them and fills in the passwords; [`deploy/.env.example`](deploy/.env.example)
 explains each line.
 
 | Setting | Default | What it does |
