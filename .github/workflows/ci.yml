@@ -1,4 +1,5 @@
-# Tests on every push and pull request. No database needed: queries are checked at runtime and migrations are only embedded.
+# Tests on every push and pull request: unit tests and the frontend build (no database needed), then the permission
+# tests (tests/authz.py) against a real server with Postgres and S3 storage.
 name: CI
 
 on:
@@ -38,3 +39,35 @@ jobs:
       - run: npm ci
       - run: npx tsc -b
       - run: npm run build
+
+  permissions:
+    name: permission tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - name: Start Postgres, SeaweedFS and Mailpit
+        run: docker compose -f dev/compose.yaml up -d --wait
+      - name: Build and start the server
+        working-directory: backend
+        run: |
+          cargo build --locked
+          set -a; . ./.env.example; set +a
+          KANBAN_ADMIN_PASSWORD=ci-admin-password ./target/debug/kanban create-admin --username ci_admin
+          # never send real email or webhooks from CI
+          MAIL_REDIRECT=127.0.0.1:51025 WEBHOOK_REDIRECT=http://127.0.0.1:9 ./target/debug/kanban > server.log 2>&1 &
+          for _ in $(seq 1 60); do curl -fsS localhost:8080/api/health && exit 0; sleep 1; done
+          cat server.log; exit 1
+      - name: Every endpoint, as every kind of user
+        env:
+          KANB_URL: http://localhost:8080
+          ADMIN_USER: ci_admin
+          ADMIN_PASSWORD: ci-admin-password
+        run: python3 tests/authz.py
+      - name: Server log
+        if: failure()
+        run: cat backend/server.log
+

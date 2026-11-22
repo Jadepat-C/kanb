@@ -66,6 +66,29 @@ export function useBoardSocket(boardId: string, onChange?: (ev: ChangeEvent) => 
     let retry = 0
     let timer: ReturnType<typeof setTimeout> | undefined
     let stopped = false
+    // Coalesce board refreshes: every change would otherwise make every viewer re-download the whole board (and
+    // cancel one already on its way). At most one refresh is in flight; changes arriving meanwhile, or in the same
+    // short burst (a drag sends several), are folded into a single follow-up.
+    let refreshing = false
+    let again = false
+    const refreshBoard = () => {
+      if (refreshing) {
+        again = true
+        return
+      }
+      refreshing = true
+      setTimeout(async () => {
+        try {
+          await qc.invalidateQueries({ queryKey: ['board', boardId] }, { cancelRefetch: false })
+        } finally {
+          refreshing = false
+          if (again && !stopped) {
+            again = false
+            refreshBoard()
+          }
+        }
+      }, 300)
+    }
     const connect = () => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
       ws = new WebSocket(`${proto}://${location.host}/api/boards/${boardId}/ws`)
@@ -84,7 +107,7 @@ export function useBoardSocket(boardId: string, onChange?: (ev: ChangeEvent) => 
             return
           }
           onChangeRef.current?.(ev as ChangeEvent)
-          qc.invalidateQueries({ queryKey: ['board', boardId] })
+          refreshBoard()
           if (ev.card_id) {
             qc.invalidateQueries({ queryKey: ['card', ev.card_id] })
             qc.invalidateQueries({ queryKey: ['timeline', ev.card_id] })

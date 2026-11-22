@@ -62,6 +62,23 @@ pub fn hash_password(password: &str) -> anyhow::Result<String> {
         .map_err(|e| anyhow::anyhow!("hash: {e}"))
 }
 
+/// Argon2id deliberately uses about 19 MB of memory per hash or check (that's what makes stolen hashes expensive to
+/// crack). Unbounded, a burst of simultaneous sign-in attempts, even wrong ones, could run a small server out of
+/// memory; at most two run at once and the rest wait their turn (each takes tens of milliseconds).
+static PASSWORD_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+/// `hash_password` off the async runtime, within the password slots.
+pub async fn hash_password_bounded(password: String) -> AppResult<String> {
+    let _slot = PASSWORD_SLOTS.acquire().await.map_err(|e| anyhow::anyhow!(e))?;
+    Ok(tokio::task::spawn_blocking(move || hash_password(&password)).await.map_err(|e| anyhow::anyhow!(e))??)
+}
+
+/// `verify_password` off the async runtime, within the password slots.
+pub async fn verify_password_bounded(password: String, hash: String) -> AppResult<bool> {
+    let _slot = PASSWORD_SLOTS.acquire().await.map_err(|e| anyhow::anyhow!(e))?;
+    Ok(tokio::task::spawn_blocking(move || verify_password(&password, &hash)).await.map_err(|e| anyhow::anyhow!(e))?)
+}
+
 pub fn verify_password(password: &str, hash: &str) -> bool {
     match PasswordHash::new(hash) {
         Ok(parsed) => Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok(),
@@ -243,13 +260,11 @@ pub async fn login(
     let ok = match &row {
         Some((_, Some(hash), true, _)) => {
             let hash = hash.clone();
-            tokio::task::spawn_blocking(move || verify_password(&password, &hash))
-                .await
-                .map_err(|e| anyhow::anyhow!(e))?
+            verify_password_bounded(password, hash).await?
         }
         _ => {
             // constant-ish time for unknown users
-            let _ = tokio::task::spawn_blocking(move || hash_password(&password)).await;
+            let _ = hash_password_bounded(password).await;
             false
         }
     };
@@ -390,14 +405,14 @@ pub async fn change_password(
     // right after an admin-set password (forced change) the user just proved it by signing in
     let ok = u.must_change_password
         || match hash {
-            Some(h) => tokio::task::spawn_blocking(move || verify_password(&cur, &h)).await.map_err(|e| anyhow::anyhow!(e))?,
+            Some(h) => verify_password_bounded(cur, h).await?,
             None => false,
         };
     if !ok {
         return Err(AppError::BadRequest("invalid_credentials"));
     }
     let np = req.new_password.clone();
-    let new_hash = tokio::task::spawn_blocking(move || hash_password(&np)).await.map_err(|e| anyhow::anyhow!(e))??;
+    let new_hash = hash_password_bounded(np).await?;
     sqlx::query("UPDATE users SET password_hash = $2, must_change_password = false, updated_at = now() WHERE id = $1")
         .bind(u.id)
         .bind(new_hash)
@@ -563,7 +578,7 @@ pub async fn reset(
         return Err(AppError::BadRequest("invalid_token"));
     };
     let pw = r.password.clone();
-    let hash = tokio::task::spawn_blocking(move || hash_password(&pw)).await.map_err(|e| anyhow::anyhow!(e))??;
+    let hash = hash_password_bounded(pw).await?;
     sqlx::query("UPDATE users SET password_hash = $2, must_change_password = false, updated_at = now() WHERE id = $1")
         .bind(uid)
         .bind(hash)

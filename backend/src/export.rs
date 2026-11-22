@@ -74,6 +74,10 @@ struct XFile {
     created_at: DateTime<Utc>,
     #[serde(skip)]
     object_key: String,
+    /// where it goes in the ZIP (set by `assign_paths`); empty for files of deleted cards
+    #[serde(skip)]
+    #[sqlx(skip)]
+    path: String,
 }
 
 struct Export {
@@ -124,7 +128,7 @@ async fn collect(state: &AppState, board_id: Uuid) -> AppResult<Export> {
     .bind(board_id)
     .fetch_all(&state.db)
     .await?;
-    let files: Vec<XFile> = sqlx::query_as(
+    let mut files: Vec<XFile> = sqlx::query_as(
         "SELECT card_id, filename, content_type, size, is_inline AS inline, created_at, object_key FROM attachments
          WHERE board_id = $1 AND deleted_at IS NULL ORDER BY created_at",
     )
@@ -133,6 +137,7 @@ async fn collect(state: &AppState, board_id: Uuid) -> AppResult<Export> {
     .await?;
     let templates = crate::templates::for_board(&state.db, board_id).await?;
 
+    assign_paths(&mut files, &cards);
     let number_of = |id: Option<Uuid>| id.and_then(|id| cards.iter().find(|c| c.id == id).map(|c| c.number));
     let json = json!({
         "format": "kanban-board-export", "version": 1, "exported_at": Utc::now(),
@@ -144,7 +149,7 @@ async fn collect(state: &AppState, board_id: Uuid) -> AppResult<Export> {
         "cards": cards.iter().map(|c| {
             let mut v = serde_json::to_value(c).unwrap_or_default();
             v["comments"] = comments.iter().filter(|m| m.card_id == c.id).map(|m| json!({ "author": m.author, "body": m.body, "created_at": m.created_at, "edited": m.updated_at > m.created_at })).collect();
-            v["attachments"] = files.iter().filter(|f| f.card_id == Some(c.id)).map(|f| json!({ "filename": f.filename, "size": f.size, "content_type": f.content_type, "inline": f.inline, "path": zip_path(c.number, f, &files) })).collect();
+            v["attachments"] = files.iter().filter(|f| f.card_id == Some(c.id)).map(|f| json!({ "filename": f.filename, "size": f.size, "content_type": f.content_type, "inline": f.inline, "path": f.path })).collect();
             v.as_object_mut().map(|o| o.remove("id"));
             v
         }).collect::<Vec<_>>(),
@@ -154,20 +159,29 @@ async fn collect(state: &AppState, board_id: Uuid) -> AppResult<Export> {
     Ok(Export { name, json, cards, files })
 }
 
-/// attachments/<card number>/<file name>, made unique when two files share a name.
-fn zip_path(number: i32, f: &XFile, all: &[XFile]) -> String {
-    let safe: String = f.filename.chars().map(|c| if "/\\:*?\"<>|".contains(c) || c.is_control() { '_' } else { c }).collect();
-    let same: Vec<&XFile> = all.iter().filter(|x| x.card_id == f.card_id && x.filename == f.filename).collect();
-    let idx = same.iter().position(|x| x.object_key == f.object_key).unwrap_or(0);
-    let name = if idx == 0 {
-        safe
-    } else {
-        match safe.rsplit_once('.') {
-            Some((a, b)) => format!("{a} ({idx}).{b}"),
-            None => format!("{safe} ({idx})"),
+/// attachments/<card number>/[pasted/]<file name>, unique within the archive: also after unsafe characters are
+/// replaced (a?b and a*b both become a_b) and ignoring case (Windows and macOS unzip into case-insensitive folders).
+fn assign_paths(files: &mut [XFile], cards: &[XCard]) {
+    let mut used = std::collections::HashSet::new();
+    for f in files.iter_mut() {
+        let Some(number) = f.card_id.and_then(|id| cards.iter().find(|c| c.id == id).map(|c| c.number)) else { continue };
+        let mut safe: String = f.filename.chars().map(|c| if "/\\:*?\"<>|".contains(c) || c.is_control() { '_' } else { c }).collect();
+        if safe.trim_matches('.').trim().is_empty() {
+            safe = "file".into(); // "." and ".." would point at a folder
         }
-    };
-    format!("attachments/{number}/{}{name}", if f.inline { "pasted/" } else { "" })
+        let dir = format!("attachments/{number}/{}", if f.inline { "pasted/" } else { "" });
+        let (stem, ext) = match safe.rsplit_once('.') {
+            Some((a, b)) if !a.is_empty() => (a.to_string(), format!(".{b}")),
+            _ => (safe.clone(), String::new()),
+        };
+        for n in 0.. {
+            let name = if n == 0 { format!("{dir}{safe}") } else { format!("{dir}{stem} ({n}){ext}") };
+            if used.insert(name.to_lowercase()) {
+                f.path = name;
+                break;
+            }
+        }
+    }
 }
 
 fn local(d: &Option<DateTime<Utc>>) -> String {
@@ -229,10 +243,15 @@ pub async fn export_board(
     Query(q): Query<ExportQuery>,
 ) -> AppResult<Response> {
     board_access_incl_archived(&state.db, &u, board_id).await?;
+    let _slot = crate::heavy(&state).await;
     let x = collect(&state, board_id).await?;
     let base = format!("{}-{}", x.name.trim(), Local::now().format("%Y-%m-%d"));
-    tracing::info!(board = %board_id, by = %u.username, format = q.format.as_deref().unwrap_or("json"), "board exported");
-    match q.format.as_deref().unwrap_or("json") {
+    let format = q.format.as_deref().unwrap_or("json");
+    if !matches!(format, "csv" | "json" | "zip") {
+        return Err(AppError::BadRequest("invalid_format"));
+    }
+    tracing::info!(board = %board_id, by = %u.username, format, "board exported");
+    match format {
         "csv" => {
             let b = csv(&x.cards);
             let len = b.len() as u64;
@@ -259,8 +278,7 @@ pub async fn export_board(
             };
             put(&mut zw, "board.json", opts, &serde_json::to_vec_pretty(&x.json).map_err(|e| anyhow::anyhow!(e))?)?;
             put(&mut zw, "cards.csv", opts, &csv(&x.cards))?;
-            for f in &x.files {
-                let Some(number) = f.card_id.and_then(|id| x.cards.iter().find(|c| c.id == id).map(|c| c.number)) else { continue };
+            for f in x.files.iter().filter(|f| !f.path.is_empty()) {
                 let bytes = match state.store.get(&ObjPath::from(f.object_key.as_str())).await {
                     Ok(o) => o.bytes().await.map_err(|e| anyhow::anyhow!(e))?,
                     Err(e) => {
@@ -270,7 +288,7 @@ pub async fn export_board(
                 };
                 // images and archives are already compressed
                 let o = if f.content_type.starts_with("image/") || f.content_type.contains("zip") { stored } else { opts };
-                put(&mut zw, &zip_path(number, f, &x.files), o, &bytes)?;
+                put(&mut zw, &f.path, o, &bytes)?;
             }
             let file = tokio::task::block_in_place(|| zw.finish()).map_err(|e| anyhow::anyhow!(e))?;
             let len = file.metadata().map(|m| m.len()).ok();

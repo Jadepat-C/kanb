@@ -1,0 +1,65 @@
+# Known-vulnerability checks: Rust and npm libraries on every push and pull request, and the published image
+# weekly and after each image build. Findings appear under the repository's Security → Code scanning tab.
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: '17 3 * * 1'   # Mondays 03:17 UTC: new advisories appear even when the code doesn't change
+  workflow_run:
+    workflows: [Docker image]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  libraries:
+    name: Rust and npm libraries
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-audit
+      - name: cargo audit
+        working-directory: backend
+        run: cargo audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: npm audit (code that ships to browsers)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+
+  image:
+    name: Docker image
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/kanb:edge" >> "$GITHUB_ENV"
+      - name: Scan (report)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image
+      - name: Fail on fixable high or critical findings
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+          skip-setup-trivy: true

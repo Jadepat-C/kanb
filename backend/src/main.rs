@@ -53,6 +53,9 @@ use tower_http::{
 
 use crate::config::Config;
 
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
@@ -63,6 +66,21 @@ pub struct AppState {
     pub throttle: Arc<throttle::Limiter>,
     /// first-run setup code (see setup.rs)
     pub setup_code: Arc<String>,
+    /// slots for building large responses (see `heavy`)
+    pub heavy: Arc<tokio::sync::Semaphore>,
+}
+
+/// Waits for a slot to build a large response (board, calendar, export). Building one takes several times its size
+/// in memory; on a small server many at once could run out. The work is CPU-bound, so queueing costs no throughput.
+pub async fn heavy(state: &AppState) -> tokio::sync::SemaphorePermit<'_> {
+    state.heavy.acquire().await.expect("semaphore never closed")
+}
+
+/// JSON response serialised while the caller still holds its `heavy` slot (axum's Json would do it afterwards).
+pub fn json_now<T: serde::Serialize>(value: &T) -> error::AppResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let body = serde_json::to_vec(value).map_err(|e| anyhow::anyhow!(e))?;
+    Ok(([(header::CONTENT_TYPE, HeaderValue::from_static("application/json"))], body).into_response())
 }
 
 #[derive(Parser)]
@@ -96,6 +114,8 @@ enum Cmd {
     },
     /// Print a new random SECRET_KEY (for encrypting stored secrets).
     GenKey,
+    /// Exit 0 if the server on BIND_ADDR answers /api/health (container health checks; needs no database).
+    Healthcheck,
     /// Reset a user's password (same password input as create-admin).
     SetPassword {
         #[arg(long)]
@@ -121,6 +141,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     // needs no database or other settings
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        std::process::exit(healthcheck());
+    }
     if std::env::args().nth(1).as_deref() == Some("gen-key") {
         println!("{}", crypto::new_key());
         return Ok(());
@@ -174,12 +197,61 @@ async fn main() -> anyhow::Result<()> {
             println!("two-factor sign-in turned off for {username}");
             Ok(())
         }
-        Cmd::GenKey => Ok(()),
+        Cmd::GenKey | Cmd::Healthcheck => Ok(()),
         Cmd::Serve => {
             crypto::seal_existing(&db).await.context("encrypting stored secrets")?;
             serve(db, config).await
         }
     }
+}
+
+/// PostgreSQL can't store the NUL character, so text containing one would fail deep inside a query with a server
+/// error. Refuse it up front with a clear one: in the query string, or anywhere in a JSON body.
+async fn reject_nul(req: axum::extract::Request, next: middleware::Next) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let refuse = |code: &'static str, status| (status, axum::Json(serde_json::json!({ "error": code }))).into_response();
+    if req.uri().query().is_some_and(|q| q.contains("%00")) {
+        return refuse("invalid_text", axum::http::StatusCode::BAD_REQUEST);
+    }
+    let json = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("application/json"));
+    if !json {
+        return next.run(req).await;
+    }
+    let (parts, body) = req.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 4 * 1024 * 1024).await else {
+        return refuse("too_large", axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    };
+    // raw control characters aren't valid JSON, so a NUL can only arrive escaped; parse only when that's present
+    fn has_nul(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::String(s) => s.contains('\0'),
+            serde_json::Value::Array(a) => a.iter().any(has_nul),
+            serde_json::Value::Object(o) => o.iter().any(|(k, v)| k.contains('\0') || has_nul(v)),
+            _ => false,
+        }
+    }
+    if bytes.windows(6).any(|w| w == b"\\u0000") && serde_json::from_slice::<serde_json::Value>(&bytes).is_ok_and(|v| has_nul(&v)) {
+        return refuse("invalid_text", axum::http::StatusCode::BAD_REQUEST);
+    }
+    next.run(axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes))).await
+}
+
+/// `kanban healthcheck`: the image has no shell or curl, so the binary checks itself (plain HTTP to localhost).
+fn healthcheck() -> i32 {
+    use std::io::{Read, Write};
+    let port = std::env::var("BIND_ADDR").ok().and_then(|a| a.rsplit(':').next().and_then(|p| p.parse::<u16>().ok())).unwrap_or(8080);
+    let timeout = std::time::Duration::from_secs(3);
+    let Ok(mut s) = std::net::TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), timeout) else {
+        return 1;
+    };
+    let _ = s.set_read_timeout(Some(timeout));
+    if s.write_all(b"GET /api/health HTTP/1.0\r\nHost: localhost\r\n\r\n").is_err() {
+        return 1;
+    }
+    let mut buf = [0u8; 16];
+    let n = s.read(&mut buf).unwrap_or(0);
+    let status = String::from_utf8_lossy(&buf[..n]);
+    if status.starts_with("HTTP/1.1 200") || status.starts_with("HTTP/1.0 200") { 0 } else { 1 }
 }
 
 async fn health(State(state): State<AppState>) -> Result<&'static str, error::AppError> {
@@ -197,6 +269,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         hub: realtime::Hub::new(),
         throttle: Arc::new(throttle::Limiter::new()),
         setup_code: Arc::new(setup::code(&config)),
+        heavy: Arc::new(tokio::sync::Semaphore::new(config.heavy_requests.max(1))),
     };
     setup::announce(&state).await;
     notify::spawn_due_job(state.clone());
@@ -301,6 +374,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/notifications/ws", get(realtime::user_ws))
         .route("/calendar", get(cards::calendar))
         .layer(middleware::from_fn_with_state(state.clone(), auth::csrf_guard))
+        .layer(middleware::from_fn(reject_nul))
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")));
 
     let mut app = Router::new().nest("/api", api);
@@ -312,7 +386,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
                 "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; \
-                 font-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'",
+                 font-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
             ),
         ));
     }

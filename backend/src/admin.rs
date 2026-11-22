@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{CurrentUser, SuperAdmin, USER_COLUMNS, User, hash_password, validate_password},
+    auth::{CurrentUser, SuperAdmin, USER_COLUMNS, User, validate_password},
     error::{AppError, AppResult},
 };
 
@@ -63,7 +63,7 @@ pub async fn insert_user(
     }
     let display_name = if display_name.trim().is_empty() { username.clone() } else { display_name.trim().to_string() };
     let pw = password.to_string();
-    let hash = tokio::task::spawn_blocking(move || hash_password(&pw)).await.map_err(|e| anyhow::anyhow!(e))??;
+    let hash = crate::auth::hash_password_bounded(pw).await?;
     let id = Uuid::now_v7();
     let color = AVATAR_COLORS[(id.as_u128() % AVATAR_COLORS.len() as u128) as usize];
     let user: User = sqlx::query_as(sqlf!(
@@ -182,7 +182,7 @@ pub async fn reset_password(
 ) -> AppResult<Json<serde_json::Value>> {
     validate_password(&r.password)?;
     let pw = r.password.clone();
-    let hash = tokio::task::spawn_blocking(move || hash_password(&pw)).await.map_err(|e| anyhow::anyhow!(e))??;
+    let hash = crate::auth::hash_password_bounded(pw).await?;
     // an admin-chosen password must be replaced by the user at next sign-in
     let res = sqlx::query("UPDATE users SET password_hash = $2, must_change_password = true, updated_at = now() WHERE id = $1 AND deleted_at IS NULL")
         .bind(id)

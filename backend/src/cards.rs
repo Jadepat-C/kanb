@@ -897,10 +897,11 @@ pub async fn calendar(
     State(state): State<AppState>,
     CurrentUser(u): CurrentUser,
     axum::extract::Query(q): axum::extract::Query<CalendarQuery>,
-) -> AppResult<Json<Vec<CalendarItem>>> {
+) -> AppResult<axum::response::Response> {
     if q.to <= q.from || q.to - q.from > chrono::Duration::days(100) {
         return Err(AppError::BadRequest("invalid_range"));
     }
+    let _slot = crate::heavy(&state).await;
     let mut items: Vec<CalendarItem> = sqlx::query_as(sqlf!(
         "SELECT c.id, c.board_id, b.name AS board_name, b.color AS board_color, l.name AS list_name, c.number, c.title,
                 c.due_at, c.priority, s.name AS status_name, s.color AS status_color,
@@ -932,7 +933,7 @@ pub async fn calendar(
     for i in &mut items {
         i.excerpt = excerpt(&std::mem::take(&mut i.description));
     }
-    Ok(Json(items))
+    crate::json_now(&items)
 }
 
 // ---------- duplicate ----------

@@ -8,3 +8,7 @@
 # self-hosting: secrets and data written by deploy/setup.sh
 /deploy/.env
 /deploy/data/
+
+# performance test data written by tests/perf/seed.py
+/tests/perf/seed.json
+/tests/perf/summary*.json

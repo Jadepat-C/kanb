@@ -286,8 +286,9 @@ pub async fn get_board(
     State(state): State<AppState>,
     CurrentUser(u): CurrentUser,
     Path(id): Path<Uuid>,
-) -> AppResult<Json<BoardDetail>> {
+) -> AppResult<axum::response::Response> {
     let access = board_access(&state.db, &u, id).await?;
+    let _slot = crate::heavy(&state).await;
     let db = &state.db;
     let board: Board =
         sqlx::query_as("SELECT id, name, description, color, created_at, updated_at FROM boards WHERE id = $1")
@@ -323,7 +324,7 @@ pub async fn get_board(
             .bind(id)
             .fetch_all(db)
             .await?;
-    Ok(Json(BoardDetail {
+    crate::json_now(&BoardDetail {
         board,
         my_permissions: access.granted(),
         my_role_id: access.role_id,
@@ -336,7 +337,7 @@ pub async fn get_board(
         members,
         roles,
         templates: crate::templates::for_board(db, id).await?,
-    }))
+    })
 }
 
 #[derive(Deserialize)]

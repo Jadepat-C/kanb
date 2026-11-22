@@ -29,13 +29,15 @@ totp-rs = { version = "6", features = ["otpauth", "gen_secret"] }
 aes-gcm = "0.10"
 web-push-native = "0.5"
 base64ct = { version = "1", features = ["alloc"] }
-zip = { version = "4", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3"
 tokio-util = { version = "0.7", features = ["io"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
 qrcode = { version = "0.15", default-features = false, features = ["svg"] }
 time = "0.3"
 tokio = { version = "1", features = ["full"] }
+# hands freed memory back to the system (glibc keeps the high-water mark of a busy burst)
+mimalloc = { version = "0.1", default-features = false }
 tower-http = { version = "0.7", features = ["fs", "trace", "compression-gzip", "set-header"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{CurrentUser, SuperAdmin, User, verify_password},
+    auth::{CurrentUser, SuperAdmin, User},
     error::{AppError, AppResult},
 };
 
@@ -148,7 +148,7 @@ async fn confirm(state: &AppState, u: &User, r: &ConfirmReq) -> AppResult<()> {
         return Err(AppError::BadRequest("totp_invalid"));
     }
     if let (Some(pw), Some(hash)) = (r.password.clone(), hash) {
-        let ok = tokio::task::spawn_blocking(move || verify_password(&pw, &hash)).await.map_err(|e| anyhow::anyhow!(e))?;
+        let ok = crate::auth::verify_password_bounded(pw, hash).await?;
         if ok {
             return Ok(());
         }

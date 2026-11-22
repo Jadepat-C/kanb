@@ -211,6 +211,11 @@ npm run dev                                   # http://localhost:5173, with live
 ```
 
 - Tests: `cargo test` in `backend/`, `npx tsc -b` in `frontend/`.
+- Permission tests: with the server running, `KANB_URL=http://localhost:8080 ADMIN_USER=admin ADMIN_PASSWORD=… python3
+  tests/authz.py` calls every API endpoint as six kinds of user (signed out, outsider, viewer, commenter, editor,
+  owner) and checks each is refused or allowed as it should be, plus cross-board tricks. It cleans up after itself.
+- Load tests: on a throwaway server, `python3 tests/perf/seed.py` (same variables) creates 20 people and ~3,000 cards,
+  then [`tests/perf/load.js`](tests/perf/load.js) runs a k6 load test (instructions at the top of the file).
 - Mail: point Admin → Email settings at `127.0.0.1:51025` (no encryption) and read everything in Mailpit.
 - Safe testing against real settings: `MAIL_REDIRECT=127.0.0.1:51025` sends all email to Mailpit, and
   `WEBHOOK_REDIRECT=http://127.0.0.1:<port>` sends all chat and webhook calls to a local catcher.
@@ -233,7 +238,10 @@ npm run dev                                   # http://localhost:5173, with live
 
 - Sign-in, two-factor codes, password-reset requests and the first-run setup are rate limited by the app itself,
   per visitor address and per account (10 wrong passwords lock an account for 15 minutes). The nginx example adds
-  its own limit on top.
+  its own limit on top. Password checks (Argon2id, ~19 MB each) run at most two at a time, so a burst of sign-in
+  attempts can't run the server out of memory.
+- Every API endpoint is checked by an automated permission test in CI (`tests/authz.py`), and the image and libraries
+  are scanned for known vulnerabilities on every push and weekly.
 - Sessions are random 256-bit tokens in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` over HTTPS); only a hash is
   stored. Passwords use Argon2id.
 - Every request that changes something, and every WebSocket, must come from `KANB_URL` (CSRF protection).

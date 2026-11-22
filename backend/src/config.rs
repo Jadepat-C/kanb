@@ -63,6 +63,11 @@ pub struct Config {
     /// are no accounts yet, a random code is printed in the server log at startup.
     #[arg(long, env = "SETUP_CODE", hide_env_values = true)]
     pub setup_code: Option<String>,
+
+    /// How many large responses (a whole board, a calendar, an export) are built at the same time. Each takes
+    /// several times its size in memory while it's built; the rest wait their turn, so memory stays bounded.
+    #[arg(long, env = "HEAVY_REQUESTS", default_value_t = 4)]
+    pub heavy_requests: usize,
 }
 
 impl Config {

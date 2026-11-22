@@ -307,6 +307,7 @@ const en = {
   date: { placeholder: 'dd/mm/yyyy', pick: 'Pick a date' },
   errors: {
     too_many_attempts_one: 'Too many attempts. Try again in a minute.', too_many_attempts_other: 'Too many attempts. Try again in {{count}} minutes.',
+    invalid_text: 'The text contains a character that can’t be saved. Remove it and try again.',
     setup_code_invalid: 'That setup code isn’t right. It’s in the output of setup.sh, or in the server log.', already_set_up: 'This server already has an admin. Sign in instead.',
     unauthorized: 'Please sign in.', forbidden: 'You don’t have permission to do that.', not_found: 'Not found.',
     invalid_credentials: 'Wrong username/email or password.', invalid_email: 'That doesn’t look like a valid email address.', invalid_token: 'This link has expired or was already used.', email_disabled: 'Email is not set up on this server. Ask an administrator.', smtp_incomplete: 'Fill in the SMTP server and the From address.', cannot_delete_self: 'You can’t delete your own account.', email_taken: 'That email is already used by another account.', password_too_short: 'Password must be at least 8 characters.',
@@ -632,6 +633,7 @@ const th: Dict = {
   date: { placeholder: 'วว/ดด/ปปปป', pick: 'เลือกวันที่' },
   errors: {
     too_many_attempts_other: 'ลองหลายครั้งเกินไป โปรดลองใหม่ในอีก {{count}} นาที',
+    invalid_text: 'ข้อความมีอักขระที่บันทึกไม่ได้ ลบออกแล้วลองใหม่',
     setup_code_invalid: 'รหัสตั้งค่าไม่ถูกต้อง ดูได้จากผลลัพธ์ของ setup.sh หรือในบันทึกของเซิร์ฟเวอร์', already_set_up: 'เซิร์ฟเวอร์นี้มีผู้ดูแลแล้ว กรุณาเข้าสู่ระบบ',
     unauthorized: 'กรุณาเข้าสู่ระบบ', forbidden: 'คุณไม่มีสิทธิ์ทำรายการนี้', not_found: 'ไม่พบข้อมูล',
     invalid_credentials: 'ชื่อผู้ใช้/อีเมล หรือรหัสผ่านไม่ถูกต้อง', invalid_email: 'รูปแบบอีเมลไม่ถูกต้อง', invalid_token: 'ลิงก์นี้หมดอายุหรือถูกใช้ไปแล้ว', email_disabled: 'เซิร์ฟเวอร์นี้ยังไม่ได้ตั้งค่าอีเมล กรุณาติดต่อผู้ดูแลระบบ', smtp_incomplete: 'กรอกเซิร์ฟเวอร์ SMTP และอีเมลผู้ส่ง', cannot_delete_self: 'ไม่สามารถลบบัญชีของตัวเองได้', email_taken: 'อีเมลนี้ถูกใช้กับบัญชีอื่นแล้ว', password_too_short: 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร',
