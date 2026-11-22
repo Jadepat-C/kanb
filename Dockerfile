@@ -16,10 +16,14 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && r
 COPY backend/ ./
 # COPY keeps old mtimes, which would make cargo think the placeholder build is still fresh
 RUN touch src/main.rs && cargo build --release
+# the only system library the binary needs beyond glibc; staged at its usual path (x86-64 or ARM64) for the final image
+RUN mkdir -p /stage && cp --parents "$(realpath "$(gcc -print-file-name=libgcc_s.so.1)")" /stage
 
-# Distroless: only glibc, CA certificates and time-zone data. No shell, no package manager, no extra tools,
-# so there is very little to patch and nothing for an intruder to use. Runs as the unprivileged "nonroot" user.
-FROM gcr.io/distroless/cc-debian12:nonroot
+# Distroless without OpenSSL: only glibc, CA certificates and time-zone data. No shell, no package manager, no
+# OpenSSL (TLS is done in Rust), so there is very little to patch and nothing for an intruder to use. Runs as the
+# unprivileged "nonroot" user.
+FROM gcr.io/distroless/base-nossl-debian12:nonroot
+COPY --from=api /stage/ /
 COPY --from=api /src/target/release/kanban /usr/local/bin/kanban
 COPY --from=web /web/dist /srv/web
 ENV BIND_ADDR=0.0.0.0:8080 \
