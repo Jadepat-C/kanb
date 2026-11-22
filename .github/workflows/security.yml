@@ -1,5 +1,5 @@
 # Known-vulnerability checks: Rust and npm libraries on every push and pull request, and the published image
-# weekly and after each image build. Findings appear under the repository's Security → Code scanning tab.
+# after each image build and weekly. Findings appear under the repository's Security → Code scanning tab.
 name: Security
 
 on:
@@ -36,7 +36,9 @@ jobs:
 
   image:
     name: Docker image
-    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    # after each image build (workflow_run), weekly and on demand. Not on push: the build for that push hasn't
+    # finished yet, so it would scan the previous image.
+    if: contains(fromJSON('["schedule", "workflow_dispatch"]'), github.event_name) || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
