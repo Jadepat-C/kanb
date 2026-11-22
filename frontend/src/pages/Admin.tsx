@@ -585,7 +585,12 @@ function EmailTab({ me }: { me: User }) {
 
 function EmailForm({ initial, me, onSaved }: { initial: EmailSettings; me: User; onSaved: () => void }) {
   const { t } = useTranslation()
-  const [f, setF] = useState(initial)
+  // never let the form hold a value its dropdown can't show (older servers sent an empty one before any save)
+  const [f, setF] = useState<EmailSettings>(() => ({
+    ...initial,
+    security: (['starttls', 'tls', 'none'] as const).includes(initial.security) ? initial.security : 'starttls',
+    port: initial.port || 587,
+  }))
   const [password, setPassword] = useState('')
   const [testTo, setTestTo] = useState(me.email ?? '')
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null)

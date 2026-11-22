@@ -20,7 +20,9 @@ use crate::{
 
 const KEY: &str = "smtp";
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Default is written out below: serde's `default = "…"` only applies when reading stored settings, so a derived
+// Default gave a fresh install port 0 and an empty encryption, which the email settings form then failed to save.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmtpSettings {
     #[serde(default)]
     pub enabled: bool,
@@ -43,6 +45,13 @@ pub struct SmtpSettings {
     #[serde(default)]
     pub public_url: String,
 }
+impl Default for SmtpSettings {
+    fn default() -> Self {
+        // the same as an empty stored object: one source of truth for the defaults
+        serde_json::from_value(serde_json::json!({})).expect("every field has a serde default")
+    }
+}
+
 fn default_port() -> u16 {
     587
 }
@@ -251,5 +260,19 @@ pub async fn test(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, Jso
     match send(&s, &to, &me.display_name, &subject, text, html).await {
         Ok(()) => Ok(Json(json!({ "ok": true }))),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_install_defaults_can_be_saved() {
+        // a server without stored settings must offer values the save endpoint accepts
+        let s = SmtpSettings::default();
+        assert_eq!(s.port, 587);
+        assert_eq!(s.security, "starttls");
+        assert!(!s.enabled);
     }
 }
