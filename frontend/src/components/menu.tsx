@@ -12,6 +12,20 @@ export type MenuKit = typeof RC
 export const CTX = RC as MenuKit
 export const DROP = RD as unknown as MenuKit
 
+/**
+ * A menu normally puts focus back where it was (the "⋯" button, or the right-clicked element) after it closes. An item
+ * that opens an inline text box instead calls this first, so that box keeps the focus: otherwise it loses focus right
+ * away (and saves and closes), and the keys meant for it go to whatever got the focus back.
+ */
+let keepFocus = false
+export const keepFocusAfterClose = () => {
+  keepFocus = true
+}
+export const closeAutoFocus = (e: Event) => {
+  if (keepFocus) e.preventDefault()
+  keepFocus = false
+}
+
 export const contentCls = 'z-50 min-w-48 rounded-lg border border-line bg-surface p-1 text-sm shadow-lg'
 const itemCls =
   'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-black/5 dark:data-[highlighted]:bg-white/10'
@@ -83,7 +97,7 @@ export function ContextMenu({ trigger, children, onOpenChange }: { trigger: Reac
         {trigger}
       </RC.Trigger>
       <RC.Portal>
-        <RC.Content collisionPadding={8} className={contentCls}>
+        <RC.Content collisionPadding={8} className={contentCls} onCloseAutoFocus={closeAutoFocus}>
           {children}
         </RC.Content>
       </RC.Portal>

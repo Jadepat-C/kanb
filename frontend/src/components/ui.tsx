@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { Dialog as RDialog, DropdownMenu as RMenu, Popover as RPopover } from 'radix-ui'
 import { X } from 'lucide-react'
 import { forwardRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
+import { closeAutoFocus } from './menu'
 
 type Variant = 'primary' | 'ghost' | 'outline' | 'danger'
 
@@ -122,6 +123,7 @@ export function MenuContent({ children, align = 'end' }: { children: ReactNode; 
       <RMenu.Content
         align={align}
         sideOffset={4}
+        onCloseAutoFocus={closeAutoFocus}
         className="z-50 min-w-44 rounded-lg border border-line bg-surface p-1 text-sm shadow-lg"
       >
         {children}

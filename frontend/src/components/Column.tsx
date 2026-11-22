@@ -12,7 +12,7 @@ import { templateDue, type CardSummary, type CardTemplate, type List } from '../
 import { CardTile } from './CardTile'
 import { ask, askText } from './dialogs'
 import { toastError, toastSuccess } from './toast'
-import { ContextMenu, CTX, DROP, MItem, MSep, MSub, type MenuKit } from './menu'
+import { ContextMenu, CTX, DROP, keepFocusAfterClose, MItem, MSep, MSub, type MenuKit } from './menu'
 import { Button, Menu, MenuContent, MenuTrigger } from './ui'
 
 export function Column({
@@ -153,7 +153,7 @@ export function Column({
       )}
       {canManage && (
         <>
-          <MItem M={M} onSelect={() => setRenaming(true)}>
+          <MItem M={M} onSelect={() => (keepFocusAfterClose(), setRenaming(true))}>
             <Pencil size={14} /> {t('common.rename')}
           </MItem>
           <MItem M={M} onSelect={setWip}>
@@ -214,7 +214,13 @@ export function Column({
       style={style}
       className={clsx('flex max-h-full w-[288px] shrink-0 flex-col rounded-xl bg-column', sortable.isDragging && 'opacity-50')}
     >
-      <div className="px-2 pt-2" {...sortable.attributes} {...sortable.listeners}>
+      <div
+        className="px-2 pt-2"
+        {...sortable.attributes}
+        {...sortable.listeners}
+        // keyboard drag (Space / Enter) only when the header itself has the focus: not from its buttons or the rename box
+        onKeyDown={(e) => e.target === e.currentTarget && sortable.listeners?.onKeyDown?.(e)}
+      >
         <div className={clsx('group/col flex items-center gap-1 px-1', canManage && 'cursor-grab active:cursor-grabbing')}>
           {canManage && (
             <GripVertical size={14} className="-ml-1 shrink-0 text-muted opacity-40 group-hover/col:opacity-100" aria-label={t('sort.dragHint')} />
