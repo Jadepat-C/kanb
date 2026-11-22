@@ -6,8 +6,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { ask } from './dialogs'
-import { toastError, toastSuccess } from './toast'
+import { toast, toastError, toastSuccess } from './toast'
 import { Button, Input } from './ui'
+import { copyText } from '../lib/clipboard'
 
 export interface FeedSettings {
   enabled: boolean
@@ -127,7 +128,7 @@ export function CalendarFeed() {
         <div className="space-y-2">
           <div className="flex gap-2">
             <Input readOnly value={full} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
-            <Button onClick={() => navigator.clipboard?.writeText(full).then(() => toastSuccess(t('common.copied')))}>
+            <Button onClick={() => copyText(full).then((ok) => (ok ? toastSuccess(t('common.copied')) : toast(t('common.copyManually'))))}>
               <Copy size={14} /> {t('common.copy')}
             </Button>
           </div>

@@ -4,7 +4,7 @@ import { initReactI18next } from 'react-i18next'
 const en = {
   app: { name: 'Kanb' },
   common: {
-    more: 'More actions',
+    more: 'More actions', copyManually: 'Couldn’t copy automatically here. Select the text and copy it.',
     save: 'Save', cancel: 'Cancel', delete: 'Delete', edit: 'Edit', close: 'Close', add: 'Add', create: 'Create',
     loading: 'Loading…', search: 'Search', name: 'Name', description: 'Description', color: 'Color', none: 'None',
     confirmDelete: 'Delete this? This cannot be undone.', yes: 'Yes', no: 'No', saved: 'Saved', rename: 'Rename',
@@ -330,7 +330,7 @@ type Dict = { [k: string]: string | Dict }
 const th: Dict = {
   app: { name: 'Kanb' },
   common: {
-    more: 'คำสั่งเพิ่มเติม',
+    more: 'คำสั่งเพิ่มเติม', copyManually: 'คัดลอกอัตโนมัติไม่ได้ กรุณาเลือกข้อความแล้วคัดลอกเอง',
     save: 'บันทึก', cancel: 'ยกเลิก', delete: 'ลบ', edit: 'แก้ไข', close: 'ปิด', add: 'เพิ่ม', create: 'สร้าง',
     loading: 'กำลังโหลด…', search: 'ค้นหา', name: 'ชื่อ', description: 'รายละเอียด', color: 'สี', none: 'ไม่มี',
     confirmDelete: 'ต้องการลบใช่หรือไม่? ไม่สามารถย้อนกลับได้', yes: 'ใช่', no: 'ไม่', saved: 'บันทึกแล้ว', rename: 'เปลี่ยนชื่อ',

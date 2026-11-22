@@ -5,8 +5,9 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { errorText } from '../lib/i18n'
 import type { User } from '../lib/types'
-import { toastError, toastSuccess } from './toast'
+import { toast, toastError, toastSuccess } from './toast'
 import { Button, Dialog, Field, Input } from './ui'
+import { copyText } from '../lib/clipboard'
 
 /** Profile section: turn the authenticator app on/off, switch phones, new recovery codes. */
 export function TwoFactorSection({ me }: { me: User }) {
@@ -219,7 +220,7 @@ function RecoveryCodes({ codes, title, onClose }: { codes: string[]; title: stri
           ))}
         </div>
         <div className="flex gap-2">
-          <Button size="sm" onClick={() => navigator.clipboard?.writeText(text).then(() => (setSaved(true), toastSuccess(t('common.copied'))))}>
+          <Button size="sm" onClick={() => copyText(text).then((ok) => (ok ? (setSaved(true), toastSuccess(t('common.copied'))) : toast(t('common.copyManually'))))}>
             <Copy size={14} /> {t('common.copy')}
           </Button>
           <Button

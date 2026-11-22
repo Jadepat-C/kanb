@@ -122,6 +122,111 @@ Everything else is set up in the app. Admin and Profile are in the menu under yo
 - **Notifications:** Admin → Notifications turns email, browser and chat notifications on or off for everyone.
   People choose their own in Profile → Notifications; board owners can add a team channel in Board settings.
 
+## Your own docker-compose.yml
+
+Prefer to write the setup yourself, or fold Kanb into a compose file you already have? These two files are all it
+takes. No need to clone the repository: put them in an empty folder and run `docker compose up -d` there.
+
+**`docker-compose.yml`**
+
+```yaml
+# Kanb: the app, PostgreSQL, and SeaweedFS (S3-compatible file storage). Only the app publishes a port; the
+# database and file store are reachable only inside this compose network, and every upload and download goes
+# through the app, which checks permissions first.
+name: kanb
+
+services:
+  app:
+    image: ghcr.io/jadepat-c/kanb:0.1          # 0.1.x updates; :latest for every release
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+      s3: { condition: service_healthy }
+    ports:
+      # where people (or your reverse proxy) reach Kanb. 127.0.0.1 = only this machine, for a reverse proxy here;
+      # "8080:8080" = your whole network, e.g. a LAN install without HTTPS
+      - "127.0.0.1:8080:8080"
+    environment:
+      PUBLIC_ORIGIN: https://kanb.example.com   # the exact address people open (no trailing slash)
+      COOKIE_SECURE: "true"                     # "false" if it's served over plain http (a LAN install)
+      TRUST_PROXY: "true"                       # "false" if nothing sits in front of Kanb (no reverse proxy)
+      TZ: Asia/Bangkok                          # for dates in chat posts, calendar feeds and recurring cards
+      DATABASE_URL: postgres://kanb:${POSTGRES_PASSWORD}@db:5432/kanb
+      S3_ENDPOINT: http://s3:8333
+      S3_BUCKET: kanb
+      S3_ACCESS_KEY: kanb
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      SECRET_KEY: ${SECRET_KEY}                 # encrypts stored secrets: keep a copy with your backups
+      SETUP_CODE: ${SETUP_CODE}                 # asked for when you create the first admin in the browser
+      # MAX_UPLOAD_MB: "50"
+      # SESSION_DAYS: "30"
+
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kanb
+      POSTGRES_DB: kanb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql:Z  # :Z is for SELinux systems (Fedora, RHEL); harmless elsewhere
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kanb -d kanb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  s3:
+    image: chrislusf/seaweedfs:4.52
+    restart: unless-stopped
+    environment:
+      S3_ACCESS_KEY: kanb
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+    # writes SeaweedFS's key file from the two variables above, then starts it as usual
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        umask 077
+        printf '{"identities":[{"name":"kanb","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read","Write","List","Tagging","Admin"]}]}' "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /etc/seaweedfs-s3.json
+        chown seaweed /etc/seaweedfs-s3.json
+        exec /entrypoint.sh server -s3 -s3.port=8333 -s3.config=/etc/seaweedfs-s3.json -master.volumeSizeLimitMB=256
+    volumes:
+      - ./data/files:/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/healthz || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+```
+
+**`.env`**, next to it, holding the secrets. Generate random ones in that folder with:
+
+```bash
+cat > .env <<EOF
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
+S3_SECRET_KEY=$(openssl rand -hex 24)
+SECRET_KEY=$(openssl rand -hex 32)
+SETUP_CODE=$(openssl rand -hex 4)
+EOF
+chmod 600 .env
+```
+
+Then:
+
+1. Change `PUBLIC_ORIGIN`, `COOKIE_SECURE`, `TRUST_PROXY`, `TZ` and the port to match your setup.
+2. `docker compose up -d`, then open your address and create the first admin with the `SETUP_CODE` from `.env`.
+3. Back up the `data` folder and `.env` (see [Backups](#backups); the commands there work in this folder too).
+
+Good to know:
+- **Passwords:** use letters and digits only for `POSTGRES_PASSWORD`, since it goes into a connection URL.
+  Set it before the first start: changing it later in `.env` doesn't change the database's password.
+- **Other storage:** to use AWS S3, MinIO, Garage, Cloudflare R2 or similar instead of the bundled SeaweedFS, remove
+  the `s3` service and point `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` at it. Add `S3_REGION`
+  if it isn't `us-east-1` (R2 uses `auto`). The bucket must exist already; Kanb uses path-style requests.
+- **Upgrades:** `docker compose pull && docker compose up -d`. Database changes are applied automatically when the
+  app starts.
+
 ## Configuration
 
 All settings live in `deploy/.env`. `./setup.sh` asks for them and fills in the passwords; [`deploy/.env.example`](deploy/.env.example)
@@ -144,6 +249,10 @@ explains each line.
 | `MAX_UPLOAD_MB` | `50` | Largest file people can upload. Raise your proxy's limit to match. |
 
 After editing `.env`, apply it with `docker compose up -d`.
+
+In [your own docker-compose.yml](#your-own-docker-composeyml) the app reads the same settings directly, except three
+that only exist for the bundled setup: `KANB_URL` is `PUBLIC_ORIGIN`, `KANB_BIND` is the `ports:` entry, and
+`KANB_DATA` is the folder in the `volumes:` entries.
 
 ## Backups
 

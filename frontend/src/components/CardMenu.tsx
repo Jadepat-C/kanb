@@ -31,6 +31,7 @@ import { toast, toastError, toastSuccess } from './toast'
 import { Button, Dialog, Input, PALETTE } from './ui'
 import { DropdownMenu as RD } from 'radix-ui'
 import { ContextMenu, contentCls, CTX, DROP, MItem, MLabel, MSep, MSub } from './menu'
+import { copyText } from '../lib/clipboard'
 
 /** What the menu needs to know about a card. Board-level details are optional (not known on the global calendar). */
 export interface MenuCard {
@@ -153,15 +154,12 @@ export function CardContextMenu({
       <MItem
         M={M}
         onSelect={() =>
-          navigator.clipboard?.writeText(link).then(
-            () => toast(t('menu.linkCopied')),
-            () => toast(link),
-          )
+          copyText(link).then((ok) => toast(ok ? t('menu.linkCopied') : link))
         }
       >
         <Link2 size={14} /> {t('menu.copyLink')}
       </MItem>
-      <MItem M={M} onSelect={() => navigator.clipboard?.writeText(`#${card.number} ${card.title}`).then(() => toast(t('menu.copied')))}>
+      <MItem M={M} onSelect={() => copyText(`#${card.number} ${card.title}`).then((ok) => toast(ok ? t('menu.copied') : `#${card.number} ${card.title}`))}>
         <Copy size={14} /> {t('menu.copyTitle')}
       </MItem>
       <MItem M={M} onSelect={() => calendar.toggle(card.id)}>

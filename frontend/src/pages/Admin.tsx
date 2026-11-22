@@ -14,6 +14,7 @@ import { generatePassword } from '../lib/password'
 import { fmtDate } from '../lib/prefs'
 import type { User } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
+import { copyText } from '../lib/clipboard'
 
 const useEmailEnabled = () =>
   useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ email_enabled: boolean }>('/auth/options') }).data?.email_enabled ?? false
@@ -197,7 +198,7 @@ function IconBtn({ title, onClick, danger, children }: { title: string; onClick:
 }
 
 function copy(text: string, done: string) {
-  navigator.clipboard?.writeText(text).then(() => toast(done), () => toast(text))
+  copyText(text).then((ok) => toast(ok ? done : text))
 }
 
 /** Password input with show/hide, generate and copy. */

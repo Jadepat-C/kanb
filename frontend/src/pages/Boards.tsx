@@ -33,6 +33,7 @@ import { useMe } from '../lib/auth'
 import { fmtRelative } from '../lib/prefs'
 import type { Board, BoardListItem, BoardTemplate } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
+import { copyText } from '../lib/clipboard'
 
 type Confirm = { kind: 'archive' | 'purge' | 'leave'; board: BoardListItem } | null
 
@@ -131,7 +132,7 @@ export function Boards() {
             </MItem>
           </>
         )}
-        <MItem M={CTX} onSelect={() => navigator.clipboard?.writeText(link).then(() => toast(t('menu.linkCopied')))}>
+        <MItem M={CTX} onSelect={() => copyText(link).then((ok) => toast(ok ? t('menu.linkCopied') : link))}>
           <Link2 size={14} /> {t('menu.copyLink')}
         </MItem>
         {!isArchived && b.can_manage && (
