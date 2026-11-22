@@ -519,7 +519,7 @@ async fn dispatch(state: &AppState) -> anyhow::Result<()> {
         let evs = &groups[&k];
         let first = evs[0];
         let card = Card { id: first.card_id, number: first.number, title: first.title.clone() };
-        let actor = first.actor.clone().unwrap_or_else(|| "Kanban".into());
+        let actor = first.actor.clone().unwrap_or_else(|| "Kanb".into());
         for c in &chans[&k.0] {
             let mine: Vec<&&Ev> = evs.iter().filter(|e| category(&e.kind).is_some_and(|cat| wants(c, cat))).collect();
             if mine.is_empty() {

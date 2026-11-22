@@ -86,7 +86,7 @@ pub fn base_url(state: &AppState, s: &SmtpSettings) -> String {
 }
 
 pub async fn send(s: &SmtpSettings, to_email: &str, to_name: &str, subject: &str, text: String, html: String) -> Result<(), String> {
-    let from: Mailbox = format!("{} <{}>", if s.from_name.trim().is_empty() { "Kanban" } else { s.from_name.trim() }, s.from_email.trim())
+    let from: Mailbox = format!("{} <{}>", if s.from_name.trim().is_empty() { "Kanb" } else { s.from_name.trim() }, s.from_email.trim())
         .parse()
         .map_err(|e| format!("invalid sender address: {e}"))?;
     let to: Mailbox = format!("{} <{}>", to_name.replace(['<', '>', '"'], ""), to_email)
@@ -123,28 +123,28 @@ pub fn link_email(kind: &str, locale: &str, name: &str, username: &str, link: &s
     let th = locale == "th";
     let (subject, intro, button, validity, outro) = match (kind, th) {
         ("invite", false) => (
-            "Your Kanban account is ready".to_string(),
+            "Your Kanb account is ready".to_string(),
             format!("An account has been created for you. Your username is “{username}” (you can also sign in with this email address)."),
             "Set your password",
             "This link is valid for 3 days and can be used once.",
             format!("Afterwards, sign in at {sign_in}"),
         ),
         ("invite", true) => (
-            "บัญชี Kanban ของคุณพร้อมใช้งานแล้ว".to_string(),
+            "บัญชี Kanb ของคุณพร้อมใช้งานแล้ว".to_string(),
             format!("ผู้ดูแลระบบได้สร้างบัญชีให้คุณแล้ว ชื่อผู้ใช้ของคุณคือ “{username}” (เข้าสู่ระบบด้วยอีเมลนี้ได้เช่นกัน)"),
             "ตั้งรหัสผ่าน",
             "ลิงก์นี้ใช้ได้ 3 วัน และใช้ได้ครั้งเดียว",
             format!("จากนั้นเข้าสู่ระบบได้ที่ {sign_in}"),
         ),
         (_, false) => (
-            "Reset your Kanban password".to_string(),
+            "Reset your Kanb password".to_string(),
             format!("Someone (hopefully you) asked to reset the password for “{username}”."),
             "Choose a new password",
             "This link is valid for 1 hour and can be used once. If you didn't ask for this, ignore this email; your password stays the same.",
             format!("Sign in at {sign_in}"),
         ),
         (_, true) => (
-            "รีเซ็ตรหัสผ่าน Kanban".to_string(),
+            "รีเซ็ตรหัสผ่าน Kanb".to_string(),
             format!("มีการขอรีเซ็ตรหัสผ่านของบัญชี “{username}”"),
             "ตั้งรหัสผ่านใหม่",
             "ลิงก์นี้ใช้ได้ 1 ชั่วโมง และใช้ได้ครั้งเดียว หากคุณไม่ได้ขอ ไม่ต้องทำอะไร รหัสผ่านเดิมยังใช้ได้",
@@ -244,9 +244,9 @@ pub async fn test(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, Jso
     let to = crate::auth::normalize_email(Some(r.to))?.flatten().ok_or(AppError::BadRequest("invalid_email"))?;
     let url = base_url(&state, &s);
     let (subject, text, html) = if me.locale == "th" {
-        ("ทดสอบอีเมลจาก Kanban".to_string(), format!("การตั้งค่าอีเมลใช้งานได้ ✓\n{url}"), format!("<p>การตั้งค่าอีเมลใช้งานได้ ✓</p><p>{}</p>", esc(&url)))
+        ("ทดสอบอีเมลจาก Kanb".to_string(), format!("การตั้งค่าอีเมลใช้งานได้ ✓\n{url}"), format!("<p>การตั้งค่าอีเมลใช้งานได้ ✓</p><p>{}</p>", esc(&url)))
     } else {
-        ("Kanban test email".to_string(), format!("Your email settings work ✓\n{url}"), format!("<p>Your email settings work ✓</p><p>{}</p>", esc(&url)))
+        ("Kanb test email".to_string(), format!("Your email settings work ✓\n{url}"), format!("<p>Your email settings work ✓</p><p>{}</p>", esc(&url)))
     };
     match send(&s, &to, &me.display_name, &subject, text, html).await {
         Ok(()) => Ok(Json(json!({ "ok": true }))),

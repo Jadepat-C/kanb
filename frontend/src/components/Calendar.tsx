@@ -1,14 +1,12 @@
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
   pointerWithin,
   useDraggable,
   useDroppable,
-  useSensor,
-  useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core'
+import { useDragSensors, useMedia } from '../lib/dnd'
 import clsx from 'clsx'
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import { useContext, createContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
@@ -92,7 +90,10 @@ export function Calendar({
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem('calendar-mode') as Mode) || 'month')
   const [override, setOverride] = useState<Record<string, string | null>>({})
   const [dragging, setDragging] = useState<CalItem | null>(null)
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+  const sensors = useDragSensors(5)
+  // Phones: too narrow for titles in a 7-column grid. Days show dots; the picked day's cards are listed below.
+  const narrow = useMedia('(max-width: 639px)')
+  const [picked, setPicked] = useState(() => dayKey(new Date()))
 
   const { start, days } = visibleRange(cursor, mode)
   useEffect(() => {
@@ -126,8 +127,11 @@ export function Calendar({
     mode === 'month'
       ? cursor.toLocaleDateString(loc, { month: 'long', year: 'numeric' })
       : `${fmtDate(start.toISOString())} – ${fmtDate(addDays(start, 6).toISOString())}`
-  const step = (n: number) =>
-    setCursor((c) => (mode === 'month' ? new Date(c.getFullYear(), c.getMonth() + n, 1) : addDays(c, 7 * n)))
+  const step = (n: number) => {
+    const next = mode === 'month' ? new Date(cursor.getFullYear(), cursor.getMonth() + n, 1) : addDays(startOfWeek(cursor), 7 * n)
+    setCursor(next)
+    setPicked(dayKey(next))
+  }
 
   const onDragEnd = (e: DragEndEvent) => {
     setDragging(null)
@@ -154,10 +158,10 @@ export function Calendar({
       onDragEnd={onDragEnd}
       onDragCancel={() => setDragging(null)}
     >
-      <div className="flex h-full min-h-0 gap-3 p-4">
-        <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex h-full min-h-0 gap-3 p-3 sm:p-4">
+        <div className={clsx('flex min-w-0 flex-1 flex-col', narrow && 'overflow-y-auto')}>
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={() => setCursor(new Date())}>
+            <Button size="sm" onClick={() => (setCursor(new Date()), setPicked(dayKey(new Date())))}>
               {t('calendar.today')}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => step(-1)} aria-label="previous">
@@ -166,8 +170,8 @@ export function Calendar({
             <Button size="sm" variant="ghost" onClick={() => step(1)} aria-label="next">
               <ChevronRight size={16} />
             </Button>
-            <h2 className="text-lg font-semibold">{title}</h2>
-            <div className="ml-auto flex items-center gap-2">
+            <h2 className="text-base font-semibold sm:text-lg">{title}</h2>
+            <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
               {toolbar}
               <div className="flex rounded-md border border-line p-0.5">
                 {(['month', 'week'] as Mode[]).map((m) => (
@@ -189,7 +193,7 @@ export function Calendar({
               </div>
             ))}
           </div>
-          <div className={clsx('grid min-h-0 flex-1 grid-cols-7 border-l border-line', mode === 'month' ? 'auto-rows-fr' : 'grid-rows-1')}>
+          <div className={clsx('grid grid-cols-7 border-l border-line', !narrow && 'min-h-0 flex-1', !narrow && (mode === 'month' ? 'auto-rows-fr' : 'grid-rows-1'))}>
             {Array.from({ length: days }, (_, i) => {
               const d = addDays(start, i)
               const k = dayKey(d)
@@ -210,10 +214,22 @@ export function Calendar({
                   dayMenu={dayMenu}
                   onNewAt={onNewAt ? () => onNewAt(moveTo(d, null)) : undefined}
                   due={moveTo(d, null)}
+                  compact={narrow}
+                  picked={narrow && k === picked}
+                  onPick={() => setPicked(k)}
                 />
               )
             })}
           </div>
+          {narrow && (
+            <DayList
+              date={new Date(`${picked}T00:00`)}
+              items={byDay.get(picked) ?? []}
+              onOpen={onOpen}
+              draggable={!!onMove}
+              onNewAt={onNewAt ? () => onNewAt(moveTo(new Date(`${picked}T00:00`), null)) : undefined}
+            />
+          )}
         </div>
         {unscheduled && (
           <Unscheduled items={noDue} onOpen={onOpen} draggable={!!onMove} itemMenu={itemMenu} />
@@ -240,7 +256,13 @@ function Day({
   dayMenu,
   onNewAt,
   due,
+  compact,
+  picked,
+  onPick,
 }: {
+  compact?: boolean
+  picked?: boolean
+  onPick?: () => void
   itemMenu?: ItemMenu
   dayMenu?: DayMenu
   onNewAt?: () => void
@@ -261,6 +283,36 @@ function Day({
   const [adding, setAdding] = useState(false)
   const shown = items.slice(0, limit)
   const rest = items.length - shown.length
+  if (compact)
+    return (
+      <button
+        ref={setNodeRef}
+        type="button"
+        onClick={onPick}
+        aria-pressed={picked}
+        className={clsx(
+          'flex h-14 min-w-0 flex-col items-center gap-1 border-b border-r border-line pt-1.5 cursor-pointer',
+          picked ? 'bg-accent/10' : weekend ? 'bg-surface-2' : 'bg-surface',
+          outside && 'opacity-50',
+          isOver && 'ring-2 ring-inset ring-accent',
+        )}
+      >
+        <span
+          className={clsx(
+            'flex h-6 min-w-6 items-center justify-center rounded-full text-xs',
+            isToday ? 'bg-accent font-semibold text-white' : picked ? 'font-semibold text-accent' : 'text-muted',
+          )}
+        >
+          {date.getDate()}
+        </span>
+        <span className="flex items-center gap-0.5">
+          {items.slice(0, 3).map((i) => (
+            <span key={i.id} className={clsx('h-1.5 w-1.5 rounded-full', i.done && 'opacity-40')} style={{ background: i.color ?? 'var(--muted)' }} />
+          ))}
+          {items.length > 3 && <span className="text-[9px] leading-none text-muted">+</span>}
+        </span>
+      </button>
+    )
   const cell = (
     <div
       ref={setNodeRef}
@@ -330,6 +382,35 @@ function Day({
     </div>
   )
   return dayMenu ? dayMenu(due, cell) : cell
+}
+
+/** Phones: the cards due on the picked day, full width under the grid. Long-press one to drag it onto another day. */
+function DayList({ date, items, onOpen, draggable, onNewAt }: { date: Date; items: CalItem[]; onOpen: (id: string) => void; draggable: boolean; onNewAt?: () => void }) {
+  const { t, i18n } = useTranslation()
+  const loc = i18n.language === 'th' ? 'th-TH' : 'en-GB'
+  return (
+    <section className="mt-3 space-y-1.5">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-semibold">
+          {date.toLocaleDateString(loc, { weekday: 'long' })} {fmtDate(date.toISOString())}
+        </h3>
+        {onNewAt && (
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={onNewAt}>
+            <Plus size={14} /> {t('menu.newCardOnDay')}
+          </Button>
+        )}
+      </div>
+      {items.length === 0 ? (
+        <p className="py-3 text-center text-sm text-muted">{t('calendar.nothingDue')}</p>
+      ) : (
+        <div className="flex flex-col gap-1 [&_button]:py-2 [&_button]:text-sm">
+          {items.map((i) => (
+            <DraggableChip key={i.id} item={i} onOpen={onOpen} draggable={draggable && i.canMove} />
+          ))}
+        </div>
+      )}
+    </section>
+  )
 }
 
 function Unscheduled({ items, onOpen, draggable, itemMenu }: { items: CalItem[]; onOpen: (id: string) => void; draggable: boolean; itemMenu?: ItemMenu }) {

@@ -6,6 +6,7 @@ import clsx from 'clsx'
 import { Check, ChevronRight } from 'lucide-react'
 import { ContextMenu as RC, DropdownMenu as RD } from 'radix-ui'
 import type { ReactNode } from 'react'
+import { touchOnly } from '../lib/dnd'
 
 export type MenuKit = typeof RC
 export const CTX = RC as MenuKit
@@ -60,7 +61,7 @@ export function MSub({ M, icon, label, children }: { M: MenuKit; icon?: ReactNod
         <ChevronRight size={14} className="ml-auto text-muted" />
       </M.SubTrigger>
       <M.Portal>
-        <M.SubContent sideOffset={4} collisionPadding={8} className={clsx(contentCls, 'max-h-[70vh] overflow-y-auto')}>
+        <M.SubContent sideOffset={4} collisionPadding={8} className={clsx(contentCls, 'max-h-[70dvh] overflow-y-auto')}>
           {children}
         </M.SubContent>
       </M.Portal>
@@ -77,7 +78,8 @@ export const MLabel = ({ M, children }: { M: MenuKit; children: ReactNode }) => 
 export function ContextMenu({ trigger, children, onOpenChange }: { trigger: React.ReactElement; children: ReactNode; onOpenChange?: (o: boolean) => void }) {
   return (
     <RC.Root onOpenChange={onOpenChange}>
-      <RC.Trigger asChild onContextMenu={(e) => e.stopPropagation()}>
+      {/* off on touch screens: long-press there picks the item up to drag it; menus open from a "⋯" button instead */}
+      <RC.Trigger asChild disabled={touchOnly()} onContextMenu={(e) => e.stopPropagation()}>
         {trigger}
       </RC.Trigger>
       <RC.Portal>

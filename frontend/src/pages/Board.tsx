@@ -3,16 +3,13 @@ import {
   closestCorners,
   DndContext,
   DragOverlay,
-  KeyboardSensor,
-  PointerSensor,
   pointerWithin,
-  useSensor,
-  useSensors,
   type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
+import { useDragSensors } from '../lib/dnd'
 import { arrayMove, horizontalListSortingStrategy, SortableContext, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
@@ -167,10 +164,7 @@ export function BoardPage() {
   const columns = override ?? visible
   const listOrder = listOverride ?? (data?.lists ?? []).map((l) => l.id)
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  )
+  const sensors = useDragSensors(6, { coordinateGetter: sortableKeyboardCoordinates })
 
   const moveCard = useMutation({
     mutationFn: (p: { id: string; list_id: string; index: number }) => api.post(`/cards/${p.id}/move`, p),

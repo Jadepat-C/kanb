@@ -5,6 +5,8 @@
 @plugin '@tailwindcss/typography';
 
 @custom-variant dark (&:where(.dark, .dark *));
+/* phones and tablets without a mouse: nothing can be hovered, so hover-only controls must show */
+@custom-variant touch (@media (hover: none));
 
 /*
  * "Planning wall": the board is a cool grey wall, columns are lanes on it and cards are crisp paper pinned on top.
@@ -75,6 +77,25 @@ body {
   -webkit-font-smoothing: antialiased;
   /* Thai has tall vowel/tone marks; give lines a little more room */
   line-height: 1.55;
+}
+
+/* Touch screens */
+@media (pointer: coarse) {
+  /* iOS zooms the page into any field whose text is under 16px; 16px keeps the layout still */
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea,
+  [contenteditable='true'],
+  .cm-content {
+    font-size: 16px !important;
+  }
+}
+/* long-press picks cards and boards up to drag; don't let iOS pop up its text/link menu instead */
+[aria-roledescription='sortable'],
+[aria-roledescription='draggable'] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 @utility bg-surface { background-color: var(--surface); }

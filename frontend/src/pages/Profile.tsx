@@ -1,7 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Camera, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import clsx from 'clsx'
+import { Bell, CalendarDays, Camera, KeyRound, Trash2, UserRound } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router'
 import { CalendarFeed } from '../components/CalendarFeed'
 import { NotificationPrefs } from '../components/ContactPoints'
 import { TwoFactorSection } from '../components/TwoFactor'
@@ -23,7 +25,12 @@ export function Profile() {
   const [cur, setCur] = useState('')
   const [next, setNext] = useState('')
   const save = useMutation({
-    mutationFn: () => api.patch<User>('/me', { display_name: name, email, avatar_color: color }),
+    mutationFn: () =>
+      api.patch<User>('/me', {
+        display_name: name,
+        email,
+        avatar_color: color,
+      }),
     onSuccess: (u) => (qc.setQueryData(['me'], u), toast(t('common.saved'))),
     onError: toastError,
   })
@@ -32,69 +39,115 @@ export function Profile() {
     onSuccess: () => (setCur(''), setNext(''), toast(t('profile.passwordChanged'))),
     onError: toastError,
   })
-  useEffect(() => {
-    if (location.hash) setTimeout(() => document.querySelector(location.hash)?.scrollIntoView({ behavior: 'smooth' }), 100)
-  }, [])
+  const [sp, setSp] = useSearchParams()
+  // old links pointed at #calendar-feed on the single long page
+  const tab: Tab = TABS.find((k) => k === sp.get('tab')) ?? (location.hash === '#calendar-feed' ? 'calendar' : 'account')
   if (!me) return null
   return (
-    <div className="mx-auto max-w-xl space-y-8 p-4 sm:p-6">
-      <h1 className="text-xl font-semibold">{t('profile.title')}</h1>
-      <section className="space-y-4 rounded-xl border border-line bg-surface p-5">
-        <AvatarEditor me={me} name={name} color={color ?? me.avatar_color} />
-        <Field label={t('admin.displayName')}>
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <Field label={t('admin.email')}>
-          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        </Field>
-        <Field label={t('common.color')}>
-          <ColorPicker value={color} onChange={setColor} />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={t('nav.language')}>
-            <select value={me.locale} onChange={(e) => prefs.mutate({ locale: e.target.value as Locale })} className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm">
-              <option value="en">English</option>
-              <option value="th">ไทย</option>
-            </select>
-          </Field>
-          <Field label={t('nav.theme')}>
-            <select value={me.theme} onChange={(e) => prefs.mutate({ theme: e.target.value as Theme })} className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm">
-              {(['light', 'dark', 'system'] as Theme[]).map((th) => (
-                <option key={th} value={th}>
-                  {t(`theme.${th}`)}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <Button variant="primary" onClick={() => save.mutate()} disabled={save.isPending}>
-          {t('common.save')}
-        </Button>
-      </section>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          pw.mutate()
-        }}
-        className="space-y-4 rounded-xl border border-line bg-surface p-5"
-      >
-        <h2 className="font-semibold">{t('profile.changePassword')}</h2>
-        <Field label={t('profile.currentPassword')}>
-          <Input type="password" value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
-        </Field>
-        <Field label={t('profile.newPassword')} hint={t('errors.password_too_short')}>
-          <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={8} autoComplete="new-password" />
-        </Field>
-        <Button variant="primary" disabled={pw.isPending}>
-          {t('common.save')}
-        </Button>
-      </form>
-      <NotificationPrefs me={me} />
-      <CalendarFeed />
-      <TwoFactorSection me={me} />
+    <div className="mx-auto max-w-2xl p-4 sm:p-6">
+      <h1 className="mb-3 text-xl font-semibold">{t('profile.title')}</h1>
+      <div role="tablist" className="mb-5 flex items-center gap-1 border-b border-line">
+        {TABS.map((k) => {
+          const Icon = {
+            account: UserRound,
+            security: KeyRound,
+            notifications: Bell,
+            calendar: CalendarDays,
+          }[k]
+          return (
+            <button
+              key={k}
+              role="tab"
+              title={t(`profile.tab.${k}`)}
+              aria-selected={tab === k}
+              onClick={() => setSp(k === 'account' ? {} : { tab: k }, { replace: true })}
+              className={clsx(
+                '-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium cursor-pointer',
+                tab === k ? 'border-accent text-[var(--text)]' : 'border-transparent text-muted hover:text-[var(--text)]',
+              )}
+            >
+              <Icon size={15} />
+              {/* on a phone only the open tab shows its name, so all four fit */}
+              <span className={clsx(tab !== k && 'sr-only sm:not-sr-only')}>{t(`profile.tab.${k}`)}</span>
+            </button>
+          )
+        })}
+      </div>
+      <div className="space-y-6">
+        {tab === 'account' && (
+          <section className="space-y-4 rounded-xl border border-line bg-surface p-5">
+            <AvatarEditor me={me} name={name} color={color ?? me.avatar_color} />
+            <Field label={t('admin.displayName')}>
+              <Input value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+            <Field label={t('admin.email')}>
+              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </Field>
+            <Field label={t('common.color')}>
+              <ColorPicker value={color} onChange={setColor} />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={t('nav.language')}>
+                <select
+                  value={me.locale}
+                  onChange={(e) => prefs.mutate({ locale: e.target.value as Locale })}
+                  className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm"
+                >
+                  <option value="en">English</option>
+                  <option value="th">ไทย</option>
+                </select>
+              </Field>
+              <Field label={t('nav.theme')}>
+                <select
+                  value={me.theme}
+                  onChange={(e) => prefs.mutate({ theme: e.target.value as Theme })}
+                  className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm"
+                >
+                  {(['light', 'dark', 'system'] as Theme[]).map((th) => (
+                    <option key={th} value={th}>
+                      {t(`theme.${th}`)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <Button variant="primary" onClick={() => save.mutate()} disabled={save.isPending}>
+              {t('common.save')}
+            </Button>
+          </section>
+        )}
+        {tab === 'security' && (
+          <>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                pw.mutate()
+              }}
+              className="space-y-4 rounded-xl border border-line bg-surface p-5"
+            >
+              <h2 className="font-semibold">{t('profile.changePassword')}</h2>
+              <Field label={t('profile.currentPassword')}>
+                <Input type="password" value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
+              </Field>
+              <Field label={t('profile.newPassword')} hint={t('errors.password_too_short')}>
+                <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={8} autoComplete="new-password" />
+              </Field>
+              <Button variant="primary" disabled={pw.isPending}>
+                {t('common.save')}
+              </Button>
+            </form>
+            <TwoFactorSection me={me} />
+          </>
+        )}
+        {tab === 'notifications' && <NotificationPrefs me={me} />}
+        {tab === 'calendar' && <CalendarFeed />}
+      </div>
     </div>
   )
 }
+
+const TABS = ['account', 'security', 'notifications', 'calendar'] as const
+type Tab = (typeof TABS)[number]
 
 /** Profile picture: click or drop an image; the server crops it to a square and strips photo metadata. */
 function AvatarEditor({ me, name, color }: { me: User; name: string; color: string }) {

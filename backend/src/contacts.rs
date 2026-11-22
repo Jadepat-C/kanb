@@ -417,7 +417,7 @@ pub async fn test(State(state): State<AppState>, CurrentUser(u): CurrentUser, Js
         to_email: None,
         to_name: u.display_name.clone(),
         actor: None,
-        subject: if th { "ทดสอบการแจ้งเตือนจาก Kanban".into() } else { "Test notification from Kanban".into() },
+        subject: if th { "ทดสอบการแจ้งเตือนจาก Kanb".into() } else { "Test notification from Kanb".into() },
         line: if th {
             format!("ถ้าคุณเห็นข้อความนี้ แสดงว่า “{name}” ใช้งานได้แล้ว")
         } else {
@@ -425,9 +425,9 @@ pub async fn test(State(state): State<AppState>, CurrentUser(u): CurrentUser, Js
         },
         snippet: String::new(),
         link: base,
-        open_label: if th { "เปิด Kanban" } else { "Open Kanban" },
+        open_label: if th { "เปิด Kanb" } else { "Open Kanb" },
         board_id: Uuid::nil(),
-        board_name: "Kanban".into(),
+        board_name: "Kanb".into(),
         card_id: None,
         card_number: None,
         card_title: None,
@@ -505,7 +505,7 @@ pub(crate) async fn send(state: &AppState, sys: &System, kind: &str, cfg: &Map<S
             u.query_pairs_mut().append_pair("wait", "true"); // so errors come back
             let desc = format!("{}{}", m.line, quote("\n> ", "")).trim().to_string();
             let body = json!({
-                "username": "Kanban",
+                "username": "Kanb",
                 "allowed_mentions": { "parse": [] }, // a comment containing @everyone must not ping the server
                 "embeds": [{
                     "title": trunc(&m.subject, 256), "url": m.link, "description": trunc(&desc, 4000), "color": 0x2f5bd3,
@@ -591,14 +591,14 @@ pub(crate) async fn send(state: &AppState, sys: &System, kind: &str, cfg: &Map<S
                 "board": if m.board_id.is_nil() { Value::Null } else { json!({ "id": m.board_id, "name": m.board_name }) },
                 "card": m.card_id.map(|id| json!({ "id": id, "number": m.card_number, "title": m.card_title })),
             });
-            headers.push(("X-Kanban-Event", m.kind.clone()));
+            headers.push(("X-Kanb-Event", m.kind.clone()));
             (get(cfg, "url").into(), body)
         }
         _ => return Err("unknown contact point type".into()),
     };
     let bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
     if kind == "webhook" && !get(cfg, "secret").is_empty() {
-        headers.push(("X-Kanban-Signature", format!("sha256={}", hex::encode(hmac_sha256(get(cfg, "secret").as_bytes(), &bytes)))));
+        headers.push(("X-Kanb-Signature", format!("sha256={}", hex::encode(hmac_sha256(get(cfg, "secret").as_bytes(), &bytes)))));
     }
     post(state, sys, &url, headers, bytes).await
 }
@@ -648,7 +648,7 @@ pub(crate) async fn http_post(state: &AppState, allow_private: bool, url: &str, 
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
-        .user_agent("Kanban-notifications");
+        .user_agent("Kanb-notifications");
     let final_url = if let Some(base) = state.config.webhook_redirect.as_deref() {
         // dev/test: everything goes to the local catcher
         let mut u = reqwest::Url::parse(base).map_err(|e| e.to_string())?;

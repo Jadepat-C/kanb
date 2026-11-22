@@ -1,4 +1,4 @@
-// Service worker: shows browser notifications sent by the Kanban server (Web Push) and opens the card on click.
+// Service worker: shows browser notifications sent by the Kanb server (Web Push) and opens the card on click.
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()))
 
@@ -7,10 +7,10 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data ? event.data.json() : {}
   } catch {
-    data = { title: 'Kanban', body: event.data ? event.data.text() : '' }
+    data = { title: 'Kanb', body: event.data ? event.data.text() : '' }
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Kanban', {
+    self.registration.showNotification(data.title || 'Kanb', {
       body: data.body || '',
       icon: '/icon-192.png',
       badge: '/icon-192.png',

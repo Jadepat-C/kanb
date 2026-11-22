@@ -25,7 +25,7 @@ export function Login() {
   const [ticket, setTicket] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [useRecovery, setUseRecovery] = useState(false)
-  const options = useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ email_enabled: boolean }>('/auth/options') })
+  const options = useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ email_enabled: boolean; needs_setup?: boolean }>('/auth/options') })
 
   if (me) return <Navigate to="/" replace />
   const from = (loc.state as { from?: string } | null)?.from ?? '/'
@@ -74,69 +74,149 @@ export function Login() {
           {isDark() ? <Sun size={15} /> : <Moon size={15} />}
         </Button>
       </div>
-      <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-xl border border-line bg-surface p-6 shadow-sm">
-        <div className="flex items-center gap-3">
-          <img src="/favicon.svg" alt="" className="h-9 w-9" />
-          <div>
-            <h1 className="text-lg font-semibold">{t('app.name')}</h1>
-            <p className="text-sm text-muted">{t('auth.welcome')}</p>
-          </div>
-        </div>
-        {ticket ? (
-          <>
-            <p className="text-sm">{useRecovery ? t('twofa.loginRecoveryHint') : t('twofa.loginHint')}</p>
-            <Field label={useRecovery ? t('twofa.recoveryCode') : t('twofa.code')}>
-              {useRecovery ? (
-                <Input key="rc" value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" placeholder="xxxx-xxxx" className="font-mono" required />
-              ) : (
-                <Input
-                  key="otp"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  autoFocus
-                  placeholder="123456"
-                  className="text-center font-mono text-lg tracking-[0.4em]"
-                  required
-                />
-              )}
-            </Field>
-            {err && <p className="text-sm text-red-600">{err}</p>}
-            <Button variant="primary" className="w-full" disabled={busy || (!useRecovery && code.length !== 6)}>
-              {t('twofa.verify')}
-            </Button>
-            <div className="flex justify-between text-sm">
-              <button type="button" className="text-accent hover:underline cursor-pointer" onClick={() => (setUseRecovery(!useRecovery), setCode(''), setErr(''))}>
-                {useRecovery ? t('twofa.useApp') : t('twofa.useRecovery')}
-              </button>
-              <button type="button" className="text-muted hover:underline cursor-pointer" onClick={() => (setTicket(null), setPassword(''), setErr(''), setUseRecovery(false))}>
-                {t('common.back')}
-              </button>
+      {options.data?.needs_setup ? (
+        <FirstRun />
+      ) : (
+        <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-xl border border-line bg-surface p-6 shadow-sm">
+          <div className="flex items-center gap-3">
+            <img src="/favicon.svg" alt="" className="h-9 w-9" />
+            <div>
+              <h1 className="text-lg font-semibold">{t('app.name')}</h1>
+              <p className="text-sm text-muted">{t('auth.welcome')}</p>
             </div>
-            <p className="text-xs text-muted">{t('twofa.lostPhone')}</p>
-          </>
-        ) : (
-          <>
-            <Field label={t('auth.usernameOrEmail')}>
-              <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" required />
-            </Field>
-            <Field label={t('auth.password')}>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
-            </Field>
-            {err && <p className="text-sm text-red-600">{err}</p>}
-            <Button variant="primary" className="w-full" disabled={busy}>
-              {t('auth.signIn')}
-            </Button>
-          </>
-        )}
-        {!ticket && options.data?.email_enabled && (
-          <Link to="/forgot-password" className="block text-center text-sm text-accent hover:underline">
-            {t('auth.forgot')}
-          </Link>
-        )}
-        <p className="text-center text-xs text-muted">{t('auth.noSignup')}</p>
-      </form>
+          </div>
+          {ticket ? (
+            <>
+              <p className="text-sm">{useRecovery ? t('twofa.loginRecoveryHint') : t('twofa.loginHint')}</p>
+              <Field label={useRecovery ? t('twofa.recoveryCode') : t('twofa.code')}>
+                {useRecovery ? (
+                  <Input
+                    key="rc"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    autoFocus
+                    autoComplete="off"
+                    placeholder="xxxx-xxxx"
+                    className="font-mono"
+                    required
+                  />
+                ) : (
+                  <Input
+                    key="otp"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    placeholder="123456"
+                    className="text-center font-mono text-lg tracking-[0.4em]"
+                    required
+                  />
+                )}
+              </Field>
+              {err && <p className="text-sm text-red-600">{err}</p>}
+              <Button variant="primary" className="w-full" disabled={busy || (!useRecovery && code.length !== 6)}>
+                {t('twofa.verify')}
+              </Button>
+              <div className="flex justify-between text-sm">
+                <button
+                  type="button"
+                  className="text-accent hover:underline cursor-pointer"
+                  onClick={() => (setUseRecovery(!useRecovery), setCode(''), setErr(''))}
+                >
+                  {useRecovery ? t('twofa.useApp') : t('twofa.useRecovery')}
+                </button>
+                <button
+                  type="button"
+                  className="text-muted hover:underline cursor-pointer"
+                  onClick={() => (setTicket(null), setPassword(''), setErr(''), setUseRecovery(false))}
+                >
+                  {t('common.back')}
+                </button>
+              </div>
+              <p className="text-xs text-muted">{t('twofa.lostPhone')}</p>
+            </>
+          ) : (
+            <>
+              <Field label={t('auth.usernameOrEmail')}>
+                <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" required />
+              </Field>
+              <Field label={t('auth.password')}>
+                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+              </Field>
+              {err && <p className="text-sm text-red-600">{err}</p>}
+              <Button variant="primary" className="w-full" disabled={busy}>
+                {t('auth.signIn')}
+              </Button>
+            </>
+          )}
+          {!ticket && options.data?.email_enabled && (
+            <Link to="/forgot-password" className="block text-center text-sm text-accent hover:underline">
+              {t('auth.forgot')}
+            </Link>
+          )}
+          <p className="text-center text-xs text-muted">{t('auth.noSignup')}</p>
+        </form>
+      )}
     </div>
+  )
+}
+
+/** A brand-new server: create the first admin here instead of on the command line. */
+function FirstRun() {
+  const { t, i18n } = useTranslation()
+  const qc = useQueryClient()
+  const nav = useNavigate()
+  const [f, setF] = useState({ code: '', username: '', display_name: '', password: '', confirm: '' })
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value })
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (f.password !== f.confirm) return setErr(t('setup.mismatch'))
+    setBusy(true)
+    setErr('')
+    try {
+      const { confirm: _, ...body } = f
+      const user = await api.post<User>('/auth/setup', { ...body, locale: i18n.language === 'th' ? 'th' : 'en' })
+      qc.setQueryData(['me'], user)
+      qc.invalidateQueries({ queryKey: ['auth-options'] })
+      nav('/', { replace: true })
+    } catch (e) {
+      setErr(errorText(e))
+      if (e instanceof ApiError && e.code === 'already_set_up') qc.invalidateQueries({ queryKey: ['auth-options'] })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-xl border border-line bg-surface p-6 shadow-sm">
+      <div className="flex items-center gap-3">
+        <img src="/favicon.svg" alt="" className="h-9 w-9" />
+        <div>
+          <h1 className="text-lg font-semibold">{t('setup.title')}</h1>
+          <p className="text-sm text-muted">{t('setup.hint')}</p>
+        </div>
+      </div>
+      <Field label={t('setup.code')} hint={t('setup.codeHint')}>
+        <Input value={f.code} onChange={set('code')} autoFocus autoComplete="off" spellCheck={false} placeholder="XXXX-XXXX" className="font-mono" required />
+      </Field>
+      <Field label={t('auth.username')}>
+        <Input value={f.username} onChange={set('username')} autoComplete="username" required />
+      </Field>
+      <Field label={t('admin.displayName')}>
+        <Input value={f.display_name} onChange={set('display_name')} autoComplete="name" />
+      </Field>
+      <Field label={t('auth.password')} hint={t('errors.password_too_short')}>
+        <Input type="password" value={f.password} onChange={set('password')} autoComplete="new-password" minLength={8} required />
+      </Field>
+      <Field label={t('setup.confirm')}>
+        <Input type="password" value={f.confirm} onChange={set('confirm')} autoComplete="new-password" minLength={8} required />
+      </Field>
+      {err && <p className="text-sm text-red-600">{err}</p>}
+      <Button variant="primary" className="w-full" disabled={busy}>
+        {t('setup.create')}
+      </Button>
+    </form>
   )
 }

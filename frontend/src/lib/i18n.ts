@@ -2,12 +2,18 @@ import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 
 const en = {
-  app: { name: 'Kanban' },
+  app: { name: 'Kanb' },
   common: {
+    more: 'More actions',
     save: 'Save', cancel: 'Cancel', delete: 'Delete', edit: 'Edit', close: 'Close', add: 'Add', create: 'Create',
     loading: 'Loading…', search: 'Search', name: 'Name', description: 'Description', color: 'Color', none: 'None',
     confirmDelete: 'Delete this? This cannot be undone.', yes: 'Yes', no: 'No', saved: 'Saved', rename: 'Rename',
     back: 'Back', clear: 'Clear', remove: 'Remove', done: 'Done', next: 'Next', up: 'Move up', down: 'Move down', copy: 'Copy', copied: 'Copied', download: 'Download', settings: 'Settings',
+  },
+  setup: {
+    title: 'Set up Kanb', hint: 'Create the first admin account. You can add everyone else from Admin → Users afterwards.',
+    code: 'Setup code', codeHint: 'Printed by setup.sh, or in the server log: docker compose logs app',
+    confirm: 'Confirm password', mismatch: 'The passwords don’t match.', create: 'Create admin and sign in',
   },
   auth: {
     signIn: 'Sign in', signOut: 'Sign out', username: 'Username', usernameOrEmail: 'Username or email', forgot: 'Forgot password?', forgotTitle: 'Forgot password', forgotHint: 'Enter your username or email. If the account has an email address, we’ll send a link to choose a new password.', sendLink: 'Send link', forgotSent: 'If that account has an email address, a link is on its way. It is valid for 1 hour.', backToSignIn: 'Back to sign in', confirmPassword: 'Repeat new password', passwordsDiffer: 'The passwords don’t match.', savePassword: 'Save password', chooseNewPassword: 'Choose a new password', forcedHint: 'Hi {{name}}, your password was set by an administrator. Please choose your own to continue.', welcomeSetPassword: 'Welcome! Set your password', forAccount: 'Account: {{username}}', linkInvalidTitle: 'Link expired', linkInvalid: 'This link has expired or was already used.', requestNewLink: 'Request a new link', passwordSet: 'Password saved. You can sign in now.', password: 'Password',
@@ -91,6 +97,7 @@ const en = {
     newPassword: 'New password', languageHint: 'Also the language of their “Getting started” board.', disable: 'Disable', enable: 'Enable', you: 'you',
   },
   profile: {
+    tab: { account: 'Account', security: 'Security', notifications: 'Notifications', calendar: 'Calendar feed' },
     title: 'Profile', changePassword: 'Change password', currentPassword: 'Current password', newPassword: 'New password',
     passwordChanged: 'Password changed. Other sessions were signed out.', uploadPicture: 'Upload picture', changePicture: 'Change picture', pictureHint: 'PNG, JPEG, WebP or GIF, up to 10 MB. Cropped to a square; photo location data is removed. Without a picture, your initials and colour are shown.', pictureSaved: 'Profile picture updated', pictureRemoved: 'Profile picture removed',
   },
@@ -118,7 +125,7 @@ const en = {
     gantt: 'Gantt',
     board: 'Board', calendar: 'Calendar', today: 'Today', month: 'Month', week: 'Week', unscheduled: 'No due date',
     dragHint: 'Drag onto a day to schedule; drag back here to clear the date.', more_one: '+{{count}} more', more_other: '+{{count}} more',
-    addCard: 'Add card on this day', allBoards: 'All boards',
+    addCard: 'Add card on this day', allBoards: 'All boards', nothingDue: 'Nothing due this day.',
   },
   menu: {
     open: 'Open', newCard: 'New card', newCardOnDay: 'New card on this day', newCardTop: 'New card at top', newCardBottom: 'New card at bottom',
@@ -173,7 +180,7 @@ const en = {
     assigned: 'assigned you to {{card}}', mentioned: 'mentioned you in {{card}}', commented: 'commented on {{card}}',
     due_soon: '{{card}} is due within 24 hours', overdue: '{{card}} is overdue',
     emailMe: 'Email me my notifications', emailMeHint: 'Assignments, @mentions, comments on my cards and due-date reminders, sent to my email address.',
-    emailMeNoAddress: 'Add an email address above to receive them by email.',
+    emailMeNoAddress: 'Add your email address in the Account tab to receive them by email.',
   },
   templates: {
     cardTemplatesHeading_one: 'Card templates ({{count}})', cardTemplatesHeading_other: 'Card templates ({{count}})',
@@ -194,10 +201,10 @@ const en = {
     cantScan: 'Can’t scan? Enter this key in the app instead:', code: 'Code from the app', confirm: 'Confirm and turn on',
     enabledTitle: 'Two-factor sign-in is on — save your recovery codes',
     codesHint: 'If you lose your phone, each of these codes lets you sign in once instead of the app code. Keep them somewhere safe (a password manager or a printout). They won’t be shown again.',
-    savedThem: 'I’ve saved these codes', fileHeader: 'Kanban recovery codes — each one works once.',
+    savedThem: 'I’ve saved these codes', fileHeader: 'Kanb recovery codes — each one works once.',
     turnOffHint: 'Enter your password. Signing in will then only need the password.', turnedOff: 'Two-factor sign-in turned off',
     newCodesHint: 'Enter your password. Your old recovery codes stop working.',
-    loginHint: 'Open your authenticator app and enter the 6-digit code for Kanban.', loginRecoveryHint: 'Enter one of the recovery codes you saved. Each one works once.',
+    loginHint: 'Open your authenticator app and enter the 6-digit code for Kanb.', loginRecoveryHint: 'Enter one of the recovery codes you saved. Each one works once.',
     recoveryCode: 'Recovery code', verify: 'Verify', useRecovery: 'Use a recovery code', useApp: 'Use the app code instead',
     lostPhone: 'Lost your phone and your recovery codes? Ask a super admin to reset your two-factor sign-in.',
     adminReset: 'Reset two-factor sign-in', adminResetBtn: 'Reset',
@@ -226,7 +233,7 @@ const en = {
       line: 'LINE Notify closed in 2025, so this uses a Messaging API channel: in the LINE Developers console create a channel, issue a long-lived “Channel access token”, and copy “Your user ID” (starts with U) from Basic settings. Add the bot as a friend first.',
       ntfy: 'Pick a hard-to-guess topic (it works like a password on ntfy.sh) and subscribe to it in the ntfy app. For your own server use its URL; add an access token if the topic is protected.',
       gotify: 'In Gotify: Apps → Create application, then copy the app’s token. The server URL is the address you open Gotify at.',
-      webhook: 'We POST JSON: {event, title, message, snippet, url, board, card, actor, created_at}. With a signing secret, the X-Kanban-Signature header is “sha256=” + HMAC-SHA256(secret, body).',
+      webhook: 'We POST JSON: {event, title, message, snippet, url, board, card, actor, created_at}. With a signing secret, the X-Kanb-Signature header is “sha256=” + HMAC-SHA256(secret, body).',
     },
     adminEmail: 'Email notifications', adminEmailHint: 'When on, users get notification emails unless they turn them off in their Profile. Sign-in links and password resets are always sent.',
     adminNoSmtp: 'Email isn’t set up yet, so nothing will be sent.',
@@ -291,14 +298,16 @@ const en = {
     deleteMsg: 'Delete this schedule? Cards it already created stay.',
   },
   push: {
-    title: 'Browser notifications on this device', hint: 'Pop-up notifications from this browser, even when Kanban isn’t open. Turn on for each browser or phone you use.',
+    title: 'Browser notifications on this device', hint: 'Pop-up notifications from this browser, even when Kanb isn’t open. Turn on for each browser or phone you use.',
     on: 'Browser notifications are on for this device', denied: 'Notifications were not allowed.', testSent: 'Test sent — it should pop up in a moment.', testFailed: 'Couldn’t reach this browser. Turn it off and on again.',
-    unsupported: 'This browser can’t show web notifications here (they need https, or localhost).', ios: 'On iPhone/iPad: tap Share → “Add to Home Screen”, open Kanban from the home screen, then turn this on.',
+    unsupported: 'This browser can’t show web notifications here (they need https, or localhost).', ios: 'On iPhone/iPad: tap Share → “Add to Home Screen”, open Kanb from the home screen, then turn this on.',
     blocked: 'Notifications are blocked for this site. Allow them in the browser’s site settings, then reload.', systemOff: 'Browser notifications are turned off for the whole system. Please contact an admin.',
     adminTitle: 'Browser notifications', adminHint: 'Let people get pop-up notifications in their browser or on their phone. Each person turns it on for their own devices in Profile.',
   },
   date: { placeholder: 'dd/mm/yyyy', pick: 'Pick a date' },
   errors: {
+    too_many_attempts_one: 'Too many attempts. Try again in a minute.', too_many_attempts_other: 'Too many attempts. Try again in {{count}} minutes.',
+    setup_code_invalid: 'That setup code isn’t right. It’s in the output of setup.sh, or in the server log.', already_set_up: 'This server already has an admin. Sign in instead.',
     unauthorized: 'Please sign in.', forbidden: 'You don’t have permission to do that.', not_found: 'Not found.',
     invalid_credentials: 'Wrong username/email or password.', invalid_email: 'That doesn’t look like a valid email address.', invalid_token: 'This link has expired or was already used.', email_disabled: 'Email is not set up on this server. Ask an administrator.', smtp_incomplete: 'Fill in the SMTP server and the From address.', cannot_delete_self: 'You can’t delete your own account.', email_taken: 'That email is already used by another account.', password_too_short: 'Password must be at least 8 characters.',
     invalid_username: 'Username: 2–40 letters, digits, . _ -', username_taken: 'That username is taken.',
@@ -318,12 +327,18 @@ const en = {
 type Dict = { [k: string]: string | Dict }
 
 const th: Dict = {
-  app: { name: 'คัมบัง' },
+  app: { name: 'Kanb' },
   common: {
+    more: 'คำสั่งเพิ่มเติม',
     save: 'บันทึก', cancel: 'ยกเลิก', delete: 'ลบ', edit: 'แก้ไข', close: 'ปิด', add: 'เพิ่ม', create: 'สร้าง',
     loading: 'กำลังโหลด…', search: 'ค้นหา', name: 'ชื่อ', description: 'รายละเอียด', color: 'สี', none: 'ไม่มี',
     confirmDelete: 'ต้องการลบใช่หรือไม่? ไม่สามารถย้อนกลับได้', yes: 'ใช่', no: 'ไม่', saved: 'บันทึกแล้ว', rename: 'เปลี่ยนชื่อ',
     back: 'กลับ', clear: 'ล้าง', remove: 'นำออก', done: 'เสร็จ', next: 'ถัดไป', up: 'เลื่อนขึ้น', down: 'เลื่อนลง', copy: 'คัดลอก', copied: 'คัดลอกแล้ว', download: 'ดาวน์โหลด', settings: 'ตั้งค่า',
+  },
+  setup: {
+    title: 'ตั้งค่า Kanb', hint: 'สร้างบัญชีผู้ดูแลระบบคนแรก จากนั้นเพิ่มผู้ใช้คนอื่นได้ที่ ผู้ดูแลระบบ → ผู้ใช้',
+    code: 'รหัสตั้งค่า', codeHint: 'แสดงตอนรัน setup.sh หรือดูในบันทึกเซิร์ฟเวอร์: docker compose logs app',
+    confirm: 'ยืนยันรหัสผ่าน', mismatch: 'รหัสผ่านไม่ตรงกัน', create: 'สร้างผู้ดูแลและเข้าสู่ระบบ',
   },
   auth: {
     signIn: 'เข้าสู่ระบบ', signOut: 'ออกจากระบบ', username: 'ชื่อผู้ใช้', usernameOrEmail: 'ชื่อผู้ใช้หรืออีเมล', forgot: 'ลืมรหัสผ่าน?', forgotTitle: 'ลืมรหัสผ่าน', forgotHint: 'กรอกชื่อผู้ใช้หรืออีเมล หากบัญชีมีอีเมล เราจะส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ให้', sendLink: 'ส่งลิงก์', forgotSent: 'หากบัญชีนั้นมีอีเมล ระบบได้ส่งลิงก์ไปแล้ว ลิงก์ใช้ได้ 1 ชั่วโมง', backToSignIn: 'กลับไปหน้าเข้าสู่ระบบ', confirmPassword: 'ยืนยันรหัสผ่านใหม่', passwordsDiffer: 'รหัสผ่านไม่ตรงกัน', savePassword: 'บันทึกรหัสผ่าน', chooseNewPassword: 'ตั้งรหัสผ่านใหม่', forcedHint: 'สวัสดีคุณ {{name}} รหัสผ่านนี้ตั้งโดยผู้ดูแลระบบ กรุณาตั้งรหัสผ่านของคุณเองเพื่อใช้งานต่อ', welcomeSetPassword: 'ยินดีต้อนรับ! ตั้งรหัสผ่านของคุณ', forAccount: 'บัญชี: {{username}}', linkInvalidTitle: 'ลิงก์หมดอายุ', linkInvalid: 'ลิงก์นี้หมดอายุหรือถูกใช้ไปแล้ว', requestNewLink: 'ขอลิงก์ใหม่', passwordSet: 'บันทึกรหัสผ่านแล้ว เข้าสู่ระบบได้เลย', password: 'รหัสผ่าน',
@@ -407,6 +422,7 @@ const th: Dict = {
     newPassword: 'รหัสผ่านใหม่', languageHint: 'ใช้เป็นภาษาของบอร์ด “เริ่มต้นใช้งาน” ด้วย', disable: 'ปิดใช้งาน', enable: 'เปิดใช้งาน', you: 'คุณ',
   },
   profile: {
+    tab: { account: 'บัญชี', security: 'ความปลอดภัย', notifications: 'การแจ้งเตือน', calendar: 'ลิงก์ปฏิทิน' },
     title: 'โปรไฟล์', changePassword: 'เปลี่ยนรหัสผ่าน', currentPassword: 'รหัสผ่านปัจจุบัน', newPassword: 'รหัสผ่านใหม่',
     passwordChanged: 'เปลี่ยนรหัสผ่านแล้ว อุปกรณ์อื่นถูกออกจากระบบ', uploadPicture: 'อัปโหลดรูป', changePicture: 'เปลี่ยนรูป', pictureHint: 'PNG, JPEG, WebP หรือ GIF ไม่เกิน 10 MB รูปจะถูกครอปเป็นสี่เหลี่ยมจัตุรัส และลบข้อมูลตำแหน่งในรูปออก หากไม่มีรูปจะแสดงอักษรย่อและสีของคุณ', pictureSaved: 'อัปเดตรูปโปรไฟล์แล้ว', pictureRemoved: 'ลบรูปโปรไฟล์แล้ว',
   },
@@ -434,7 +450,7 @@ const th: Dict = {
     gantt: 'แกนต์',
     board: 'บอร์ด', calendar: 'ปฏิทิน', today: 'วันนี้', month: 'เดือน', week: 'สัปดาห์', unscheduled: 'ไม่มีกำหนดส่ง',
     dragHint: 'ลากไปวางบนวันที่เพื่อกำหนดวัน ลากกลับมาที่นี่เพื่อลบวันที่', more_one: 'อีก {{count}} รายการ', more_other: 'อีก {{count}} รายการ',
-    addCard: 'เพิ่มการ์ดในวันนี้', allBoards: 'ทุกบอร์ด',
+    addCard: 'เพิ่มการ์ดในวันนี้', allBoards: 'ทุกบอร์ด', nothingDue: 'ไม่มีการ์ดครบกำหนดวันนี้',
   },
   menu: {
     open: 'เปิด', newCard: 'การ์ดใหม่', newCardOnDay: 'สร้างการ์ดในวันนี้', newCardTop: 'การ์ดใหม่ด้านบน', newCardBottom: 'การ์ดใหม่ด้านล่าง',
@@ -489,7 +505,7 @@ const th: Dict = {
     assigned: 'มอบหมาย {{card}} ให้คุณ', mentioned: 'กล่าวถึงคุณใน {{card}}', commented: 'แสดงความคิดเห็นใน {{card}}',
     due_soon: '{{card}} จะครบกำหนดภายใน 24 ชั่วโมง', overdue: '{{card}} เลยกำหนดแล้ว',
     emailMe: 'ส่งการแจ้งเตือนทางอีเมล', emailMeHint: 'การมอบหมายงาน การกล่าวถึง ความคิดเห็นในการ์ดของฉัน และการเตือนกำหนดส่ง',
-    emailMeNoAddress: 'เพิ่มอีเมลด้านบนเพื่อรับทางอีเมล',
+    emailMeNoAddress: 'เพิ่มอีเมลในแท็บบัญชีเพื่อรับทางอีเมล',
   },
   templates: {
     cardTemplatesHeading_one: 'เทมเพลตการ์ด ({{count}})', cardTemplatesHeading_other: 'เทมเพลตการ์ด ({{count}})',
@@ -510,10 +526,10 @@ const th: Dict = {
     cantScan: 'สแกนไม่ได้? ใส่คีย์นี้ในแอปแทน:', code: 'รหัสจากแอป', confirm: 'ยืนยันและเปิดใช้งาน',
     enabledTitle: 'เปิดการยืนยันสองขั้นตอนแล้ว — บันทึกรหัสกู้คืนของคุณ',
     codesHint: 'หากโทรศัพท์หาย แต่ละรหัสใช้เข้าสู่ระบบแทนรหัสจากแอปได้หนึ่งครั้ง เก็บไว้ในที่ปลอดภัย (โปรแกรมจัดการรหัสผ่านหรือพิมพ์ออกมา) รหัสจะไม่แสดงอีก',
-    savedThem: 'ฉันบันทึกรหัสเหล่านี้แล้ว', fileHeader: 'รหัสกู้คืน Kanban — แต่ละรหัสใช้ได้ครั้งเดียว',
+    savedThem: 'ฉันบันทึกรหัสเหล่านี้แล้ว', fileHeader: 'รหัสกู้คืน Kanb — แต่ละรหัสใช้ได้ครั้งเดียว',
     turnOffHint: 'ใส่รหัสผ่าน หลังจากนั้นการเข้าสู่ระบบจะใช้แค่รหัสผ่าน', turnedOff: 'ปิดการยืนยันสองขั้นตอนแล้ว',
     newCodesHint: 'ใส่รหัสผ่าน รหัสกู้คืนเดิมจะใช้ไม่ได้',
-    loginHint: 'เปิดแอปยืนยันตัวตนแล้วใส่รหัส 6 หลักของ Kanban', loginRecoveryHint: 'ใส่รหัสกู้คืนที่บันทึกไว้ แต่ละรหัสใช้ได้ครั้งเดียว',
+    loginHint: 'เปิดแอปยืนยันตัวตนแล้วใส่รหัส 6 หลักของ Kanb', loginRecoveryHint: 'ใส่รหัสกู้คืนที่บันทึกไว้ แต่ละรหัสใช้ได้ครั้งเดียว',
     recoveryCode: 'รหัสกู้คืน', verify: 'ยืนยัน', useRecovery: 'ใช้รหัสกู้คืน', useApp: 'ใช้รหัสจากแอปแทน',
     lostPhone: 'ทำโทรศัพท์และรหัสกู้คืนหาย? ขอให้ผู้ดูแลระบบสูงสุดรีเซ็ตการยืนยันสองขั้นตอน',
     adminReset: 'รีเซ็ตการยืนยันสองขั้นตอน', adminResetBtn: 'รีเซ็ต',
@@ -542,7 +558,7 @@ const th: Dict = {
       line: 'LINE Notify ปิดให้บริการในปี 2025 จึงใช้ช่อง Messaging API แทน: สร้างช่องใน LINE Developers console ออก “Channel access token” (long-lived) และคัดลอก “Your user ID” (ขึ้นต้นด้วย U) จาก Basic settings อย่าลืมเพิ่มบอตเป็นเพื่อนก่อน',
       ntfy: 'ตั้งชื่อหัวข้อที่เดายาก (บน ntfy.sh ชื่อหัวข้อทำหน้าที่เหมือนรหัสผ่าน) แล้วสมัครรับหัวข้อนั้นในแอป ntfy หากใช้เซิร์ฟเวอร์ของตัวเองให้ใส่ URL ของเซิร์ฟเวอร์ และใส่ access token หากหัวข้อมีการป้องกัน',
       gotify: 'ใน Gotify: Apps → Create application แล้วคัดลอกโทเค็นของแอป URL ของเซิร์ฟเวอร์คือที่อยู่ที่ใช้เปิด Gotify',
-      webhook: 'ส่ง JSON แบบ POST: {event, title, message, snippet, url, board, card, actor, created_at} หากตั้งคีย์ลงนาม จะมีส่วนหัว X-Kanban-Signature เป็น “sha256=” + HMAC-SHA256(คีย์, เนื้อหา)',
+      webhook: 'ส่ง JSON แบบ POST: {event, title, message, snippet, url, board, card, actor, created_at} หากตั้งคีย์ลงนาม จะมีส่วนหัว X-Kanb-Signature เป็น “sha256=” + HMAC-SHA256(คีย์, เนื้อหา)',
     },
     adminEmail: 'แจ้งเตือนทางอีเมล', adminEmailHint: 'เมื่อเปิด ผู้ใช้จะได้รับอีเมลแจ้งเตือน เว้นแต่ปิดเองในโปรไฟล์ ลิงก์เข้าสู่ระบบและรีเซ็ตรหัสผ่านจะส่งเสมอ',
     adminNoSmtp: 'ยังไม่ได้ตั้งค่าอีเมล จึงยังไม่มีการส่ง',
@@ -607,14 +623,16 @@ const th: Dict = {
     deleteMsg: 'ลบกำหนดการนี้หรือไม่? การ์ดที่สร้างไปแล้วยังอยู่',
   },
   push: {
-    title: 'การแจ้งเตือนบนเบราว์เซอร์ของอุปกรณ์นี้', hint: 'แจ้งเตือนแบบป๊อปอัปจากเบราว์เซอร์นี้ แม้ไม่ได้เปิด Kanban อยู่ เปิดใช้งานแยกในแต่ละเบราว์เซอร์หรือโทรศัพท์',
+    title: 'การแจ้งเตือนบนเบราว์เซอร์ของอุปกรณ์นี้', hint: 'แจ้งเตือนแบบป๊อปอัปจากเบราว์เซอร์นี้ แม้ไม่ได้เปิด Kanb อยู่ เปิดใช้งานแยกในแต่ละเบราว์เซอร์หรือโทรศัพท์',
     on: 'เปิดการแจ้งเตือนบนเบราว์เซอร์สำหรับอุปกรณ์นี้แล้ว', denied: 'ไม่ได้รับอนุญาตให้แจ้งเตือน', testSent: 'ส่งทดสอบแล้ว — จะแสดงในอีกสักครู่', testFailed: 'ส่งไปยังเบราว์เซอร์นี้ไม่ได้ ลองปิดแล้วเปิดใหม่',
-    unsupported: 'เบราว์เซอร์นี้แสดงการแจ้งเตือนเว็บที่นี่ไม่ได้ (ต้องใช้ https หรือ localhost)', ios: 'บน iPhone/iPad: แตะแชร์ → “เพิ่มไปยังหน้าจอโฮม” เปิด Kanban จากหน้าจอโฮม แล้วเปิดตัวเลือกนี้',
+    unsupported: 'เบราว์เซอร์นี้แสดงการแจ้งเตือนเว็บที่นี่ไม่ได้ (ต้องใช้ https หรือ localhost)', ios: 'บน iPhone/iPad: แตะแชร์ → “เพิ่มไปยังหน้าจอโฮม” เปิด Kanb จากหน้าจอโฮม แล้วเปิดตัวเลือกนี้',
     blocked: 'เว็บไซต์นี้ถูกบล็อกการแจ้งเตือน อนุญาตในการตั้งค่าเว็บไซต์ของเบราว์เซอร์ แล้วโหลดหน้าใหม่', systemOff: 'ระบบปิดการแจ้งเตือนบนเบราว์เซอร์อยู่ กรุณาติดต่อผู้ดูแลระบบ',
     adminTitle: 'การแจ้งเตือนบนเบราว์เซอร์', adminHint: 'ให้ผู้ใช้รับการแจ้งเตือนแบบป๊อปอัปในเบราว์เซอร์หรือบนโทรศัพท์ แต่ละคนเปิดใช้งานสำหรับอุปกรณ์ของตัวเองในโปรไฟล์',
   },
   date: { placeholder: 'วว/ดด/ปปปป', pick: 'เลือกวันที่' },
   errors: {
+    too_many_attempts_other: 'ลองหลายครั้งเกินไป โปรดลองใหม่ในอีก {{count}} นาที',
+    setup_code_invalid: 'รหัสตั้งค่าไม่ถูกต้อง ดูได้จากผลลัพธ์ของ setup.sh หรือในบันทึกของเซิร์ฟเวอร์', already_set_up: 'เซิร์ฟเวอร์นี้มีผู้ดูแลแล้ว กรุณาเข้าสู่ระบบ',
     unauthorized: 'กรุณาเข้าสู่ระบบ', forbidden: 'คุณไม่มีสิทธิ์ทำรายการนี้', not_found: 'ไม่พบข้อมูล',
     invalid_credentials: 'ชื่อผู้ใช้/อีเมล หรือรหัสผ่านไม่ถูกต้อง', invalid_email: 'รูปแบบอีเมลไม่ถูกต้อง', invalid_token: 'ลิงก์นี้หมดอายุหรือถูกใช้ไปแล้ว', email_disabled: 'เซิร์ฟเวอร์นี้ยังไม่ได้ตั้งค่าอีเมล กรุณาติดต่อผู้ดูแลระบบ', smtp_incomplete: 'กรอกเซิร์ฟเวอร์ SMTP และอีเมลผู้ส่ง', cannot_delete_self: 'ไม่สามารถลบบัญชีของตัวเองได้', email_taken: 'อีเมลนี้ถูกใช้กับบัญชีอื่นแล้ว', password_too_short: 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร',
     invalid_username: 'ชื่อผู้ใช้: 2–40 ตัว ใช้ตัวอักษร ตัวเลข . _ -', username_taken: 'ชื่อผู้ใช้นี้ถูกใช้แล้ว',
@@ -661,7 +679,10 @@ export function setLocale(l: 'en' | 'th') {
 /** Translate an API error code. */
 export function errorText(e: unknown): string {
   const code = (e as { code?: string })?.code ?? 'internal'
-  return i18n.exists(`errors.${code}`) ? i18n.t(`errors.${code}`) : i18n.t('errors.internal')
+  const data = (e as { data?: { retry_after?: number } })?.data
+  // rate limited: say roughly how long to wait
+  const minutes = Math.max(1, Math.ceil((data?.retry_after ?? 60) / 60))
+  return i18n.exists(`errors.${code}`, { count: minutes }) ? i18n.t(`errors.${code}`, { count: minutes }) : i18n.t('errors.internal')
 }
 
 export default i18n

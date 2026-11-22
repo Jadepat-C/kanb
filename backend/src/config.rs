@@ -52,6 +52,17 @@ pub struct Config {
 
     #[arg(long, env = "MAX_UPLOAD_MB", default_value_t = 50)]
     pub max_upload_mb: usize,
+
+    /// Behind a reverse proxy (the default setup), take the client's address from the proxy's X-Forwarded-For when
+    /// the connection comes from a local/private address. Set false when the app is reachable directly, without a
+    /// proxy, so clients can't fake their address to dodge sign-in rate limits.
+    #[arg(long, env = "TRUST_PROXY", default_value_t = true, action = clap::ArgAction::Set)]
+    pub trust_proxy: bool,
+
+    /// Code asked for when creating the first admin in the browser (deploy/setup.sh writes one). If unset and there
+    /// are no accounts yet, a random code is printed in the server log at startup.
+    #[arg(long, env = "SETUP_CODE", hide_env_values = true)]
+    pub setup_code: Option<String>,
 }
 
 impl Config {

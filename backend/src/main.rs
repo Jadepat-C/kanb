@@ -25,7 +25,9 @@ mod contacts;
 mod crypto;
 mod export;
 mod ical;
+mod setup;
 mod templates;
+mod throttle;
 mod twofa;
 mod tutorial;
 
@@ -58,10 +60,13 @@ pub struct AppState {
     pub origins: Arc<Vec<String>>,
     pub store: Arc<dyn ObjectStore>,
     pub hub: realtime::Hub,
+    pub throttle: Arc<throttle::Limiter>,
+    /// first-run setup code (see setup.rs)
+    pub setup_code: Arc<String>,
 }
 
 #[derive(Parser)]
-#[command(version, about = "Kanban server")]
+#[command(version, about = "Kanb server")]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -190,7 +195,10 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
         store,
         hub: realtime::Hub::new(),
+        throttle: Arc::new(throttle::Limiter::new()),
+        setup_code: Arc::new(setup::code(&config)),
     };
+    setup::announce(&state).await;
     notify::spawn_due_job(state.clone());
     board_contacts::spawn_dispatch(state.clone());
     recurring::spawn_job(state.clone());
@@ -199,6 +207,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
     let api = Router::new()
         .route("/health", get(health))
         .route("/auth/login", post(auth::login))
+        .route("/auth/setup", post(setup::create_first_admin))
         .route("/auth/login/code", post(twofa::login_code))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/options", get(auth::options))
@@ -318,7 +327,8 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
     let addr: SocketAddr = config.bind_addr.parse().context("BIND_ADDR")?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "listening");
-    axum::serve(listener, app)
+    // the peer address feeds the sign-in rate limits (throttle.rs)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())

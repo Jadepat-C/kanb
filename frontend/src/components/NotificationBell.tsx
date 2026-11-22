@@ -56,7 +56,7 @@ function useNotificationSocket() {
         if (d?.items[0]) lastSeen.current = Math.max(lastSeen.current ?? 0, d.items[0].id)
         for (const n of fresh.slice(0, 3).reverse()) {
           toastActivity(
-            { name: n.actor_name ?? 'Kanban', color: n.actor_color ?? '#2f5bd3', src: avatarUrl(n.actor_avatar) },
+            { name: n.actor_name ?? 'Kanb', color: n.actor_color ?? '#2f5bd3', src: avatarUrl(n.actor_avatar) },
             describe(t, n, true),
           )
         }
@@ -124,7 +124,7 @@ export function NotificationBell() {
           align="end"
           sideOffset={6}
           collisionPadding={8}
-          className="z-50 flex max-h-[70vh] w-[min(400px,calc(100vw-16px))] flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-xl outline-none"
+          className="z-50 flex max-h-[70dvh] w-[min(400px,calc(100vw-16px))] flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-xl outline-none"
         >
           <div className="flex items-center border-b border-line px-3 py-2">
             <span className="text-sm font-semibold">{t('notifications.title')}</span>

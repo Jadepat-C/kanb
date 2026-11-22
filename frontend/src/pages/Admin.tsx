@@ -669,7 +669,7 @@ function EmailForm({ initial, me, onSaved }: { initial: EmailSettings; me: User;
             <Input type="email" value={f.from_email} onChange={(e) => set({ from_email: e.target.value })} placeholder="kanban@example.com" />
           </Field>
           <Field label={t('email.fromName')}>
-            <Input value={f.from_name} onChange={(e) => set({ from_name: e.target.value })} placeholder="Kanban" />
+            <Input value={f.from_name} onChange={(e) => set({ from_name: e.target.value })} placeholder="Kanb" />
           </Field>
         </div>
         <Field label={t('email.publicUrl')} hint={t('email.publicUrlHint')}>

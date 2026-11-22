@@ -23,7 +23,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-const ISSUER: &str = "Kanban";
+const ISSUER: &str = "Kanb";
 
 fn totp(secret_b32: &str, account: &str) -> AppResult<Totp> {
     let secret = Secret::try_from_base32(secret_b32).map_err(|_| anyhow::anyhow!("bad totp secret"))?;
@@ -225,10 +225,14 @@ pub struct LoginCode {
 
 pub async fn login_code(
     State(state): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     jar: CookieJar,
     Json(r): Json<LoginCode>,
 ) -> AppResult<(CookieJar, Json<User>)> {
+    use crate::throttle;
+    let ip = throttle::ip_key("login", throttle::client_ip(peer, &headers, state.config.trust_proxy));
+    state.throttle.check(&ip, throttle::LOGIN_IP)?;
     // count the attempt first: 5 wrong codes and the ticket is dead (sign in with the password again)
     let row: Option<(Uuid,)> = sqlx::query_as(
         "UPDATE login_challenges SET attempts = attempts + 1
@@ -237,7 +241,13 @@ pub async fn login_code(
     .bind(crate::auth::token_hash(&r.ticket))
     .fetch_optional(&state.db)
     .await?;
-    let (uid,) = row.ok_or(AppError::BadRequest("totp_expired"))?;
+    let Some((uid,)) = row else {
+        state.throttle.hit(&ip, throttle::LOGIN_IP);
+        return Err(AppError::BadRequest("totp_expired"));
+    };
+    // a ticket allows 5 codes, but someone with the password could keep asking for new tickets: limit per account too
+    let account = format!("code-account:{uid}");
+    state.throttle.check(&account, throttle::CODE_ACCOUNT)?;
     let (username, email, secret, last, recovery): (String, Option<String>, Option<String>, Option<i64>, Vec<String>) = sqlx::query_as(
         "SELECT username, email, totp_secret, totp_last_step, totp_recovery FROM users WHERE id = $1 AND is_active AND deleted_at IS NULL",
     )
@@ -265,9 +275,12 @@ pub async fn login_code(
         used
     };
     if !ok {
+        state.throttle.hit(&ip, throttle::LOGIN_IP);
+        state.throttle.hit(&account, throttle::CODE_ACCOUNT);
         tracing::warn!(user = %username, "wrong two-factor code");
         return Err(AppError::BadRequest("totp_invalid"));
     }
+    state.throttle.clear(&account);
     sqlx::query("DELETE FROM login_challenges WHERE user_id = $1").bind(uid).execute(&state.db).await?;
     crate::auth::start_session(&state, uid, &headers, jar).await
 }

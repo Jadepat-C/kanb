@@ -194,8 +194,8 @@ pub async fn feed(State(state): State<AppState>, Path(file): Path<String>, Query
     .await?;
     let base = crate::notify::base_url(&state).await;
     let mut out = String::new();
-    let cal_name = "Kanban";
-    for l in ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Kanban//Cards//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"] {
+    let cal_name = "Kanb";
+    for l in ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Kanb//Cards//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"] {
         fold(l, &mut out);
     }
     fold(&format!("X-WR-CALNAME:{}", esc(cal_name)), &mut out);

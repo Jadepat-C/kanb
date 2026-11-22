@@ -74,7 +74,7 @@ export function SearchPalette() {
             />
             {isFetching && <span className="text-xs text-muted">…</span>}
           </div>
-          <Command.List className="max-h-[60vh] overflow-y-auto p-2">
+          <Command.List className="max-h-[60dvh] overflow-y-auto p-2">
             {dq && data && data.boards.length === 0 && data.cards.length === 0 && (
               <Command.Empty className="p-6 text-center text-sm text-muted">{t('search.noResults')}</Command.Empty>
             )}

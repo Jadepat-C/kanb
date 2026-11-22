@@ -237,6 +237,7 @@ export function Column({
                 onBlur={(e) => e.currentTarget.form?.requestSubmit()}
                 onKeyDown={(e) => e.key === 'Escape' && setRenaming(false)}
                 onPointerDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
                 className="w-full rounded border border-line bg-surface px-1.5 py-0.5 text-sm font-semibold outline-none"
               />
             </form>
@@ -251,9 +252,10 @@ export function Column({
           </span>
           {b.can('cards.create') && (
             <button
-              className="rounded p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+              className="rounded p-1 text-muted hover:bg-black/5 touch:p-1.5 dark:hover:bg-white/10 cursor-pointer"
               onClick={() => setAdding('top')}
               onPointerDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
               title={t('board.addCard')}
             >
               <Plus size={15} />
@@ -262,8 +264,9 @@ export function Column({
           <Menu>
             <MenuTrigger asChild>
               <button
-                className="rounded p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+                className="rounded p-1 text-muted hover:bg-black/5 touch:p-1.5 dark:hover:bg-white/10 cursor-pointer"
                 onPointerDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
               >
                 <MoreHorizontal size={15} />
               </button>

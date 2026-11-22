@@ -6,7 +6,7 @@ use argon2::{
 };
 use axum::{
     Json,
-    extract::{FromRequestParts, Request, State},
+    extract::{ConnectInfo, FromRequestParts, Request, State},
     http::{HeaderMap, Method, header, request::Parts},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -15,11 +15,13 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::{
     AppState,
     error::{AppError, AppResult},
+    throttle,
 };
 
 pub const COOKIE_NAME: &str = "kanban_session";
@@ -213,10 +215,14 @@ pub struct LoginReq {
 
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     jar: CookieJar,
     Json(req): Json<LoginReq>,
 ) -> AppResult<(CookieJar, Json<serde_json::Value>)> {
+    // rate limits come before the (deliberately slow) password check
+    let ip = throttle::ip_key("login", throttle::client_ip(peer, &headers, state.config.trust_proxy));
+    state.throttle.check(&ip, throttle::LOGIN_IP)?;
     let row: Option<(Uuid, Option<String>, bool, bool)> =
         // usernames can't contain '@', so anything with '@' is looked up as an email
         sqlx::query_as(
@@ -227,6 +233,12 @@ pub async fn login(
             .bind(req.username.trim())
             .fetch_optional(&state.db)
             .await?;
+    // unknown names are counted the same way, so a 429 doesn't reveal which accounts exist
+    let account = match &row {
+        Some((id, ..)) => format!("login-account:{id}"),
+        None => throttle::account_key("login-account", &req.username),
+    };
+    state.throttle.check(&account, throttle::LOGIN_ACCOUNT)?;
     let password = req.password.clone();
     let ok = match &row {
         Some((_, Some(hash), true, _)) => {
@@ -242,9 +254,12 @@ pub async fn login(
         }
     };
     if !ok {
+        state.throttle.hit(&ip, throttle::LOGIN_IP);
+        state.throttle.hit(&account, throttle::LOGIN_ACCOUNT);
         tracing::warn!(username = %req.username, "failed login");
         return Err(AppError::BadRequest("invalid_credentials"));
     }
+    state.throttle.clear(&account);
     let (user_id, _, _, totp_on) = row.unwrap();
     if totp_on {
         // step 2: the authenticator code (POST /auth/login/code with this ticket)
@@ -439,7 +454,8 @@ pub async fn send_link_email(state: &AppState, user_id: Uuid, purpose: &str) -> 
 /// Public: whether the login page should offer "Forgot password?".
 pub async fn options(State(state): State<AppState>) -> AppResult<Json<serde_json::Value>> {
     let s = crate::mail::load(&state).await?;
-    Ok(Json(serde_json::json!({ "email_enabled": crate::mail::ready(&s) })))
+    let needs_setup = crate::setup::needs_setup(&state.db).await?;
+    Ok(Json(serde_json::json!({ "email_enabled": crate::mail::ready(&s), "needs_setup": needs_setup })))
 }
 
 #[derive(Deserialize)]
@@ -449,7 +465,19 @@ pub struct ForgotReq {
 }
 
 /// Always answers the same way, so it can't be used to find out which accounts/emails exist.
-pub async fn forgot(State(state): State<AppState>, Json(r): Json<ForgotReq>) -> AppResult<Json<serde_json::Value>> {
+pub async fn forgot(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(r): Json<ForgotReq>,
+) -> AppResult<Json<serde_json::Value>> {
+    // every request counts: this endpoint sends email, so it must not become a way to flood someone's inbox
+    let ip = throttle::ip_key("forgot", throttle::client_ip(peer, &headers, state.config.trust_proxy));
+    let account = throttle::account_key("forgot-account", &r.login);
+    state.throttle.check(&ip, throttle::FORGOT_IP)?;
+    state.throttle.check(&account, throttle::FORGOT_ACCOUNT)?;
+    state.throttle.hit(&ip, throttle::FORGOT_IP);
+    state.throttle.hit(&account, throttle::FORGOT_ACCOUNT);
     let s = crate::mail::load(&state).await?;
     if !crate::mail::ready(&s) {
         return Err(AppError::BadRequest("email_disabled"));
@@ -481,7 +509,14 @@ pub struct TokenReq {
 }
 
 /// Lets the reset page say "this link has expired" before the user types a new password.
-pub async fn check_token(State(state): State<AppState>, Json(r): Json<TokenReq>) -> AppResult<Json<serde_json::Value>> {
+pub async fn check_token(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(r): Json<TokenReq>,
+) -> AppResult<Json<serde_json::Value>> {
+    let ip = throttle::ip_key("token", throttle::client_ip(peer, &headers, state.config.trust_proxy));
+    state.throttle.check(&ip, throttle::TOKEN_IP)?;
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT u.username, t.purpose FROM password_tokens t JOIN users u ON u.id = t.user_id
          WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now() AND u.deleted_at IS NULL AND u.is_active",
@@ -489,6 +524,9 @@ pub async fn check_token(State(state): State<AppState>, Json(r): Json<TokenReq>)
     .bind(token_hash(&r.token))
     .fetch_optional(&state.db)
     .await?;
+    if row.is_none() {
+        state.throttle.hit(&ip, throttle::TOKEN_IP);
+    }
     Ok(Json(match row {
         Some((username, purpose)) => serde_json::json!({ "valid": true, "username": username, "purpose": purpose }),
         None => serde_json::json!({ "valid": false }),
@@ -501,7 +539,14 @@ pub struct ResetReq {
     password: String,
 }
 
-pub async fn reset(State(state): State<AppState>, Json(r): Json<ResetReq>) -> AppResult<Json<serde_json::Value>> {
+pub async fn reset(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(r): Json<ResetReq>,
+) -> AppResult<Json<serde_json::Value>> {
+    let ip = throttle::ip_key("token", throttle::client_ip(peer, &headers, state.config.trust_proxy));
+    state.throttle.check(&ip, throttle::TOKEN_IP)?;
     validate_password(&r.password)?;
     let mut tx = state.db.begin().await?;
     let row: Option<(Uuid,)> = sqlx::query_as(
@@ -513,7 +558,10 @@ pub async fn reset(State(state): State<AppState>, Json(r): Json<ResetReq>) -> Ap
     .bind(token_hash(&r.token))
     .fetch_optional(&mut *tx)
     .await?;
-    let (uid,) = row.ok_or(AppError::BadRequest("invalid_token"))?;
+    let Some((uid,)) = row else {
+        state.throttle.hit(&ip, throttle::TOKEN_IP);
+        return Err(AppError::BadRequest("invalid_token"));
+    };
     let pw = r.password.clone();
     let hash = tokio::task::spawn_blocking(move || hash_password(&pw)).await.map_err(|e| anyhow::anyhow!(e))??;
     sqlx::query("UPDATE users SET password_hash = $2, must_change_password = false, updated_at = now() WHERE id = $1")

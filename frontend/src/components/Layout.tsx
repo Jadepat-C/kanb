@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { CalendarDays, Check, LayoutGrid, LayoutTemplate, Languages, LogOut, Monitor, Moon, ShieldCheck, Sun, UserCog } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Outlet, useNavigate } from 'react-router'
 import { api } from '../lib/api'
@@ -8,7 +9,7 @@ import type { Locale, Theme } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
 import { NotificationBell } from './NotificationBell'
 import { SearchPalette } from './SearchPalette'
-import { Avatar, Button, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from './ui'
+import { Avatar, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from './ui'
 
 export function Layout() {
   const { t, i18n } = useTranslation()
@@ -17,8 +18,6 @@ export function Layout() {
   const qc = useQueryClient()
   const nav = useNavigate()
   if (!me) return null
-  const theme = me.theme
-  const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor
 
   const logout = async () => {
     await api.post('/auth/logout')
@@ -29,83 +28,79 @@ export function Layout() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-surface px-3 sm:px-4">
-        <Link to="/" className="flex items-center gap-2 font-semibold">
-          <img src="/favicon.svg" alt="" className="h-6 w-6" />
-          <span className="hidden sm:inline">{t('app.name')}</span>
-        </Link>
-        <nav className="flex items-center gap-1 text-sm">
-          <Link to="/" className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
-            <LayoutGrid size={15} />
-            <span className="hidden sm:inline">{t('nav.boards')}</span>
+      {/* three columns so the search sits in the true centre of the screen whatever the sides hold */}
+      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-surface px-3 sm:px-4 md:grid md:grid-cols-[1fr_minmax(0,18rem)_1fr] xl:grid-cols-[1fr_minmax(0,28rem)_1fr]">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link to="/" className="flex items-center gap-2 font-semibold">
+            <img src="/favicon.svg" alt="" className="h-6 w-6" />
+            <span className="hidden xl:inline">{t('app.name')}</span>
           </Link>
-          <Link to="/calendar" className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
-            <CalendarDays size={15} />
-            <span className="hidden sm:inline">{t('nav.calendar')}</span>
-          </Link>
-          <Link to="/templates" className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
-            <LayoutTemplate size={15} />
-            <span className="hidden sm:inline">{t('nav.templates')}</span>
-          </Link>
-          {me.is_super_admin && (
-            <Link to="/admin" className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
-              <ShieldCheck size={15} />
-              <span className="hidden sm:inline">{t('nav.admin')}</span>
-            </Link>
-          )}
-        </nav>
-        <div className="flex flex-1 justify-center">
+          <nav className="flex items-center gap-1 text-sm">
+            <NavLink to="/" icon={<LayoutGrid size={15} />} text={t('nav.boards')} />
+            <NavLink to="/calendar" icon={<CalendarDays size={15} />} text={t('nav.calendar')} />
+            <NavLink to="/templates" icon={<LayoutTemplate size={15} />} text={t('nav.templates')} />
+          </nav>
+        </div>
+        <div className="flex min-w-0 flex-1 justify-center">
           <SearchPalette />
         </div>
-        <NotificationBell />
-        <Button
-          variant="ghost"
-          size="sm"
-          title={t('nav.language')}
-          onClick={() => prefs.mutate({ locale: (i18n.language === 'th' ? 'en' : 'th') as Locale })}
-        >
-          <Languages size={15} />
-          {i18n.language === 'th' ? 'ไทย' : 'EN'}
-        </Button>
-        <Menu>
-          <MenuTrigger asChild>
-            <Button variant="ghost" size="sm" title={t('nav.theme')}>
-              <ThemeIcon size={15} />
-            </Button>
-          </MenuTrigger>
-          <MenuContent>
-            {(['light', 'dark', 'system'] as Theme[]).map((th) => (
-              <MenuItem key={th} onSelect={() => prefs.mutate({ theme: th })}>
-                {th === 'light' ? <Sun size={14} /> : th === 'dark' ? <Moon size={14} /> : <Monitor size={14} />}
-                {t(`theme.${th}`)}
-                {theme === th && <Check size={14} className="ml-auto" />}
+        <div className="flex items-center justify-end gap-2">
+          <NotificationBell />
+          <Menu>
+            <MenuTrigger className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent" title={label(me)}>
+              <Avatar name={label(me)} color={me.avatar_color} src={avatarUrl(me.avatar_id)} size={28} />
+            </MenuTrigger>
+            <MenuContent>
+              <MenuLabel>{label(me)}</MenuLabel>
+              <MenuItem onSelect={() => nav('/profile')}>
+                <UserCog size={14} />
+                {t('nav.profile')}
               </MenuItem>
-            ))}
-          </MenuContent>
-        </Menu>
-        <Menu>
-          <MenuTrigger className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent">
-            <Avatar name={label(me)} color={me.avatar_color} src={avatarUrl(me.avatar_id)} size={28} />
-          </MenuTrigger>
-          <MenuContent>
-            <MenuLabel>
-              {label(me)}
-            </MenuLabel>
-            <MenuSeparator />
-            <MenuItem onSelect={() => nav('/profile')}>
-              <UserCog size={14} />
-              {t('nav.profile')}
-            </MenuItem>
-            <MenuItem onSelect={logout}>
-              <LogOut size={14} />
-              {t('auth.signOut')}
-            </MenuItem>
-          </MenuContent>
-        </Menu>
+              {me.is_super_admin && (
+                <MenuItem onSelect={() => nav('/admin')}>
+                  <ShieldCheck size={14} />
+                  {t('nav.admin')}
+                </MenuItem>
+              )}
+              <MenuSeparator />
+              <MenuLabel>{t('nav.language')}</MenuLabel>
+              {(['en', 'th'] as Locale[]).map((l) => (
+                <MenuItem key={l} onSelect={() => prefs.mutate({ locale: l })}>
+                  <Languages size={14} />
+                  {l === 'th' ? 'ไทย' : 'English'}
+                  {i18n.language === l && <Check size={14} className="ml-auto text-accent" />}
+                </MenuItem>
+              ))}
+              <MenuSeparator />
+              <MenuLabel>{t('nav.theme')}</MenuLabel>
+              {(['light', 'dark', 'system'] as Theme[]).map((th) => (
+                <MenuItem key={th} onSelect={() => prefs.mutate({ theme: th })}>
+                  {th === 'light' ? <Sun size={14} /> : th === 'dark' ? <Moon size={14} /> : <Monitor size={14} />}
+                  {t(`theme.${th}`)}
+                  {me.theme === th && <Check size={14} className="ml-auto text-accent" />}
+                </MenuItem>
+              ))}
+              <MenuSeparator />
+              <MenuItem onSelect={logout}>
+                <LogOut size={14} />
+                {t('auth.signOut')}
+              </MenuItem>
+            </MenuContent>
+          </Menu>
+        </div>
       </header>
       <main className="min-h-0 flex-1">
         <Outlet />
       </main>
     </div>
+  )
+}
+
+function NavLink({ to, icon, text }: { to: string; icon: ReactNode; text: string }) {
+  return (
+    <Link to={to} title={text} className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10">
+      {icon}
+      <span className="hidden sm:inline md:hidden lg:inline">{text}</span>
+    </Link>
   )
 }

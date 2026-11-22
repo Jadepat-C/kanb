@@ -411,7 +411,7 @@ function urlB64ToBytes(b64: string) {
   return Uint8Array.from(raw, (c) => c.charCodeAt(0))
 }
 
-/** Profile: notifications from this browser (Web Push), even when Kanban isn't open. */
+/** Profile: notifications from this browser (Web Push), even when Kanb isn't open. */
 function BrowserPush() {
   const { t } = useTranslation()
   const supported = typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window

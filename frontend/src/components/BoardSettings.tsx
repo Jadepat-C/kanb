@@ -39,7 +39,8 @@ export function BoardSettings({
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title={t('settings.title')} wide>
       <div className="flex flex-col sm:flex-row">
-        <nav className="flex gap-1 overflow-x-auto border-b border-line p-2 sm:w-48 sm:flex-col sm:border-b-0 sm:border-r">
+        {/* phones: the tabs wrap onto a few lines so every one stays visible */}
+        <nav className="flex flex-wrap gap-1 border-b border-line p-2 sm:w-48 sm:flex-col sm:flex-nowrap sm:border-b-0 sm:border-r">
           {(['general', 'members', 'roles', 'statuses', 'labels', 'templates', 'notifications', 'archive'] as Tab[])
             .filter((k) => k !== 'notifications' || b.can('notifications.manage'))
             .map((k) => (
@@ -55,7 +56,7 @@ export function BoardSettings({
             </button>
           ))}
         </nav>
-        <div className="min-h-[420px] flex-1 p-5">
+        <div className="min-h-[420px] min-w-0 flex-1 p-4 sm:p-5">
           {tab === 'general' && <General b={b} boardId={boardId} onClose={() => onOpenChange(false)} />}
           {tab === 'members' && <Members b={b} boardId={boardId} />}
           {tab === 'roles' && <Roles b={b} boardId={boardId} />}

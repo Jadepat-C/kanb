@@ -129,7 +129,7 @@ export function CalendarPage() {
         onMove={(id, due) => move.mutate({ id, due })}
         toolbar={
           <>
-            <select value={board} onChange={(e) => setBoard(e.target.value)} className="h-7 rounded-md border border-line bg-surface px-2 text-xs">
+            <select value={board} onChange={(e) => setBoard(e.target.value)} className="h-8 w-full rounded-md border border-line bg-surface px-2 text-xs sm:h-7 sm:w-auto sm:max-w-48">
               <option value="">{t('calendar.allBoards')}</option>
               {(boards.data ?? []).map((b) => (
                 <option key={b.id} value={b.id}>
@@ -140,7 +140,7 @@ export function CalendarPage() {
             <Button size="sm" variant={mine ? 'primary' : 'outline'} onClick={() => setMine(!mine)}>
               <User size={13} /> {t('board.onlyMine')}
             </Button>
-            <Link to="/profile#calendar-feed" className="inline-flex h-7 items-center gap-1 rounded-md border border-line px-2 text-xs hover:bg-black/5 dark:hover:bg-white/5" title={t('feed.hint')}>
+            <Link to="/profile?tab=calendar" className="inline-flex h-7 items-center gap-1 rounded-md border border-line px-2 text-xs hover:bg-black/5 dark:hover:bg-white/5" title={t('feed.hint')}>
               <CalendarPlus size={13} /> {t('feed.subscribe')}
             </Link>
             <Button size="sm" variant="primary" onClick={() => setNewCard({ boardId: board || undefined, due: null })}>

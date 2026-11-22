@@ -2,10 +2,13 @@
 export class ApiError extends Error {
   status: number
   code: string
-  constructor(status: number, code: string) {
+  /** the rest of the error body, e.g. `retry_after` (seconds) on 429 */
+  data: Record<string, unknown>
+  constructor(status: number, code: string, data: Record<string, unknown> = {}) {
     super(code)
     this.status = status
     this.code = code
+    this.data = data
   }
 }
 
@@ -20,15 +23,17 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const res = await fetch(`/api${path}`, init)
   if (!res.ok) {
     let code = 'internal'
+    let data: Record<string, unknown> = {}
     try {
-      code = (await res.json()).error ?? code
+      data = await res.json()
+      code = (data.error as string) ?? code
     } catch {
       /* not json */
     }
     if (res.status === 401 && path !== '/auth/login' && path !== '/me') {
       window.dispatchEvent(new Event('kanban:unauthorized'))
     }
-    throw new ApiError(res.status, code)
+    throw new ApiError(res.status, code, data)
   }
   const text = await res.text()
   return (text ? JSON.parse(text) : undefined) as T

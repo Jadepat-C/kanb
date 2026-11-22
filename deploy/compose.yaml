@@ -1,0 +1,85 @@
+# Kanb: app + PostgreSQL + SeaweedFS (S3-compatible file storage).
+#
+#   cd deploy
+#   ./setup.sh https://kanb.example.com     # writes .env with random passwords and prints a setup code (once)
+#   docker compose up -d --build
+#   open the site and enter the setup code to create the first admin
+#
+# Settings come from .env next to this file (see .env.example). Only the app publishes a port, by default on
+# 127.0.0.1 for a reverse proxy on the same machine. The database and the file store are reachable only inside
+# this compose network: every upload and download goes through the app, which checks permissions first.
+
+name: kanb
+
+services:
+  app:
+    build:
+      context: ..
+    # published image; if it can't be downloaded, Compose builds it from this checkout instead
+    image: ${KANB_IMAGE:-ghcr.io/jadepat-c/kanb:latest}
+    environment:
+      PUBLIC_ORIGIN: ${KANB_URL:?set KANB_URL in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      DATABASE_URL: postgres://kanb:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/kanb
+      S3_ENDPOINT: http://s3:8333
+      S3_BUCKET: kanb
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kanb}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      SESSION_DAYS: ${SESSION_DAYS:-30}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
+      TZ: ${TZ:-UTC}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+      SETUP_CODE: ${SETUP_CODE:-}
+    ports:
+      - "${KANB_BIND:-127.0.0.1:8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: &logging
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: kanb
+      POSTGRES_DB: kanb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      # Postgres 18 images keep their data under /var/lib/postgresql/<major>/
+      - ${KANB_DATA:-./data}/postgres:/var/lib/postgresql:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kanb -d kanb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    logging: *logging
+
+  s3:
+    image: chrislusf/seaweedfs:4.52
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kanb}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+    # Writes SeaweedFS's S3 key file from the two variables above, then starts it as usual.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        umask 077
+        printf '{"identities":[{"name":"kanb","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Read","Write","List","Tagging","Admin"]}]}' "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /etc/seaweedfs-s3.json
+        chown seaweed /etc/seaweedfs-s3.json
+        exec /entrypoint.sh server -s3 -s3.port=8333 -s3.config=/etc/seaweedfs-s3.json -master.volumeSizeLimitMB=256
+    volumes:
+      - ${KANB_DATA:-./data}/files:/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/healthz || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    logging: *logging

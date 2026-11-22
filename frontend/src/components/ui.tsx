@@ -12,7 +12,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
         ref={ref}
         {...p}
         className={clsx(
-          'inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
+          'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
           size === 'sm' ? 'h-7 px-2 text-xs' : 'h-9 px-3 text-sm',
           variant === 'primary' && 'bg-accent text-white hover:bg-accent-strong',
           variant === 'outline' && 'border border-line bg-surface hover:bg-black/5 dark:hover:bg-white/5',
@@ -94,7 +94,7 @@ export function Dialog({
         <RDialog.Content
           aria-describedby={undefined}
           className={clsx(
-            'fixed left-1/2 top-[4vh] z-50 max-h-[92vh] w-[calc(100vw-24px)] -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-surface shadow-2xl outline-none',
+            'fixed left-1/2 top-[4dvh] z-50 max-h-[92dvh] w-[calc(100vw-24px)] -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-surface shadow-2xl outline-none',
             wide ? 'max-w-5xl' : 'max-w-md',
           )}
         >

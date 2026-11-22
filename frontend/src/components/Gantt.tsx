@@ -239,8 +239,11 @@ export function Gantt({
     const x = clientX - el.getBoundingClientRect().left + el.scrollLeft - LEFT
     return Math.max(0, Math.min(days - 1, Math.floor(x / px)))
   }
+  // On touch screens the chart just scrolls under the finger; a tap opens the card (dates are edited in its panel).
+  const touchTap = useRef(false)
   const begin = (e: RPointerEvent, d: Drag) => {
-    if (e.button !== 0) return
+    touchTap.current = e.pointerType === 'touch'
+    if (e.button !== 0 || touchTap.current) return
     e.stopPropagation()
     e.preventDefault()
     ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
@@ -380,7 +383,7 @@ export function Gantt({
               style={{ width: W }}
               title={t('gantt.panHint')}
               onPointerDown={(e) => {
-                if (e.button !== 0) return
+                if (e.button !== 0 || e.pointerType === 'touch') return // fingers scroll natively
                 ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
                 pan.current = { x: e.clientX, left: scroller.current?.scrollLeft ?? 0 }
               }}
@@ -477,7 +480,7 @@ export function Gantt({
                       className={clsx('group/bar absolute top-1/2 z-10 flex items-center', editable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')}
                       style={{ left: (g.x0 + 0.5) * px - 8, transform: 'translateY(-50%)' }}
                       onPointerDown={editable ? (e) => begin(e, { mode: 'move', id: c.id, x: e.clientX, delta: 0, moved: false }) : undefined}
-                      onClick={editable ? undefined : () => onOpen(c.id)}
+                      onClick={editable ? () => touchTap.current && onOpen(c.id) : () => onOpen(c.id)}
                     >
                       <span className="block h-4 w-4 rotate-45 rounded-[3px] border-2 border-white shadow dark:border-[var(--surface)]" style={{ background: color }} />
                       <span className="ml-1.5 whitespace-nowrap text-[11px]">{c.title}</span>
@@ -502,7 +505,7 @@ export function Gantt({
                       )}
                       style={{ left: g.x0 * px + 1, width: Math.max(8, (g.x1 - g.x0) * px - 2), height: ROW - 12, background: color }}
                       onPointerDown={editable ? (e) => begin(e, { mode: 'move', id: c.id, x: e.clientX, delta: 0, moved: false }) : undefined}
-                      onClick={editable ? undefined : () => onOpen(c.id)}
+                      onClick={editable ? () => touchTap.current && onOpen(c.id) : () => onOpen(c.id)}
                     >
                       {editable && (
                         <span

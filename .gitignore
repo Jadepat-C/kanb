@@ -4,3 +4,7 @@
 /frontend/dist
 *.local
 .DS_Store
+
+# self-hosting: secrets and data written by deploy/setup.sh
+/deploy/.env
+/deploy/data/

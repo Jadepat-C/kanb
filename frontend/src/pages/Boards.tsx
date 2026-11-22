@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { closestCenter, DndContext, type DragEndEvent } from '@dnd-kit/core'
+import { useDragSensors } from '../lib/dnd'
 import { arrayMove, rectSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import clsx from 'clsx'
@@ -73,7 +74,7 @@ export function Boards() {
   // drag & drop arrangement (per user). Only with no filter, so the saved order covers every board.
   const canArrange = tab === 'active' && !filter.trim() && !owner
   const justDragged = useRef(false)
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor))
+  const sensors = useDragSensors(6)
   const saveOrder = useMutation({
     mutationFn: (ids: string[]) => api.put('/boards-order', { ids }),
     onError: (e) => (toastError(e), refresh()),

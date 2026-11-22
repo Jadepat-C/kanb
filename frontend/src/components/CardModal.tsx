@@ -10,6 +10,7 @@ import {
   FileText,
   History,
   Image as ImageIcon,
+  MoreHorizontal,
   Paperclip,
   Pencil,
   Plus,
@@ -29,6 +30,7 @@ import type { BoardHelpers, Viewer } from '../lib/board'
 import { fmtDate, fmtRelative, fmtSize } from '../lib/prefs'
 import { avatarUrl, label } from '../lib/user'
 import type { Attachment, CardDetail, CardSummary, Label, TimelineItem } from '../lib/types'
+import { CardContextMenu } from './CardMenu'
 import { Stars } from './CardTile'
 import { useCalendarPick } from './CalendarFeed'
 import { DateTimeInput } from './DateInput'
@@ -58,6 +60,7 @@ export function CardModal({
   const { t } = useTranslation()
   const qc = useQueryClient()
   const boardId = b.data!.board.id
+  const summary = b.data!.cards.find((c) => c.id === cardId)
   const q = useQuery({ queryKey: ['card', cardId], queryFn: () => api.get<CardDetail>(`/cards/${cardId}`), retry: false })
   const [uploads, setUploads] = useState<{ name: string; pct: number }[]>([])
   const [dragOver, setDragOver] = useState(false)
@@ -84,9 +87,7 @@ export function CardModal({
     for (const f of files) {
       setUploads((u) => [...u, { name: f.name, pct: 0 }])
       try {
-        await upload(`/cards/${cardId}/attachments`, f, f.name, (pct) =>
-          setUploads((u) => u.map((x) => (x.name === f.name ? { ...x, pct } : x))),
-        )
+        await upload(`/cards/${cardId}/attachments`, f, f.name, (pct) => setUploads((u) => u.map((x) => (x.name === f.name ? { ...x, pct } : x))))
       } catch (e) {
         toastError(e)
       } finally {
@@ -123,7 +124,8 @@ export function CardModal({
           }}
           onFocus={updateEditing}
           onBlur={() => setTimeout(updateEditing, 0)}
-          className="fixed left-1/2 top-[3vh] z-50 max-h-[94vh] w-[calc(100vw-16px)] max-w-5xl -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-surface shadow-2xl outline-none"
+          // full screen on phones; a floating panel from small tablets up
+          className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-surface outline-none sm:inset-auto sm:left-1/2 sm:top-[3dvh] sm:max-h-[94dvh] sm:w-[calc(100vw-16px)] sm:max-w-5xl sm:-translate-x-1/2 sm:rounded-xl sm:border sm:border-line sm:shadow-2xl"
           onDragOver={(e) => {
             if (e.dataTransfer.types.includes('Files') && b.can('attachments.upload')) {
               e.preventDefault()
@@ -146,36 +148,53 @@ export function CardModal({
             </div>
           ) : (
             <>
-              {card.color && <div className="h-1.5 rounded-t-xl" style={{ background: card.color }} />}
-              <div className="flex items-start gap-3 px-5 pb-2 pt-4">
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1 text-xs text-muted">
-                    #{card.number} · {b.data!.lists.find((l) => l.id === card.list_id)?.name}
+              {/* the header stays in view while the panel scrolls, so close and "⋯" are always reachable */}
+              <div className="sticky top-0 z-10 bg-surface">
+                {card.color && <div className="h-1.5 sm:rounded-t-xl" style={{ background: card.color }} />}
+                <div className="flex items-start gap-2 px-4 pb-2 pt-3 sm:gap-3 sm:px-5 sm:pt-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1 text-xs text-muted">
+                      #{card.number} · {b.data!.lists.find((l) => l.id === card.list_id)?.name}
+                    </div>
+                    <Title value={card.title} disabled={!canEdit} onSave={(title) => patch.mutate({ title })} />
                   </div>
-                  <Title value={card.title} disabled={!canEdit} onSave={(title) => patch.mutate({ title })} />
+                  {viewers.length > 0 && (
+                    <div className="flex shrink-0 items-center gap-1.5 self-center rounded-full bg-black/5 py-1 pl-1 pr-2.5 text-xs dark:bg-white/10">
+                      <span className="flex -space-x-1.5">
+                        {viewers.slice(0, 4).map((v) => (
+                          <span key={v.user_id} title={label(v)} className={clsx('rounded-full', v.editing && 'ring-2 ring-amber-500')}>
+                            <Avatar name={label(v)} color={v.avatar_color} src={avatarUrl(v.avatar_id)} size={22} />
+                          </span>
+                        ))}
+                      </span>
+                      <span className="text-muted">
+                        {viewers.some((v) => v.editing)
+                          ? `${viewers
+                              .filter((v) => v.editing)
+                              .map((v) => label(v))
+                              .join(', ')} ${t('presence.editing')}`
+                          : t('presence.here')}
+                      </span>
+                    </div>
+                  )}
+                  {summary && (
+                    <CardContextMenu dropdown card={{ ...summary, board_id: boardId }} b={b} onOpen={() => {}} onGone={onClose}>
+                      <button
+                        className="rounded p-1.5 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+                        aria-label={t('common.more')}
+                        title={t('common.more')}
+                      >
+                        <MoreHorizontal size={18} />
+                      </button>
+                    </CardContextMenu>
+                  )}
+                  <RDialog.Close className="rounded p-1.5 text-muted hover:bg-black/5 dark:hover:bg-white/10" aria-label={t('common.close')}>
+                    <X size={18} />
+                  </RDialog.Close>
                 </div>
-                {viewers.length > 0 && (
-                  <div className="flex shrink-0 items-center gap-1.5 self-center rounded-full bg-black/5 py-1 pl-1 pr-2.5 text-xs dark:bg-white/10">
-                    <span className="flex -space-x-1.5">
-                      {viewers.slice(0, 4).map((v) => (
-                        <span key={v.user_id} title={label(v)} className={clsx('rounded-full', v.editing && 'ring-2 ring-amber-500')}>
-                          <Avatar name={label(v)} color={v.avatar_color} src={avatarUrl(v.avatar_id)} size={22} />
-                        </span>
-                      ))}
-                    </span>
-                    <span className="text-muted">
-                      {viewers.some((v) => v.editing)
-                        ? `${viewers.filter((v) => v.editing).map((v) => label(v)).join(', ')} ${t('presence.editing')}`
-                        : t('presence.here')}
-                    </span>
-                  </div>
-                )}
-                <RDialog.Close className="rounded p-1.5 text-muted hover:bg-black/5 dark:hover:bg-white/10" aria-label={t('common.close')}>
-                  <X size={18} />
-                </RDialog.Close>
               </div>
 
-              <div className="grid gap-6 px-5 pb-6 md:grid-cols-[1fr_240px]">
+              <div className="grid gap-6 px-4 pb-6 sm:px-5 md:grid-cols-[1fr_240px]">
                 <div className="min-w-0 space-y-6">
                   <Section icon={<FileText size={15} />} title={t('card.description')}>
                     <DescriptionEditor
@@ -327,7 +346,11 @@ function Attachments({
                 )}
               </button>
               <div className="min-w-0 flex-1">
-                <button type="button" onClick={() => setPreview(idx)} className="block max-w-full cursor-pointer truncate text-left text-sm font-medium hover:underline">
+                <button
+                  type="button"
+                  onClick={() => setPreview(idx)}
+                  className="block max-w-full cursor-pointer truncate text-left text-sm font-medium hover:underline"
+                >
                   {a.filename}
                 </button>
                 <div className="text-xs text-muted">
@@ -341,8 +364,15 @@ function Attachments({
               </a>
               {(canDeleteAny || a.uploaded_by === me?.id) && (
                 <button
-                  onClick={async () => (await ask({ title: t('common.delete'), message: t('card.deleteAttachmentMsg', { name: a.filename }), confirmLabel: t('common.delete'), danger: true })) && del.mutate(a.id)}
-                  className="rounded p-1 text-muted opacity-0 hover:bg-red-500/10 hover:text-red-600 group-hover:opacity-100 cursor-pointer"
+                  onClick={async () =>
+                    (await ask({
+                      title: t('common.delete'),
+                      message: t('card.deleteAttachmentMsg', { name: a.filename }),
+                      confirmLabel: t('common.delete'),
+                      danger: true,
+                    })) && del.mutate(a.id)
+                  }
+                  className="rounded p-1 text-muted opacity-0 hover:bg-red-500/10 hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100 touch:opacity-100 cursor-pointer"
                 >
                   <Trash2 size={15} />
                 </button>
@@ -350,9 +380,7 @@ function Attachments({
             </div>
           )
         })}
-        {preview !== null && items[preview] && (
-          <FilePreview items={items} index={preview} onIndex={setPreview} onClose={() => setPreview(null)} />
-        )}
+        {preview !== null && items[preview] && <FilePreview items={items} index={preview} onIndex={setPreview} onClose={() => setPreview(null)} />}
         {uploads.map((u) => (
           <div key={u.name} className="rounded-lg border border-line p-2 text-sm text-muted">
             {t('card.uploading', { name: u.name, pct: u.pct })}
@@ -461,14 +489,26 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
                       </button>
                     )}
                     {(i.author_id === me?.id || b.can('comments.moderate')) && (
-                      <button onClick={async () => (await ask({ title: t('common.delete'), message: t('card.deleteCommentMsg'), confirmLabel: t('common.delete'), danger: true })) && del.mutate(i.id)} className="text-muted hover:text-red-600 cursor-pointer">
+                      <button
+                        onClick={async () =>
+                          (await ask({ title: t('common.delete'), message: t('card.deleteCommentMsg'), confirmLabel: t('common.delete'), danger: true })) &&
+                          del.mutate(i.id)
+                        }
+                        className="text-muted hover:text-red-600 cursor-pointer"
+                      >
                         <Trash2 size={13} />
                       </button>
                     )}
                   </span>
                 </div>
                 {editing === i.id ? (
-                  <CommentEdit mentions={b.data!.members} body={i.body} upload={uploader} onCancel={() => setEditing(null)} onSave={(body) => edit.mutate({ id: i.id, body })} />
+                  <CommentEdit
+                    mentions={b.data!.members}
+                    body={i.body}
+                    upload={uploader}
+                    onCancel={() => setEditing(null)}
+                    onSave={(body) => edit.mutate({ id: i.id, body })}
+                  />
                 ) : (
                   <Markdown source={i.body} />
                 )}
@@ -481,7 +521,9 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
               </span>
               <span className="min-w-0">
                 <span className="font-medium text-[var(--text)]">{name(i.actor_id, i.actor_name)}</span> <EventText kind={i.kind} data={i.data} />
-                <span className="ml-1.5" title={fmtDate(i.created_at, true)}>· {fmtRelative(i.created_at)}</span>
+                <span className="ml-1.5" title={fmtDate(i.created_at, true)}>
+                  · {fmtRelative(i.created_at)}
+                </span>
               </span>
             </li>
           ),
@@ -635,7 +677,13 @@ function Sidebar({
             ) : null
           })}
           {canAssign && (
-            <Popover trigger={<button className="rounded-full p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"><Plus size={15} /></button>}>
+            <Popover
+              trigger={
+                <button className="rounded-full p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer">
+                  <Plus size={15} />
+                </button>
+              }
+            >
               <div className="max-h-64 space-y-0.5 overflow-y-auto">
                 {data.members.map((m) => (
                   <button
@@ -665,7 +713,13 @@ function Sidebar({
             ) : null
           })}
           {canLabels && (
-            <Popover trigger={<button className="rounded-full p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"><Plus size={15} /></button>}>
+            <Popover
+              trigger={
+                <button className="rounded-full p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer">
+                  <Plus size={15} />
+                </button>
+              }
+            >
               <LabelPicker
                 labels={data.labels}
                 selected={card.label_ids}
@@ -726,14 +780,21 @@ function Sidebar({
       {(b.can('cards.archive') || b.can('cards.delete')) && (
         <div className="space-y-1.5">
           {b.can('cards.archive') && (
-            <Button variant="outline" size="sm" className="w-full" onClick={async () => (await ask({ title: t('card.archive'), message: t('card.archiveConfirm'), confirmLabel: t('card.archive') })) && archive.mutate()}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={async () =>
+                (await ask({ title: t('card.archive'), message: t('card.archiveConfirm'), confirmLabel: t('card.archive') })) && archive.mutate()
+              }
+            >
               <Archive size={14} /> {t('card.archive')}
             </Button>
           )}
           {b.can('cards.delete') && (
-          <Button variant="outline" size="sm" className="w-full text-red-600" onClick={() => setPurging(true)}>
-            <Trash2 size={14} /> {t('archive.deleteForever')}
-          </Button>
+            <Button variant="outline" size="sm" className="w-full text-red-600" onClick={() => setPurging(true)}>
+              <Trash2 size={14} /> {t('archive.deleteForever')}
+            </Button>
           )}
         </div>
       )}
@@ -909,7 +970,15 @@ function DescriptionEditor({
   if (!canEdit && !value.trim()) return <p className="text-sm italic text-muted">{t('card.noDescription').split('.')[0]}</p>
 
   const indicator =
-    state === 'saving' ? t('editor.saving') : state === 'saved' ? `✓ ${t('editor.saved')}` : state === 'dirty' ? t('editor.unsaved') : state === 'error' ? t('editor.saveFailed') : ''
+    state === 'saving'
+      ? t('editor.saving')
+      : state === 'saved'
+        ? `✓ ${t('editor.saved')}`
+        : state === 'dirty'
+          ? t('editor.unsaved')
+          : state === 'error'
+            ? t('editor.saveFailed')
+            : ''
 
   return (
     <LiveEditor
@@ -982,7 +1051,7 @@ function Dependencies({ cardId, b }: { cardId: string; b: BoardHelpers }) {
   if (!me || (!can && waits.length === 0 && blocking.length === 0)) return null
   // everything that (directly or indirectly) waits for this card: picking one of those would make a loop
   const downstream = new Set<string>([cardId])
-  for (let grew = true; grew; ) {
+  for (let grew = true; grew;) {
     grew = false
     for (const c of data.cards) if (!downstream.has(c.id) && c.depends_on.some((d) => downstream.has(d))) (downstream.add(c.id), (grew = true))
   }
@@ -1014,7 +1083,18 @@ function Dependencies({ cardId, b }: { cardId: string; b: BoardHelpers }) {
     <>
       <Prop label={t('deps.waitsFor')}>
         <div className="flex flex-wrap items-center gap-1">
-          {waits.map((c) => chip(c, can ? () => put(cardId, me.depends_on.filter((x) => x !== c.id)) : undefined))}
+          {waits.map((c) =>
+            chip(
+              c,
+              can
+                ? () =>
+                    put(
+                      cardId,
+                      me.depends_on.filter((x) => x !== c.id),
+                    )
+                : undefined,
+            ),
+          )}
           {waits.length === 0 && <span className="text-xs text-muted">{t('deps.none')}</span>}
           {can && (
             <Popover
@@ -1044,7 +1124,20 @@ function Dependencies({ cardId, b }: { cardId: string; b: BoardHelpers }) {
       </Prop>
       {blocking.length > 0 && (
         <Prop label={t('deps.blocking')}>
-          <div className="flex flex-wrap gap-1">{blocking.map((c) => chip(c, can ? () => put(c.id, c.depends_on.filter((x) => x !== cardId)) : undefined))}</div>
+          <div className="flex flex-wrap gap-1">
+            {blocking.map((c) =>
+              chip(
+                c,
+                can
+                  ? () =>
+                      put(
+                        c.id,
+                        c.depends_on.filter((x) => x !== cardId),
+                      )
+                  : undefined,
+              ),
+            )}
+          </div>
         </Prop>
       )}
     </>

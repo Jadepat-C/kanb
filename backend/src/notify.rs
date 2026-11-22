@@ -163,7 +163,7 @@ async fn render(state: &AppState, id: i64) -> Result<Option<Message>, String> {
     .await
     .map_err(|e| e.to_string())?;
     let th = r.locale == "th";
-    let actor = r.actor.clone().unwrap_or_else(|| "Kanban".into());
+    let actor = r.actor.clone().unwrap_or_else(|| "Kanb".into());
     let card = match (r.card_number, &r.card_title) {
         (Some(n), Some(t)) => format!("#{n} {t}"),
         _ => String::new(),

@@ -201,7 +201,7 @@ function ImageView({ buf, type, name }: { buf: ArrayBuffer; type: string; name: 
         src={url}
         alt={name}
         onClick={() => setActual(!actual)}
-        className={clsx('rounded shadow', actual ? 'max-w-none cursor-zoom-out' : 'max-h-[80vh] max-w-full cursor-zoom-in object-contain')}
+        className={clsx('rounded shadow', actual ? 'max-w-none cursor-zoom-out' : 'max-h-[80dvh] max-w-full cursor-zoom-in object-contain')}
       />
     </div>
   )

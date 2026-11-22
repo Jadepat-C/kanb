@@ -1,149 +1,253 @@
-# Kanban
+# Kanb
 
-A self-hosted Kanban board for **one organization**: no public sign-up. Accounts are created by a super admin. It combines kan.bn-style boards with Odoo-style cards (stars, blocked/ready status, column progress bars, folding, WIP limits, a unified comments + activity log).
+[![CI](https://github.com/Jadepat-C/kanb/actions/workflows/ci.yml/badge.svg)](https://github.com/Jadepat-C/kanb/actions/workflows/ci.yml)
+[![Docker image](https://github.com/Jadepat-C/kanb/actions/workflows/docker.yml/badge.svg)](https://github.com/Jadepat-C/kanb/pkgs/container/kanb)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-| | |
-|---|---|
-| Backend | Rust · Axum 0.8 · SQLx 0.9 (runtime queries, embedded migrations) |
-| Database | PostgreSQL 18 |
-| Files | S3 API (SeaweedFS), private: every upload and download streams through the app after a permission check |
-| Frontend | React 19 · Vite · TanStack Query · React Router · Tailwind v4 · Radix · dnd-kit · CodeMirror 6 · react-markdown |
-| i18n / theme | English / ไทย toggle (IBM Plex Sans Thai) · light / dark / system |
+Kanb is a self-hosted Kanban board for a team or a small organization. You run it on your own server with Docker,
+your files stay on that server, and there is no public sign-up: an admin creates every account.
+
+It works in English and Thai, in light and dark, and on phones, tablets and desktops.
+
+![A Kanb board with labelled cards in three columns](docs/screenshots/board.png)
 
 ## Features
 
-- **Users page (super admin):**
-  - Search users. When creating one, a **random password is generated** and can be copied. Optionally **email them a "set your password" link**, valid 3 days.
-  - **Forced password change:** anyone whose password was set by an admin (on creation or reset) must choose their own at their next sign-in. The server enforces this; until then every other request is refused.
-  - **Delete users:** a preview shows the effect first. Boards they own and are the only member of are deleted with their files. Shared boards stay; if they were the only owner, the longest-standing member becomes owner. Their comments and history remain, shown as **"[Deleted User] Name (username)"**. Their username and email become free again.
-- **Email (SMTP), set up in-app** (Users → Email settings): any SMTP server; the SMTP password is never sent back to the browser. There's a test button. It powers the welcome links and **"Forgot password?"** on the login page: a one-time link valid for 1 hour, with the same answer whether or not the account exists, and every session is signed out once a new password is set. In development, Mailpit catches all mail at http://127.0.0.1:58025.
-- **Profile pictures** (Profile page: click or drop an image). The server re-encodes each upload as a 256×256 JPEG, which keeps files small, strips EXIF/GPS metadata and rejects anything that isn't a real image. Pictures are only served to signed-in users, are deleted with the account, and fall back to initials on the user's colour.
-- **People are shown as "Display Name · @username"** wherever a name appears on one line, because display names can be anything. Deleted accounts show as "[Deleted User] Name (username)".
-- **Sign in with username or email.** Emails are unique (case-insensitive) and validated. Users set theirs in Profile, or a super admin sets it in Users → Edit.
-- **Roles.** *Super admin* sees and manages every board and all users. *Board roles* are per board and fully customizable: Owner / Admin / Editor / Commenter / Viewer are seeded, and you can add your own from a permission matrix (13 permissions).
-- **Cards are Markdown, edited Obsidian-style.** Live preview renders headings, bold/italic/strike, code, links, images, quotes, lists, checkboxes and dividers in place. An element's raw syntax shows only while the cursor is in it. There's a formatting toolbar, and Ctrl+B / I / E / K work. **Paste or drop images**: they upload and become `![](/api/files/…)`. Other dropped files are attached with a link. `- [ ]` items double as the card's checklist progress.
-- **Autosave** for descriptions: 1.2 s after you stop typing, on blur, and on close. A burst of edits by one person within 10 minutes becomes **one** "updated the description" log entry.
-- **Attachments** with upload progress and Thai filenames.
-- **In-app file preview** (← → between files), rendered in the browser so files never leave your server:
-  - images (SVG too, safely through `<img>`), PDF (PDF.js), Word `.docx` (docx-preview), Excel `.xlsx/.xls/.ods/.csv` (SheetJS, as a grid with sheet tabs), PowerPoint `.pptx` (pptx-preview)
-  - Markdown, text and code files (UTF-8, or Thai TIS-620/Windows-874), video and audio
-  - Legacy `.doc`/`.ppt` are download-only.
-- **Comments and activity log** in one timeline. Every change (title, status, priority, due date, move, labels, assignees, attachments) is logged in the same DB transaction.
-- **Search.** Ctrl+K searches every visible board and card (title, description, `#number`). Each page also has its own filter bar. Matching is case-insensitive *substring*, so Thai works without word segmentation.
-- **Hover preview.** Pausing on a card shows its rendered description excerpt, status, due date and assignees.
-- **Custom statuses per board** (name, colour, order). They appear as the card dot and in the column progress bar. New boards start with Normal / Blocked / Ready, in the creator's language.
-- **Board filters:** text, assigned to me, labels, status, priority (★+, ★★+, ★★★, none), due date (overdue / today / 7 days / has / none). **Boards page:** shows owners and filters by owner.
-- **Drag and drop** cards between columns, and reorder columns by their grip handle. **Sort a column** (priority, due date, newest/oldest, recently updated, title, number) from its ⋯ menu. This is a one-off reorder; you can keep dragging afterwards. Positions use fractional indexing, so one move rewrites one row.
-- **Realtime.** Other people's changes appear live over a WebSocket per board.
-- Labels, assignees, due dates (overdue highlighting), card colours, archive.
-- **Columns can be archived** (hidden with their cards, restorable) **or deleted with everything in them** (cards, comments, files). Deleting a column that still has cards requires typing **Delete**, and so does deleting a board permanently.
-- **No browser pop-ups:** every confirmation and input is an in-app dialog. **Toasts** confirm your own actions, and tell you when someone else changes the board you're viewing ("Somchai updated …"; a burst of edits is collapsed).
-- **Presence:**
-  - The board header shows who else is on the board right now: green dot = viewing, amber = typing.
-  - A card that someone has open shows their avatar, and the open card says who's there and whether they're editing.
-  - It's carried over the same per-board WebSocket.
-- **Boards page:** drag boards to arrange them. The order is saved **per user**, and dragging is paused while a filter is active.
-- **Archive and permanent delete:**
-  - **Archive** hides a card or board but keeps everything. Archived cards are under Board settings → Archive (restore puts a card back at the bottom of its column). Archived boards are on the Boards page → Archived.
-  - **Delete permanently** removes the rows and the stored files in S3. Boards require typing the board name to confirm. Pasted images that another card still references (e.g. a duplicate) are kept. Deleting a column also purges the files of archived cards in it.
-- **Tutorial board:** every new account gets its own "👋 Getting started" board, in the language chosen when the account is created (English or ไทย). It has 11 cards covering every feature. You can add another copy at any time from the Boards page (right-click → *Add tutorial board*).
-- **Right-click menus:**
-  - **Cards** (Kanban and both calendars): open, rename, new card, duplicate, copy link / title, move to column, status, priority, due date (today / tomorrow / in a week / clear), labels, assign to me, colour, archive. Only actions you have permission for are shown.
-  - **Columns:** new card at top or bottom, fold, sort, rename, WIP limit, delete.
-  - **Boards** (Boards page): open, open in a new tab, copy link, rename, colour, board settings, leave, archive or restore, delete permanently. Right-clicking the page itself gives *New board* and *Add tutorial board*.
-- **Calendar:**
-  - Each board has a Board / Calendar switch, and the calendar uses the same filters.
-  - There's also a cross-board **Calendar** page with board and "assigned to me" filters.
-  - Month and week views, weeks starting Monday.
-  - Drag a card to another day to reschedule it (its time is kept), drag it to "No due date" to clear the date, or click + on a day to add a card there.
-  - **New card** from the toolbar, by double-clicking a day, or by right-clicking a day. Choose the column, date and time; the cross-board calendar also asks for the board. Chips there show which board each card is from.
+**Boards and cards**
+- Columns with drag and drop, WIP limits, folding and one-click sorting.
+- Cards with a Markdown description that renders as you type, checklists, attachments, comments, labels, assignees,
+  colours, 1–3 star priority, start and due dates, and custom statuses (one of which can mean "done").
+- Dependencies between cards ("waits for"), with warnings when a card is scheduled before the one it waits for.
+- In-app preview for images, PDF, Word, Excel, PowerPoint, Markdown, text, audio and video. Files never leave your server.
+- Archive and restore for cards, columns and boards; permanent delete when you mean it.
+
+**Views**
+- Board, calendar (month and week) and Gantt chart for every board, plus a calendar across all your boards.
+- Drag cards between days on the calendar, or move and resize bars on the Gantt chart.
+- Hover any card for a preview; Ctrl+K searches every board and card you can see.
+
+**Working together**
+- Live updates: other people's changes appear immediately, and you can see who is looking at or editing a card.
+- Notifications in the app, by email, as browser notifications, or to Discord, Slack, Microsoft Teams, Google Chat,
+  Telegram, LINE, ntfy, Gotify or any webhook, chosen by each person. Boards can also post their activity to a team channel.
+- Board and card templates, and recurring cards (daily, weekly, monthly).
+- A personal calendar feed for Google Calendar, Outlook or Apple Calendar: the whole app, chosen boards or single cards.
+- Export a board as CSV, JSON, or a ZIP with every attached file.
+
+**Accounts and security**
+- Super admins manage users; each board has its own roles (Owner, Admin, Editor, Commenter, Viewer, or your own)
+  built from a permission matrix.
+- Sign in with username or email, two-factor sign-in with an authenticator app, password reset by email.
+- Every file download is permission-checked by the app; the file store is never exposed to the internet.
+- Stored secrets (SMTP password, webhook tokens, 2FA secrets) are encrypted with a key only you hold.
+
+**Everywhere**
+- English and ไทย (with Buddhist-era years), light and dark themes, dates as dd/mm/yyyy.
+- Works on phones and tablets: long-press to drag, full-screen card panel, phone-sized calendar.
+- Can be installed to a phone's home screen or desktop like an app.
+
+| | |
+|---|---|
+| ![Gantt chart with bars, labels and assignees](docs/screenshots/gantt.png) | ![A card open in dark mode](docs/screenshots/card-dark.png) |
+
+<p align="center"><img src="docs/screenshots/phone.png" alt="Kanb on a phone: board and calendar" width="520"></p>
+
+## Try it on your computer
+
+You need [Docker](https://docs.docker.com/get-docker/) with Compose v2 (included in Docker Desktop) and `git`.
+
+```bash
+git clone https://github.com/Jadepat-C/kanb.git
+cd kanb/deploy
+./setup.sh                 # writes deploy/.env with random passwords and prints a setup code
+docker compose up -d
+```
+
+Open <http://localhost:8080>, enter the setup code, and create your admin account. It starts with a
+"👋 Getting started" board that walks through every feature.
+
+The first `docker compose up` downloads the ready-made image (x86-64 and ARM64, e.g. a Raspberry Pi). If it can't,
+it builds the app from this checkout instead, which takes a few minutes.
+
+## Run it on a server
+
+Kanb needs a Linux machine with Docker and about 1 GB of free memory, a domain name pointing at it, and something
+that serves HTTPS in front of it (a reverse proxy). Browser notifications and secure sign-in cookies need HTTPS.
+
+1. **Configure.** On the server:
+   ```bash
+   git clone https://github.com/Jadepat-C/kanb.git
+   cd kanb/deploy
+   ./setup.sh https://kanb.example.com          # your real address
+   ```
+   This writes `deploy/.env` and prints a setup code. Open `.env` to change where data is stored (`KANB_DATA`)
+   or the time zone (`TZ`); every setting is listed under [Configuration](#configuration).
+2. **Start it.**
+   ```bash
+   docker compose up -d
+   ```
+   The app now listens on `127.0.0.1:8080`, reachable only from the server itself.
+3. **Put HTTPS in front.** The simplest is [Caddy](https://caddyserver.com/), which gets certificates by itself:
+   ```
+   kanb.example.com {
+       reverse_proxy 127.0.0.1:8080
+   }
+   ```
+   For nginx, [`deploy/nginx.conf`](deploy/nginx.conf) is a complete example. It also passes WebSockets through
+   (needed for live updates) and slows down password guessing. If your proxy runs on another machine, set
+   `KANB_BIND` to an address it can reach, such as a LAN or VPN IP.
+4. **Create your admin.** Open your address, enter the setup code and choose your username and password. The
+   setup page only exists until the first account is created, and only works with the code. If you've lost the
+   code, it's `SETUP_CODE` in `deploy/.env`. Or create the admin on the command line instead:
+   `docker compose exec app kanban create-admin --username you`.
+5. **Back up** `SECRET_KEY` from `deploy/.env` now, somewhere other than the server (see [Backups](#backups)).
+
+### After the first sign-in
+
+Everything else is set up in the app. Admin and Profile are in the menu under your avatar (top right).
+- **Users:** Admin → Users. There is no public sign-up. A new user gets a generated password to pass on, or an
+  email invitation once email is set up, and chooses their own password at first sign-in.
+- **Email:** Admin → Email settings. Any SMTP server works (Gmail with an app password, Microsoft 365, your provider).
+  It sends invitations, password resets and notifications.
+- **Notifications:** Admin → Notifications turns email, browser and chat notifications on or off for everyone.
+  People choose their own in Profile → Notifications; board owners can add a team channel in Board settings.
+
+## Configuration
+
+All settings live in `deploy/.env`. `./setup.sh` fills in the passwords; [`deploy/.env.example`](deploy/.env.example)
+explains each line.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `KANB_URL` | (required) | The address people use, e.g. `https://kanb.example.com`. Requests from any other address are refused. |
+| `COOKIE_SECURE` | `true` | Keep `true` with HTTPS. Set `false` only to try Kanb over plain `http://` on another device. |
+| `KANB_BIND` | `127.0.0.1:8080` | Where the app listens on the host. `0.0.0.0:8080` makes it reachable from your network. |
+| `TRUST_PROXY` | `true` | Use the visitor address your reverse proxy passes on, for the sign-in limits. Set `false` if the app faces the internet with no proxy. |
+| `SETUP_CODE` | (from `setup.sh`) | Needed to create the first admin in the browser. If empty, a code is printed by `docker compose logs app`. |
+| `KANB_IMAGE` | `ghcr.io/jadepat-c/kanb:latest` | The app image. Pin a release with e.g. `:0.1`; `:edge` follows the main branch; `kanb:local` (any name not on a registry) builds from your checkout. |
+| `KANB_DATA` | `./data` | Folder for the database (`postgres/`) and uploaded files (`files/`). |
+| `TZ` | `UTC` | Time zone for chat posts, calendar feeds and recurring cards, e.g. `Asia/Bangkok`. |
+| `POSTGRES_PASSWORD` | (required) | Database password. Letters and digits only. |
+| `S3_ACCESS_KEY`, `S3_SECRET_KEY` | `kanb`, (required) | Credentials between the app and its file store. |
+| `SECRET_KEY` | (required) | 64 hex characters. Encrypts the secrets stored in the database. Never change or lose it. |
+| `SESSION_DAYS` | `30` | How long a sign-in lasts without use. |
+| `MAX_UPLOAD_MB` | `50` | Largest file people can upload. Raise your proxy's limit to match. |
+
+After editing `.env`, apply it with `docker compose up -d`.
+
+## Backups
+
+Everything lives in two places: the `KANB_DATA` folder and `SECRET_KEY` in `deploy/.env`.
+Without `SECRET_KEY`, a restored server can't read its SMTP password or webhook secrets, and everyone's
+two-factor sign-in has to be reset.
+
+The simplest backup is to stop Kanb briefly and copy the whole data folder:
+
+```bash
+cd kanb/deploy
+docker compose stop
+tar czf ~/kanb-backup-$(date +%F).tar.gz data .env      # sudo may be needed: the database files belong to the container
+docker compose start
+```
+
+To back up without stopping, dump the database and copy the files folder:
+
+```bash
+docker compose exec -T db pg_dump -U kanb -Fc kanb > kanb-$(date +%F).dump
+tar czf kanb-files-$(date +%F).tar.gz data/files
+```
+
+To restore a dump into a fresh install (same `.env`), start only the database, load the dump, put `data/files`
+back, then start everything:
+
+```bash
+docker compose up -d db
+docker compose exec -T db pg_restore -U kanb -d kanb --clean --if-exists < kanb-2026-01-31.dump
+docker compose up -d
+```
+
+## Upgrading
+
+Take a backup first, then from the `deploy` folder:
+
+```bash
+git pull
+docker compose pull && docker compose up -d     # download the new image
+docker compose up -d --build                    # or, if you build from source: rebuild from what you just pulled
+```
+
+Database changes are applied automatically when the app starts. To stay on a release, set `KANB_IMAGE` to a version
+tag such as `ghcr.io/jadepat-c/kanb:0.1`. Releases are listed on the [releases page](https://github.com/Jadepat-C/kanb/releases).
+
+## Admin commands
+
+Run these on the server from the `deploy` folder. They also work when you can't sign in:
+
+```bash
+docker compose exec app kanban create-admin --username NAME [--display-name "Full Name"] [--locale th]
+docker compose exec app kanban set-password --username NAME    # also signs them out everywhere
+docker compose exec app kanban reset-2fa --username NAME       # lost phone: turns off their two-factor sign-in
+docker compose exec app kanban gen-key                          # prints a new random SECRET_KEY
+```
+
+`create-admin` and `set-password` ask for the password, or read it from the `KANBAN_ADMIN_PASSWORD` variable.
 
 ## Development
 
+You need Rust 1.94 or newer, Node.js 22 or newer, and Docker for the database, file store and a mail catcher.
+
 ```bash
-docker compose -f dev/compose.yaml up -d          # Postgres :55432 + SeaweedFS :58333 (localhost only)
+docker compose -f dev/compose.yaml up -d      # Postgres :55432, SeaweedFS :58333, Mailpit :51025 (UI http://127.0.0.1:58025)
 
 cd backend
-cp .env.example .env                                # see below
+cp .env.example .env
 set -a; . ./.env; set +a
 KANBAN_ADMIN_PASSWORD='devpassword1' cargo run -- create-admin --username admin
-cargo run                                           # API on 127.0.0.1:8080
+cargo run                                     # API on http://127.0.0.1:8080
 
-cd ../frontend && npm install && npm run dev        # http://localhost:5173 (proxies /api + WebSocket)
+cd ../frontend
+npm install
+npm run dev                                   # http://localhost:5173, with live reload
 ```
 
-`backend/.env` for development:
+- Tests: `cargo test` in `backend/`, `npx tsc -b` in `frontend/`.
+- Mail: point Admin → Email settings at `127.0.0.1:51025` (no encryption) and read everything in Mailpit.
+- Safe testing against real settings: `MAIL_REDIRECT=127.0.0.1:51025` sends all email to Mailpit, and
+  `WEBHOOK_REDIRECT=http://127.0.0.1:<port>` sends all chat and webhook calls to a local catcher.
+- Database changes go in `backend/migrations/` as new numbered files; they run at startup.
+- GitHub Actions runs the tests on every push and pull request ([`ci.yml`](.github/workflows/ci.yml)) and publishes
+  the image to `ghcr.io` for x86-64 and ARM64 ([`docker.yml`](.github/workflows/docker.yml)): `edge` from the main
+  branch, and `latest` plus the version number when a tag like `v0.1.0` is pushed.
 
-```
-DATABASE_URL=postgres://kanban:kanban@127.0.0.1:55432/kanban
-BIND_ADDR=127.0.0.1:8080
-PUBLIC_ORIGIN=http://localhost:5173,http://localhost:8080
-```
+### How it's built
 
-Tests: `cargo test` (ordering keys, checklist parsing) · `npx tsc -b` (types).
+| | |
+|---|---|
+| Backend | Rust, Axum, SQLx (one binary that also serves the web app) |
+| Database | PostgreSQL 18 |
+| Files | Any S3-compatible store (SeaweedFS in the bundled setup), private behind the app |
+| Frontend | React 19, Vite, TanStack Query, React Router, Tailwind CSS 4, Radix, dnd-kit, CodeMirror 6 |
+| Languages | i18next (English, Thai); Anuphan font for Thai and Latin |
 
-### CLI
+## Security
 
-```
-kanban serve                                   # default
-kanban create-admin --username NAME [--display-name "..."] [--locale th]   # password from KANBAN_ADMIN_PASSWORD or stdin
-kanban set-password --username NAME            # also signs that user out everywhere
-```
+- Sign-in, two-factor codes, password-reset requests and the first-run setup are rate limited by the app itself,
+  per visitor address and per account (10 wrong passwords lock an account for 15 minutes). The nginx example adds
+  its own limit on top.
+- Sessions are random 256-bit tokens in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` over HTTPS); only a hash is
+  stored. Passwords use Argon2id.
+- Every request that changes something, and every WebSocket, must come from `KANB_URL` (CSRF protection).
+- Files are permission-checked on every download. Only common image types are shown inline; everything else downloads
+  with `nosniff` and a sandboxing Content-Security-Policy. Markdown is sanitized and the app ships a strict CSP.
+- Boards you can't access answer "not found", so their existence isn't revealed.
+- Secrets in the database are encrypted with AES-256-GCM using `SECRET_KEY`.
+- Webhooks and push notifications only go to public internet addresses unless an admin allows private ones.
+- Calendar feed links contain a random token; only its hash is stored, and making a new link revokes the old one.
 
-## Deployment (home server + VPS)
+Found a security problem? Open a GitHub issue, or if the details could put existing installs at risk, contact the
+maintainer through their GitHub profile first.
 
-```
-browser ──https──▶ VPS nginx (TLS) ──tailscale──▶ home server 100.64.12.34:3040 kanban-app
-                                                               ├─ kanban-db  (no published port)
-                                                               └─ kanban-s3  (no published port)
-```
+## License
 
-1. **Image.** Build on the main PC (faster) and ship it:
-   ```bash
-   docker build -t kanban:latest .
-   docker save kanban:latest | ssh user@100.64.12.34 docker load
-   ```
-   (Building directly on the home server also works: `docker build -t kanban:latest <checkout>`. It's just slower.)
-   The compose file sets `pull_policy: never` and `diun.enable=false` for this local image. your update script
-   lists it as "local build", and it still updates Postgres and SeaweedFS normally.
-2. **Files on the home server:**
-   ```bash
-   mkdir -p /srv/appdata/docker/kanban/secrets /srv/appdata/kanban/{postgres,seaweedfs}
-   cp deploy/docker-compose.yml /srv/appdata/docker/kanban/
-   # secrets (chmod 600): db.env, app.env, seaweedfs-s3.json, from the *.example files
-   openssl rand -hex 24   # use for POSTGRES_PASSWORD / S3 secret
-   ```
-   `app.env`'s `PUBLIC_ORIGIN` must be the exact public URL (`https://<host>`).
-   Set `SECRET_KEY` too (`docker run --rm <image> kanban gen-key`) and keep a copy with your backups: it encrypts the stored SMTP
-   password, webhook secrets and 2FA secrets. `TZ` in `docker-compose.yml` sets the time zone used for channel posts,
-   calendar feeds and recurring cards.
-3. `docker compose up -d`, then `docker exec -it kanban-app kanban create-admin --username <you>`.
-4. **VPS:** DNS A record → VPS, issue the cert (certbot webroot, same as the other vhosts), copy `deploy/nginx-kanban.conf` to `/opt/nginx/conf.d/kanban.conf` with the host name filled in, `nginx -t`, reload.
-5. **Tailscale ACL:** allow `tag:vps` → `100.64.12.34:3040`.
-6. **Backups:** add a dump to the nightly script, e.g.
-   `docker exec kanban-db pg_dump -U kanban -Fc kanban > /srv/appdata/backups/db/kanban-app-$(date +%Y%m%d-%H%M%S).dump`.
-   Files live in `/srv/appdata/kanban/seaweedfs`, which the appdata snapshots cover.
-   if you have an update script that dumps databases first, add a
-   `predump` case: `kanban) out="$DUMPS/kanban-app-$T.dump"; docker exec kanban-db sh -c 'pg_dump -U kanban -d kanban -Fc' > "$out.part"; rc=$?;;`
-
-Memory: the app uses about 30–70 MB, and Postgres and SeaweedFS are capped at 384 MB each.
-
-## Security notes
-
-- Sessions: random 256-bit token in an `HttpOnly; Secure; SameSite=Lax` cookie. Only its SHA-256 is stored. Expiry slides.
-- CSRF: every non-GET request and WebSocket upgrade must carry an allowed `Origin`.
-- Passwords: Argon2id. Login has rate limiting in nginx and constant-ish timing for unknown users.
-- Files: permission-checked on every request. Only PNG, JPEG, GIF, WebP and AVIF are served inline. Everything else (SVG and HTML included) is a download with `nosniff` and `CSP: sandbox`.
-- Markdown is sanitized (no raw HTML, no `javascript:` or `data:` URLs). The SPA ships with a strict CSP (no inline scripts).
-- Boards you can't access return 404, not 403.
-- Secrets in the database (SMTP password, webhook URLs/tokens, TOTP secrets, the Web Push key) are AES-256-GCM encrypted
-  with `SECRET_KEY`. Values saved before a key was set are encrypted at the next start.
-- Outgoing webhooks and push deliveries only go to public addresses (DNS-pinned, no redirects) unless an admin allows
-  private ones.
-- Calendar feed links carry a random token; only its hash is stored and a new link revokes the old one.
-
-## Roadmap
-
-- OIDC SSO (`password_hash` is already nullable).
-- Import from kan.bn.
-- @mentions and notifications, custom fields, an archived-cards view with restore, board templates.
+Kanb is free software under the [GNU Affero General Public License v3.0 or later](LICENSE). You may use, change and
+share it. If you run a changed version for other people over a network, you must offer them its source code.

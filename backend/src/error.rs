@@ -20,6 +20,9 @@ pub enum AppError {
     Conflict(&'static str),
     #[error("payload too large")]
     TooLarge,
+    /// rate limited; seconds until the next attempt is allowed
+    #[error("too many attempts")]
+    TooManyRequests(u64),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -54,6 +57,13 @@ impl IntoResponse for AppError {
             AppError::BadRequest(c) => (StatusCode::BAD_REQUEST, *c),
             AppError::Conflict(c) => (StatusCode::CONFLICT, *c),
             AppError::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+            AppError::TooManyRequests(secs) => {
+                let mut r = (StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "too_many_attempts", "retry_after": secs }))).into_response();
+                if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+                    r.headers_mut().insert(axum::http::header::RETRY_AFTER, v);
+                }
+                return r;
+            }
             AppError::Internal(e) => {
                 tracing::error!(error = ?e, "internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
