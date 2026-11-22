@@ -35,6 +35,6 @@ Wrote deploy/.env for $url (see .env.example for every setting).
 Back up SECRET_KEY from it together with your data.
 
 Next:
-  docker compose up -d --build
+  docker compose up -d
   then open $url and create the first admin with setup code:  $code
 MSG
