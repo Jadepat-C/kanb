@@ -146,6 +146,13 @@ services:
       # where people (or your reverse proxy) reach Kanb. 127.0.0.1 = only this machine, for a reverse proxy here;
       # "8080:8080" = your whole network, e.g. a LAN install without HTTPS
       - "127.0.0.1:8080:8080"
+    healthcheck:
+      # the image has no shell or curl: the binary checks itself (GET /api/health, which also pings the database)
+      test: ["CMD", "/usr/local/bin/kanban", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     environment:
       PUBLIC_ORIGIN: https://kanb.example.com   # the exact address people open (no trailing slash)
       COOKIE_SECURE: "true"                     # "false" if it's served over plain http (a LAN install)
