@@ -167,6 +167,7 @@ services:
       SETUP_CODE: ${SETUP_CODE}                 # asked for when you create the first admin in the browser
       # MAX_UPLOAD_MB: "50"
       # SESSION_DAYS: "30"
+      # METRICS_ADDR: "0.0.0.0:9091"            # Prometheus metrics; publish this port to your monitoring only
 
   db:
     image: postgres:18-alpine
@@ -254,12 +255,24 @@ explains each line.
 | `SECRET_KEY` | (required) | 64 hex characters. Encrypts the secrets stored in the database. Never change or lose it. |
 | `SESSION_DAYS` | `30` | How long a sign-in lasts without use. |
 | `MAX_UPLOAD_MB` | `50` | Largest file people can upload. Raise your proxy's limit to match. |
+| `METRICS_ADDR` | (off) | Prometheus metrics at `http://<this address>/metrics`, e.g. `0.0.0.0:9091`. It's a separate port on purpose: publish it to your monitoring only, never through your reverse proxy. See [Monitoring](#monitoring). |
 
 After editing `.env`, apply it with `docker compose up -d`.
 
 In [your own docker-compose.yml](#your-own-docker-composeyml) the app reads the same settings directly, except three
 that only exist for the bundled setup: `KANB_URL` is `PUBLIC_ORIGIN`, `KANB_BIND` is the `ports:` entry, and
 `KANB_DATA` is the folder in the `volumes:` entries.
+
+## Monitoring
+
+- **Health:** `GET /api/health` answers `ok` with status 200 when the app and its database are up: point an uptime
+  checker at it.
+- **Metrics:** set `METRICS_ADDR` and add `http://<host>:<port>/metrics` to Prometheus. You get requests and response
+  times per API route, sign-ins (ok / failed), notifications sent and failed per channel (email, chat, browser),
+  background job failures, open live-update connections, and counts of users, boards, cards and stored files.
+- **Brute force:** a wrong password, two-factor code or setup code at sign-in is answered with status 401 on
+  `POST /api/auth/login`, `/api/auth/login/code` or `/api/auth/setup`, so fail2ban or CrowdSec can ban the address
+  from your proxy's access log (CrowdSec's `http-generic-bf` scenario does this out of the box).
 
 ## Backups
 

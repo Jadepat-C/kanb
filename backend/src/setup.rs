@@ -96,7 +96,8 @@ pub async fn create_first_admin(
     if !same(&r.code, &state.setup_code) {
         state.throttle.hit(&ip, throttle::TOKEN_IP);
         tracing::warn!("wrong first-run setup code");
-        return Err(AppError::BadRequest("setup_code_invalid"));
+        crate::metrics::sign_in("setup_code_failed");
+        return Err(AppError::SignInFailed("setup_code_invalid"));
     }
     let locale = if r.locale == "th" { "th" } else { "en" };
     let user = crate::admin::insert_user(&state.db, &r.username, r.display_name.trim(), None, &r.password, true, true, locale, false).await?;

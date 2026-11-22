@@ -278,7 +278,8 @@ pub async fn login_code(
         state.throttle.hit(&ip, throttle::LOGIN_IP);
         state.throttle.hit(&account, throttle::CODE_ACCOUNT);
         tracing::warn!(user = %username, "wrong two-factor code");
-        return Err(AppError::BadRequest("totp_invalid"));
+        crate::metrics::sign_in("two_factor_failed");
+        return Err(AppError::SignInFailed("totp_invalid"));
     }
     state.throttle.clear(&account);
     sqlx::query("DELETE FROM login_challenges WHERE user_id = $1").bind(uid).execute(&state.db).await?;

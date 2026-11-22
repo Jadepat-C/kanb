@@ -16,6 +16,10 @@ pub enum AppError {
     NotFound,
     #[error("{0}")]
     BadRequest(&'static str),
+    /// a wrong password / two-factor code / setup code at sign-in: 401 so fail2ban, CrowdSec and the like recognise
+    /// a brute-force attempt, with a code the sign-in page can show
+    #[error("{0}")]
+    SignInFailed(&'static str),
     #[error("{0}")]
     Conflict(&'static str),
     #[error("payload too large")]
@@ -55,6 +59,7 @@ impl IntoResponse for AppError {
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             AppError::BadRequest(c) => (StatusCode::BAD_REQUEST, *c),
+            AppError::SignInFailed(c) => (StatusCode::UNAUTHORIZED, *c),
             AppError::Conflict(c) => (StatusCode::CONFLICT, *c),
             AppError::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
             AppError::TooManyRequests(secs) => {
@@ -66,6 +71,7 @@ impl IntoResponse for AppError {
             }
             AppError::Internal(e) => {
                 tracing::error!(error = ?e, "internal error");
+                crate::metrics::internal_error();
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
             }
         };

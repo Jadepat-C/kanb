@@ -124,6 +124,7 @@ pub async fn board_ws(
 }
 
 async fn pump(mut socket: WebSocket, hub: Hub, board_id: Uuid, user: User) {
+    let _open = crate::metrics::Socket::open("board");
     let mut rx = hub.tx.subscribe();
     let conn = Uuid::new_v4();
     let mut me = Viewer {
@@ -173,6 +174,7 @@ async fn pump(mut socket: WebSocket, hub: Hub, board_id: Uuid, user: User) {
 pub async fn user_ws(State(state): State<AppState>, CurrentUser(user): CurrentUser, ws: WebSocketUpgrade) -> Response {
     let mut rx = state.hub.tx.subscribe();
     ws.on_upgrade(move |mut socket| async move {
+        let _open = crate::metrics::Socket::open("user");
         loop {
             tokio::select! {
                 ev = rx.recv() => match ev {

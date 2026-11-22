@@ -150,10 +150,12 @@ async fn send_to_user(state: &AppState, user_id: Uuid, payload: &Value) -> (usiz
         match push_one(state, &kp, &contact, &endpoint, &p256dh, &auth, &body).await {
             Ok(()) => {
                 ok += 1;
+                crate::metrics::delivery("browser_push", true);
                 let _ = sqlx::query("UPDATE push_subscriptions SET last_ok_at = now() WHERE id = $1").bind(id).execute(&state.db).await;
             }
             Err(Gone) => {
                 failed += 1;
+                crate::metrics::delivery("browser_push", false);
                 // the browser unsubscribed or the subscription expired
                 let _ = sqlx::query("DELETE FROM push_subscriptions WHERE id = $1").bind(id).execute(&state.db).await;
             }

@@ -30,7 +30,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     } catch {
       /* not json */
     }
-    if (res.status === 401 && path !== '/auth/login' && path !== '/me') {
+    // sign-in routes answer 401 for a wrong password / code: that's not an expired session
+    if (res.status === 401 && !path.startsWith('/auth/') && path !== '/me') {
       window.dispatchEvent(new Event('kanban:unauthorized'))
     }
     throw new ApiError(res.status, code, data)

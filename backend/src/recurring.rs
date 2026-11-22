@@ -262,6 +262,7 @@ pub fn spawn_job(state: AppState) {
             tick.tick().await;
             if let Err(e) = run_due(&state).await {
                 tracing::warn!(error = %e, "recurring cards job failed");
+                crate::metrics::job_failed("recurring_cards");
             }
         }
     });

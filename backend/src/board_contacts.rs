@@ -342,6 +342,7 @@ async fn post(state: &AppState, sys: &contacts::System, c: &BRow, m: &Message) {
     if let Err(e) = &res {
         tracing::warn!(channel = %c.base.id, kind = %c.base.kind, error = %e, "board channel delivery failed");
     }
+    crate::metrics::delivery("board_channel", res.is_ok());
     contacts::record_in(state, TABLE, c.base.id, &res).await;
 }
 
@@ -410,6 +411,7 @@ pub async fn due_pass(state: &AppState) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(error = %e, "board due pass failed");
+                crate::metrics::job_failed("board_due");
                 continue;
             }
         };
@@ -455,6 +457,7 @@ pub fn spawn_dispatch(state: AppState) {
             tick.tick().await;
             if let Err(e) = dispatch(&state).await {
                 tracing::warn!(error = %e, "board activity dispatch failed");
+                crate::metrics::job_failed("board_activity");
             }
         }
     });

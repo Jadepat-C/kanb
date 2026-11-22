@@ -10,6 +10,7 @@ mod boards;
 mod cards;
 mod config;
 mod error;
+mod metrics;
 mod files;
 mod mail;
 mod notify;
@@ -272,6 +273,9 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         heavy: Arc::new(tokio::sync::Semaphore::new(config.heavy_requests.max(1))),
     };
     setup::announce(&state).await;
+    if let Some(addr) = config.metrics_addr.as_deref().filter(|a| !a.trim().is_empty()) {
+        metrics::serve(addr, state.clone()).await?;
+    }
     notify::spawn_due_job(state.clone());
     board_contacts::spawn_dispatch(state.clone());
     recurring::spawn_job(state.clone());
@@ -373,6 +377,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/notifications/read", post(notify::mark_read))
         .route("/notifications/ws", get(realtime::user_ws))
         .route("/calendar", get(cards::calendar))
+        .route_layer(middleware::from_fn(metrics::track))
         .layer(middleware::from_fn_with_state(state.clone(), auth::csrf_guard))
         .layer(middleware::from_fn(reject_nul))
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")));

@@ -109,6 +109,7 @@ export function NotificationPrefs({ me }: { me: User }) {
   return (
     <section className="space-y-4 rounded-xl border border-line bg-surface p-5">
       <h2 className="font-semibold">{t('notifications.title')}</h2>
+      <p className="text-xs text-muted">{t('notifications.whenHint')}</p>
       {/* email */}
       <div className="space-y-2">
         <label className={clsx('flex items-start gap-2 text-sm', sys && !sys.email && 'opacity-60')}>
@@ -405,6 +406,27 @@ export function NotificationsAdminTab() {
   )
 }
 
+function sameKey(s: PushSubscription, publicKey: string) {
+  const k = s.options?.applicationServerKey
+  if (!k) return true // the browser doesn't say: assume it's ours
+  const a = new Uint8Array(k)
+  const b = urlB64ToBytes(publicKey)
+  return a.length === b.length && a.every((x, i) => x === b[i])
+}
+
+/** Browser push errors in words people can act on. */
+function pushError(e: unknown, t: (k: string) => string) {
+  if (e instanceof DOMException) {
+    if (e.name === 'NotAllowedError') return new Error(t('push.blocked'))
+    // "Registration failed - push service error": the browser has no push service to hand us a subscription
+    if (e.name === 'AbortError' || /push service/i.test(e.message)) {
+      const brave = 'brave' in navigator
+      return new Error(t(brave ? 'push.brave' : 'push.serviceError'))
+    }
+  }
+  return e
+}
+
 function urlB64ToBytes(b64: string) {
   const pad = '='.repeat((4 - (b64.length % 4)) % 4)
   const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'))
@@ -418,23 +440,45 @@ function BrowserPush() {
   const info = useQuery({ queryKey: ['push-info'], queryFn: () => api.get<{ public_key: string; enabled: boolean }>('/push'), enabled: supported })
   const [sub, setSub] = useState<PushSubscription | null | undefined>(undefined)
   const [busy, setBusy] = useState(false)
+  const publicKey = info.data?.public_key
   useEffect(() => {
-    if (!supported) return
-    navigator.serviceWorker.ready.then((r) => r.pushManager.getSubscription()).then(setSub, () => setSub(null))
-  }, [supported])
+    if (!supported || !publicKey) return
+    navigator.serviceWorker.ready
+      .then((r) => r.pushManager.getSubscription())
+      .then(async (s) => {
+        // made with another server key (Kanb reinstalled, database restored…): it can't receive anything any more
+        if (s && !sameKey(s, publicKey)) {
+          await s.unsubscribe().catch(() => {})
+          s = null
+        }
+        // the server may have lost it (restored database): saving it again is harmless
+        if (s) api.post('/me/push', s.toJSON()).catch(() => {})
+        setSub(s)
+      }, () => setSub(null))
+  }, [supported, publicKey])
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) && !('standalone' in navigator && (navigator as { standalone?: boolean }).standalone)
   const denied = supported && Notification.permission === 'denied'
   const turnOn = async () => {
     setBusy(true)
     try {
-      if ((await Notification.requestPermission()) !== 'granted') return toastError(new Error(t('push.denied')))
+      const perm = await Notification.requestPermission()
+      if (perm !== 'granted') return toastError(new Error(t(perm === 'denied' ? 'push.blocked' : 'push.denied')))
       const reg = await navigator.serviceWorker.ready
-      const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToBytes(info.data!.public_key) })
+      const opts = { userVisibleOnly: true, applicationServerKey: urlB64ToBytes(info.data!.public_key) }
+      let s: PushSubscription
+      try {
+        s = await reg.pushManager.subscribe(opts)
+      } catch (e) {
+        // an old subscription made with a different server key blocks a new one: drop it and try once more
+        if (!(e instanceof DOMException && e.name === 'InvalidStateError')) throw e
+        await (await reg.pushManager.getSubscription())?.unsubscribe()
+        s = await reg.pushManager.subscribe(opts)
+      }
       await api.post('/me/push', s.toJSON())
       setSub(s)
       toastSuccess(t('push.on'))
     } catch (e) {
-      toastError(e)
+      toastError(pushError(e, t))
     } finally {
       setBusy(false)
     }

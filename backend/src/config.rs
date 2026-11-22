@@ -68,6 +68,11 @@ pub struct Config {
     /// several times its size in memory while it's built; the rest wait their turn, so memory stays bounded.
     #[arg(long, env = "HEAVY_REQUESTS", default_value_t = 4)]
     pub heavy_requests: usize,
+
+    /// Prometheus metrics at http://METRICS_ADDR/metrics, e.g. 0.0.0.0:9091. A separate address on purpose: don't
+    /// route it through your reverse proxy. Unset (the default) = no metrics.
+    #[arg(long, env = "METRICS_ADDR")]
+    pub metrics_addr: Option<String>,
 }
 
 impl Config {

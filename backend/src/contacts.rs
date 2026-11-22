@@ -482,6 +482,7 @@ pub async fn deliver(state: &AppState, m: &Message) {
         if let Err(e) = &res {
             tracing::warn!(contact = %r.id, kind = %r.kind, error = %e, "contact point delivery failed");
         }
+        crate::metrics::delivery("contact_point", res.is_ok());
         record(state, r.id, &res).await;
     }
 }

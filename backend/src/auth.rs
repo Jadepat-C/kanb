@@ -272,7 +272,8 @@ pub async fn login(
         state.throttle.hit(&ip, throttle::LOGIN_IP);
         state.throttle.hit(&account, throttle::LOGIN_ACCOUNT);
         tracing::warn!(username = %req.username, "failed login");
-        return Err(AppError::BadRequest("invalid_credentials"));
+        crate::metrics::sign_in("failed");
+        return Err(AppError::SignInFailed("invalid_credentials"));
     }
     state.throttle.clear(&account);
     let (user_id, _, _, totp_on) = row.unwrap();
@@ -287,6 +288,7 @@ pub async fn login(
 
 /// Signs the user in: new session row + cookie.
 pub async fn start_session(state: &AppState, user_id: Uuid, headers: &HeaderMap, jar: CookieJar) -> AppResult<(CookieJar, Json<User>)> {
+    crate::metrics::sign_in("ok");
     let token = new_token();
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).map(|s| s.chars().take(300).collect::<String>());
     sqlx::query("INSERT INTO sessions (token_hash, user_id, user_agent, expires_at) VALUES ($1, $2, $3, now() + make_interval(days => $4))")

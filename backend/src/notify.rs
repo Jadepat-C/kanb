@@ -91,6 +91,7 @@ fn delivered(state: &AppState, user_id: Uuid, id: i64) {
         };
         if let Err(e) = email(&st, &msg).await {
             tracing::warn!(error = %e, notification = id, "notification email failed");
+            crate::metrics::delivery("email", false);
         }
         crate::contacts::deliver(&st, &msg).await;
         crate::push::deliver(&st, &msg).await;
@@ -239,7 +240,11 @@ async fn email(state: &AppState, m: &Message) -> Result<(), String> {
         esc(&m.link),
         m.open_label
     );
-    crate::mail::send(&s, to, &m.to_name, &m.subject, text, html).await
+    let res = crate::mail::send(&s, to, &m.to_name, &m.subject, text, html).await;
+    if res.is_ok() {
+        crate::metrics::delivery("email", true);
+    }
+    res
 }
 
 /// First ~140 characters of a comment/description, on one line.
@@ -335,13 +340,20 @@ pub fn spawn_due_job(state: AppState) {
                 ("overdue", "c.due_at <= now() AND c.due_at > now() - interval '7 days'"),
             ] {
                 let rows: Result<Vec<(i64, Uuid)>, sqlx::Error> = sqlx::query_as(sqlf!(
+                    // the assignees; a card nobody is assigned to reminds whoever created it (still on the board)
                     "INSERT INTO notifications (user_id, kind, board_id, card_id, data)
-                     SELECT a.user_id, '{kind}', c.board_id, c.id, jsonb_build_object('due_at', c.due_at)
+                     SELECT r.user_id, '{kind}', c.board_id, c.id, jsonb_build_object('due_at', c.due_at)
                      FROM cards c
-                     JOIN card_assignees a ON a.card_id = c.id
+                     CROSS JOIN LATERAL (
+                         SELECT a.user_id FROM card_assignees a WHERE a.card_id = c.id
+                         UNION ALL
+                         SELECT c.created_by WHERE c.created_by IS NOT NULL
+                           AND NOT EXISTS (SELECT 1 FROM card_assignees a WHERE a.card_id = c.id)
+                           AND EXISTS (SELECT 1 FROM board_members m WHERE m.board_id = c.board_id AND m.user_id = c.created_by)
+                     ) r
                      JOIN lists l ON l.id = c.list_id
                      JOIN boards b ON b.id = c.board_id
-                     JOIN users u ON u.id = a.user_id AND u.is_active
+                     JOIN users u ON u.id = r.user_id AND u.is_active
                      WHERE {window} AND c.archived_at IS NULL AND l.archived_at IS NULL AND b.archived_at IS NULL
                        AND NOT EXISTS (SELECT 1 FROM board_statuses s WHERE s.id = c.status_id AND s.is_done)
                      ON CONFLICT (user_id, card_id, kind, (data->>'due_at')) WHERE kind IN ('due_soon', 'overdue') DO NOTHING
@@ -355,7 +367,10 @@ pub fn spawn_due_job(state: AppState) {
                             delivered(&state, uid, id);
                         }
                     }
-                    Err(e) => tracing::warn!(error = %e, kind, "due reminder job failed"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, kind, "due reminder job failed");
+                        crate::metrics::job_failed("due_reminders");
+                    }
                 }
             }
             crate::board_contacts::due_pass(&state).await;

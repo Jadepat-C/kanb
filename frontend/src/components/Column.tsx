@@ -235,7 +235,12 @@ export function Column({
                 defaultValue={list.name}
                 autoFocus
                 onBlur={(e) => e.currentTarget.form?.requestSubmit()}
-                onKeyDown={(e) => e.key === 'Escape' && setRenaming(false)}
+                onKeyDown={(e) => {
+                  // the header around this box is the column's drag handle: its keyboard sensor would take Space
+                  // (and Enter) as "pick the column up" and swallow the key, so keys stay inside the box
+                  e.stopPropagation()
+                  if (e.key === 'Escape') setRenaming(false)
+                }}
                 onPointerDown={(e) => e.stopPropagation()}
                 onTouchStart={(e) => e.stopPropagation()}
                 className="w-full rounded border border-line bg-surface px-1.5 py-0.5 text-sm font-semibold outline-none"
