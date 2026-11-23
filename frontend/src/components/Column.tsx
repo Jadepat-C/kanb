@@ -4,7 +4,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { Archive, ArrowDownUp, LayoutTemplate, ChevronsLeftRight, ChevronsRightLeft, Gauge, GripVertical, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
-import { useCallback, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { BoardHelpers, Viewer } from '../lib/board'
@@ -68,7 +68,8 @@ export function Column({
     onError: toastError,
   })
   const fromTemplate = useMutation({
-    mutationFn: (tp: CardTemplate) => api.post<CardSummary>(`/lists/${list.id}/cards`, { title: '', template_id: tp.id, due_at: templateDue(tp) }),
+    mutationFn: ({ tp, at }: { tp: CardTemplate; at: 'top' | 'bottom' }) =>
+      api.post<CardSummary>(`/lists/${list.id}/cards`, { title: '', template_id: tp.id, due_at: templateDue(tp), at }),
     onSuccess: (c) => {
       qc.invalidateQueries({ queryKey: ['board', boardId] })
       toastSuccess(t('toast.cardCreated', { title: c.title }))
@@ -106,6 +107,32 @@ export function Column({
   const bar = [...b.statuses.values()].map((s) => ({ key: s.id, name: s.name, color: s.color, n: counts.get(s.id) ?? 0 }))
   if (counts.get('')) bar.push({ key: '', name: t('filter.noStatus'), color: '#d4d4d8', n: counts.get('')! })
 
+  // the header "+" and the "Add card" button: a blank card, or one from this board's templates.
+  // A plain function, not a component: a component made here would remount (and close the menu) on every live refresh.
+  const addCardMenu = (at: 'top' | 'bottom', trigger: ReactElement) => (
+    <Menu>
+      <MenuTrigger asChild>{trigger}</MenuTrigger>
+      <MenuContent align={at === 'top' ? 'end' : 'start'}>
+        <MItem M={DROP} onSelect={() => (keepFocusAfterClose(), setAdding(at))}>
+          <Plus size={14} /> {t('board.newCard')}
+        </MItem>
+        {b.data?.templates.length ? (
+          <MSub M={DROP} icon={<LayoutTemplate size={14} />} label={t('templates.newFrom')}>
+            {b.data.templates.map((tp) => (
+              <MItem key={tp.id} M={DROP} onSelect={() => fromTemplate.mutate({ tp, at })}>
+                {tp.name}
+              </MItem>
+            ))}
+          </MSub>
+        ) : (
+          <MItem M={DROP} disabled>
+            <LayoutTemplate size={14} /> {t('templates.noneYet')}
+          </MItem>
+        )}
+      </MenuContent>
+    </Menu>
+  )
+
   // shared by the "⋯" menu and the right-click menu
   const ColumnItems = ({ M, withNew }: { M: MenuKit; withNew?: boolean }) => (
     <>
@@ -120,7 +147,7 @@ export function Column({
           {!!b.data?.templates.length && (
             <MSub M={M} icon={<LayoutTemplate size={14} />} label={t('templates.newFrom')}>
               {b.data.templates.map((tp) => (
-                <MItem key={tp.id} M={M} onSelect={() => fromTemplate.mutate(tp)}>
+                <MItem key={tp.id} M={M} onSelect={() => fromTemplate.mutate({ tp, at: 'bottom' })}>
                   {tp.name}
                 </MItem>
               ))}
@@ -262,15 +289,17 @@ export function Column({
             {list.wip_limit != null && `/${list.wip_limit}`}
           </span>
           {b.can('cards.create') && (
-            <button
-              className="rounded p-1 text-muted hover:bg-black/5 touch:p-1.5 dark:hover:bg-white/10 cursor-pointer"
-              onClick={() => setAdding('top')}
-              onPointerDown={(e) => e.stopPropagation()}
-              onTouchStart={(e) => e.stopPropagation()}
-              title={t('board.addCard')}
-            >
-              <Plus size={15} />
-            </button>
+            addCardMenu(
+              'top',
+              <button
+                className="rounded p-1 text-muted hover:bg-black/5 touch:p-1.5 dark:hover:bg-white/10 cursor-pointer"
+                onPointerDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                title={t('board.addCard')}
+              >
+                <Plus size={15} />
+              </button>,
+            )
           )}
           <Menu>
             <MenuTrigger asChild>
@@ -310,12 +339,12 @@ export function Column({
         {adding === 'bottom' && <QuickAdd listId={list.id} boardId={boardId} at="bottom" onDone={() => setAdding(null)} />}
       </div>
       {b.can('cards.create') && adding !== 'bottom' && (
-        <button
-          onClick={() => setAdding('bottom')}
-          className="m-2 mt-0 flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
-        >
-          <Plus size={15} /> {t('board.addCard')}
-        </button>
+        addCardMenu(
+          'bottom',
+          <button className="m-2 mt-0 flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer">
+            <Plus size={15} /> {t('board.addCard')}
+          </button>,
+        )
       )}
     </div>
     }>
@@ -328,6 +357,12 @@ function QuickAdd({ listId, boardId, at, onDone }: { listId: string; boardId: st
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [title, setTitle] = useState('')
+  const box = useRef<HTMLTextAreaElement>(null)
+  // opened from a menu, the box mounts while the menu still holds focus: take it once the menu has closed
+  useEffect(() => {
+    const id = requestAnimationFrame(() => box.current?.focus())
+    return () => cancelAnimationFrame(id)
+  }, [])
   const m = useMutation({
     mutationFn: (title: string) => api.post(`/lists/${listId}/cards`, { title, at }),
     onSuccess: () => {
@@ -345,6 +380,7 @@ function QuickAdd({ listId, boardId, at, onDone }: { listId: string; boardId: st
       className="space-y-2"
     >
       <textarea
+        ref={box}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         autoFocus

@@ -32,7 +32,7 @@ const en = {
   },
   board: {
     doneOf: '{{done}} / {{total}} done', progress: '{{done}} of {{total}} cards done ({{pct}}%)',
-    addList: 'Add column', listName: 'Column name', addCard: 'Add card', cardTitle: 'Card title…', fold: 'Fold', unfold: 'Unfold',
+    addList: 'Add column', listName: 'Column name', addCard: 'Add card', newCard: 'New card', cardTitle: 'Card title…', fold: 'Fold', unfold: 'Unfold',
     wipLimit: 'WIP limit', wipPrompt: 'Max cards in this column (empty = no limit)', deleteList: 'Delete column',
     settings: 'Board settings', onlyMine: 'Assigned to me', labels: 'Labels', filters: 'Filters', clearFilters: 'Clear filters',
     readOnly: 'Read only', overdue: 'Overdue', live: 'Live updates on', offline: 'Reconnecting…',
@@ -185,7 +185,7 @@ const en = {
   },
   templates: {
     cardTemplatesHeading_one: 'Card templates ({{count}})', cardTemplatesHeading_other: 'Card templates ({{count}})',
-    template: 'Template', none: '— No template —', newFrom: 'New card from template', saveAs: 'Save as template', saved: 'Saved template “{{name}}”',
+    template: 'Template', none: '— No template —', newFrom: 'New card from template', noneYet: 'No templates yet (Board settings → Templates)', saveAs: 'Save as template', saved: 'Saved template “{{name}}”',
     name: 'Template name', nameHint: 'Shown in menus. Empty = the card title.', cardTitle: 'Card title', edit: 'Edit template', new: 'New template',
     hint: 'Templates are reusable cards for this board: title, description and checklist, priority, status, labels and an optional due date. Use them from a column’s menu or the New card dialog, or save any card as a template from its right-click menu.',
     empty: 'No templates yet.', deleteMsg: 'Delete the template “{{name}}”? Cards already made from it are not affected.',
@@ -361,7 +361,7 @@ const th: Dict = {
   },
   board: {
     doneOf: 'เสร็จ {{done}} / {{total}}', progress: 'เสร็จแล้ว {{done}} จาก {{total}} การ์ด ({{pct}}%)',
-    addList: 'เพิ่มคอลัมน์', listName: 'ชื่อคอลัมน์', addCard: 'เพิ่มการ์ด', cardTitle: 'ชื่อการ์ด…', fold: 'ย่อ', unfold: 'ขยาย',
+    addList: 'เพิ่มคอลัมน์', listName: 'ชื่อคอลัมน์', addCard: 'เพิ่มการ์ด', newCard: 'การ์ดใหม่', cardTitle: 'ชื่อการ์ด…', fold: 'ย่อ', unfold: 'ขยาย',
     wipLimit: 'จำกัดจำนวนงาน', wipPrompt: 'จำนวนการ์ดสูงสุดในคอลัมน์นี้ (เว้นว่าง = ไม่จำกัด)', deleteList: 'ลบคอลัมน์',
     settings: 'ตั้งค่าบอร์ด', onlyMine: 'งานของฉัน', labels: 'ป้ายกำกับ', filters: 'ตัวกรอง', clearFilters: 'ล้างตัวกรอง',
     readOnly: 'อ่านอย่างเดียว', overdue: 'เลยกำหนด', live: 'อัปเดตแบบเรียลไทม์', offline: 'กำลังเชื่อมต่อใหม่…',
@@ -514,7 +514,7 @@ const th: Dict = {
   },
   templates: {
     cardTemplatesHeading_one: 'เทมเพลตการ์ด ({{count}})', cardTemplatesHeading_other: 'เทมเพลตการ์ด ({{count}})',
-    template: 'เทมเพลต', none: '— ไม่ใช้เทมเพลต —', newFrom: 'การ์ดใหม่จากเทมเพลต', saveAs: 'บันทึกเป็นเทมเพลต', saved: 'บันทึกเทมเพลต “{{name}}” แล้ว',
+    template: 'เทมเพลต', none: '— ไม่ใช้เทมเพลต —', newFrom: 'การ์ดใหม่จากเทมเพลต', noneYet: 'ยังไม่มีเทมเพลต (ตั้งค่าบอร์ด → เทมเพลต)', saveAs: 'บันทึกเป็นเทมเพลต', saved: 'บันทึกเทมเพลต “{{name}}” แล้ว',
     name: 'ชื่อเทมเพลต', nameHint: 'แสดงในเมนู เว้นว่าง = ใช้ชื่อการ์ด', cardTitle: 'ชื่อการ์ด', edit: 'แก้ไขเทมเพลต', new: 'เทมเพลตใหม่',
     hint: 'เทมเพลตคือการ์ดสำเร็จรูปของบอร์ดนี้: ชื่อ รายละเอียดและเช็กลิสต์ ความสำคัญ สถานะ ป้ายกำกับ และกำหนดส่ง ใช้ได้จากเมนูของคอลัมน์หรือหน้าต่างการ์ดใหม่ หรือคลิกขวาที่การ์ดเพื่อบันทึกเป็นเทมเพลต',
     empty: 'ยังไม่มีเทมเพลต', deleteMsg: 'ลบเทมเพลต “{{name}}” หรือไม่? การ์ดที่สร้างไปแล้วไม่ได้รับผลกระทบ',

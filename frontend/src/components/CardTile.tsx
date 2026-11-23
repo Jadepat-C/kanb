@@ -57,19 +57,11 @@ function TileBody({ card, b }: { card: CardSummary; b: BoardHelpers }) {
     <>
       {card.color && <div className="absolute inset-y-0 left-0 w-1 rounded-l-md" style={{ background: card.color }} />}
       {labels.length > 0 && (
-        <>
-          {/* the label edge: one band per label across the top of the card, readable from across the board */}
-          <div aria-hidden className="absolute -inset-x-px -top-px flex h-[4px] overflow-hidden rounded-t-md">
-            {labels.map((l) => (
-              <span key={l!.id} className="flex-1" style={{ background: l!.color }} />
-            ))}
-          </div>
-          <div className="mb-1.5 mt-0.5 flex flex-wrap gap-1">
-            {labels.map((l) => (
-              <LabelChip key={l!.id} name={l!.name} color={l!.color} />
-            ))}
-          </div>
-        </>
+        <div className="mb-1.5 flex flex-wrap gap-1">
+          {labels.map((l) => (
+            <LabelChip key={l!.id} name={l!.name} color={l!.color} />
+          ))}
+        </div>
       )}
       <div className="flex items-start gap-1.5">
         <span className="min-w-0 flex-1 text-sm leading-snug [overflow-wrap:anywhere]">{card.title}</span>
