@@ -8,7 +8,9 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM rust:1-bookworm AS api
+FROM rust:1-alpine AS api
+# a C toolchain for the few crates with C inside (aws-lc for TLS, mimalloc, sqlite for build-time query checks)
+RUN apk add --no-cache musl-dev gcc g++ make cmake perl linux-headers file
 WORKDIR /src
 # cache dependencies separately from sources
 COPY backend/Cargo.toml backend/Cargo.lock ./
@@ -16,14 +18,13 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && r
 COPY backend/ ./
 # COPY keeps old mtimes, which would make cargo think the placeholder build is still fresh
 RUN touch src/main.rs && cargo build --release
-# the only system library the binary needs beyond glibc; staged at its usual path (x86-64 or ARM64) for the final image
-RUN mkdir -p /stage && cp --parents "$(realpath "$(gcc -print-file-name=libgcc_s.so.1)")" /stage
+# Rust's musl target links everything in: one self-contained binary that needs no system C library
+RUN file target/release/kanban | grep -q "static" || { file target/release/kanban; echo "kanban is not statically linked" >&2; exit 1; }
 
-# Distroless without OpenSSL: only glibc, CA certificates and time-zone data. No shell, no package manager, no
-# OpenSSL (TLS is done in Rust), so there is very little to patch and nothing for an intruder to use. Runs as the
-# unprivileged "nonroot" user.
-FROM gcr.io/distroless/base-nossl-debian12:nonroot
-COPY --from=api /stage/ /
+# Distroless "static": only CA certificates, time-zone data and the nonroot user. No C library (the binary has its
+# own), no shell, no package manager and no OpenSSL (TLS is done in Rust), so there is almost nothing to patch and
+# nothing for an intruder to use.
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=api /src/target/release/kanban /usr/local/bin/kanban
 COPY --from=web /web/dist /srv/web
 ENV BIND_ADDR=0.0.0.0:8080 \

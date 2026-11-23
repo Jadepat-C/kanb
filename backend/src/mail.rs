@@ -94,13 +94,17 @@ pub fn base_url(state: &AppState, s: &SmtpSettings) -> String {
     state.origins.first().cloned().unwrap_or_else(|| "http://localhost:5173".into())
 }
 
+/// "Name <address>" built from its parts, so any display name works: parentheses, commas, quotes and Thai text in a
+/// name are quoted or encoded as needed instead of being read as address syntax.
+fn mailbox(name: &str, email: &str) -> Result<Mailbox, lettre::address::AddressError> {
+    let name = name.trim();
+    Ok(Mailbox::new((!name.is_empty()).then(|| name.to_string()), email.trim().parse()?))
+}
+
 pub async fn send(s: &SmtpSettings, to_email: &str, to_name: &str, subject: &str, text: String, html: String) -> Result<(), String> {
-    let from: Mailbox = format!("{} <{}>", if s.from_name.trim().is_empty() { "Kanb" } else { s.from_name.trim() }, s.from_email.trim())
-        .parse()
+    let from = mailbox(if s.from_name.trim().is_empty() { "Kanb" } else { s.from_name.trim() }, &s.from_email)
         .map_err(|e| format!("invalid sender address: {e}"))?;
-    let to: Mailbox = format!("{} <{}>", to_name.replace(['<', '>', '"'], ""), to_email)
-        .parse()
-        .map_err(|e| format!("invalid recipient address: {e}"))?;
+    let to = mailbox(to_name, to_email).map_err(|e| format!("invalid recipient address: {e}"))?;
     let msg = Message::builder()
         .from(from)
         .to(to)
@@ -266,6 +270,24 @@ pub async fn test(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, Jso
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn any_display_name_makes_a_valid_mailbox() {
+        for name in ["Kanb (Jadepat)", "Doe, John", "Somchai \"Sales\" <x>", "สมชาย ใจดี", "a@b", ""] {
+            let m = mailbox(name, " someone@example.com ").unwrap_or_else(|e| panic!("{name:?}: {e}"));
+            assert_eq!(m.email.to_string(), "someone@example.com");
+            assert_eq!(m.name.as_deref().unwrap_or(""), name);
+        }
+        assert!(mailbox("Kanb", "not an address").is_err());
+    }
+
+    #[test]
+    fn a_display_name_cannot_add_headers() {
+        let to = mailbox("Eve\r\nBcc: victim@example.com", "eve@example.com").unwrap();
+        let msg = Message::builder().from(mailbox("Kanb", "noreply@example.com").unwrap()).to(to).subject("hi").body(String::from("x")).unwrap();
+        let raw = String::from_utf8(msg.formatted()).unwrap();
+        assert!(!raw.contains("\r\nBcc:"), "{raw}");
+    }
 
     #[test]
     fn fresh_install_defaults_can_be_saved() {
