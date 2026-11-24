@@ -27,7 +27,7 @@ import { NewCardDialog, type NewCardPreset } from '../components/NewCardDialog'
 import { CardModal } from '../components/CardModal'
 import { CardGhost, glimpseOf } from '../components/CardTile'
 import { Column } from '../components/Column'
-import { toastActivity, toastError } from '../components/toast'
+import { toast, toastActivity, toastError } from '../components/toast'
 import { Avatar, Button, Input, Menu, MenuContent, MenuItem, MenuTrigger, Popover, Spinner } from '../components/ui'
 import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
@@ -216,7 +216,7 @@ export function BoardPage() {
       color: c.status_id ? b.statuses.get(c.status_id)?.color : null,
       sub: data?.lists.find((l) => l.id === c.list_id)?.name,
       priority: c.priority,
-      canMove: b.can('cards.due'),
+      canMove: b.canCard('cards.due', c),
       done: c.done,
     })
     const cards = (data?.cards ?? []).filter((c) => ids.has(c.id))
@@ -329,6 +329,9 @@ export function BoardPage() {
 
   const activeCard = active?.type === 'card' ? cardsById.get(active.id) : undefined
   const dragDisabled = !b.can('cards.move')
+  // columns I may add cards to (a role can be limited to some); quick-add from the calendar uses the first open one
+  const createLists = data.lists.filter((l) => b.canCreateIn(l.id))
+  const canNew = createLists.length > 0
   const listsById = new Map(data.lists.map((l) => [l.id, l]))
 
   return (
@@ -466,16 +469,18 @@ export function BoardPage() {
             members={b.members}
             onOpen={openCardId}
             onDates={b.can('cards.due') ? (id, dates) => changeDates.mutate({ id, dates }) : undefined}
+            canEdit={(c) => b.canCard('cards.due', c)}
             onLink={
               b.can('cards.dependencies')
                 ? (id, dep) => {
                     const c = cardsById.get(id)
+                    if (c && !b.canCard('cards.dependencies', c)) return toast(t('errors.forbidden'))
                     if (c && !c.depends_on.includes(dep)) link.mutate({ id, ids: [...c.depends_on, dep] })
                   }
                 : undefined
             }
             toolbar={
-              b.can('cards.create') && (
+              canNew && (
                 <Button size="sm" variant="primary" onClick={() => setNewCard({ boardId, due: null })}>
                   <Plus size={14} /> {t('menu.newCard')}
                 </Button>
@@ -500,13 +505,13 @@ export function BoardPage() {
             onOpen={openCardId}
             onMove={b.can('cards.due') ? (id, due) => changeDue.mutate({ id, due }) : undefined}
             onCreate={
-              b.can('cards.create') && data.lists.length
-                ? (due, title) => createOnDay.mutateAsync({ list: (data.lists.find((l) => !l.folded) ?? data.lists[0]).id, title, due })
+              canNew
+                ? (due, title) => createOnDay.mutateAsync({ list: (createLists.find((l) => !l.folded) ?? createLists[0]).id, title, due })
                 : undefined
             }
-            onNewAt={b.can('cards.create') ? (due) => setNewCard({ boardId, due }) : undefined}
+            onNewAt={canNew ? (due) => setNewCard({ boardId, due }) : undefined}
             toolbar={
-              b.can('cards.create') && (
+              canNew && (
                 <Button size="sm" variant="primary" onClick={() => setNewCard({ boardId, due: null })}>
                   <Plus size={14} /> {t('menu.newCard')}
                 </Button>
@@ -527,7 +532,7 @@ export function BoardPage() {
               )
             }}
             dayMenu={
-              b.can('cards.create')
+              canNew
                 ? (due, trigger) => (
                     <ContextMenu trigger={trigger}>
                       <MItem M={CTX} onSelect={() => setNewCard({ boardId, due })}>

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { templateDue, type BoardDetail, type BoardListItem, type CardSummary } from '../lib/types'
@@ -40,10 +40,14 @@ export function NewCardDialog({
 
   const boards = useQuery({ queryKey: ['boards'], queryFn: () => api.get<BoardListItem[]>('/boards'), enabled: !preset.boardId })
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.get<BoardDetail>(`/boards/${boardId}`), enabled: !!boardId })
-  const canCreate = board.data?.my_permissions.includes('cards.create') ?? false
-  const lists = board.data?.lists ?? []
+  // only the columns my role may add cards to
+  const lists = useMemo(() => {
+    const only = board.data?.my_card_list_ids
+    return (board.data?.lists ?? []).filter((l) => !only || only.includes(l.id))
+  }, [board.data])
+  const canCreate = (board.data?.my_permissions.includes('cards.create') ?? false) && lists.length > 0
 
-  // default column: the preset one, else the first unfolded one
+  // default column: the preset one if allowed, else the first unfolded one
   useEffect(() => {
     if (!lists.length) return
     if (!lists.some((l) => l.id === listId)) setListId((lists.find((l) => !l.folded) ?? lists[0]).id)
@@ -106,7 +110,7 @@ export function NewCardDialog({
           />
         </Field>
         <Field label={t('card.column')}>
-          <select value={listId} onChange={(e) => setListId(e.target.value)} disabled={!lists.length} className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm">
+          <select value={listId} onChange={(e) => setListId(e.target.value)} disabled={lists.length < 2} className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm">
             {lists.map((l) => (
               <option key={l.id} value={l.id}>
                 {l.name}

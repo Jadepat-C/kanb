@@ -15,17 +15,17 @@ use futures::TryStreamExt;
 use object_store::{
     ObjectStore, ObjectStoreExt, PutPayload, WriteMultipart, aws::AmazonS3Builder, path::Path as ObjPath,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::CurrentUser,
+    auth::{CurrentUser, SuperAdmin},
     cards::{Attachment, log_event},
     config::Config,
     error::{AppError, AppResult},
-    perms::{self, board_access, board_of_card},
+    perms::{self, board_access},
 };
 
 /// Only these are ever rendered inline by the browser; everything else (incl. SVG/HTML) is a download.
@@ -65,17 +65,29 @@ pub async fn upload(
     mut mp: Multipart,
 ) -> AppResult<Json<Attachment>> {
     let inline = q.inline.as_deref().is_some_and(|v| !matches!(v, "0" | "false"));
-    let board_id = board_of_card(&state.db, card_id).await?;
+    let (board_id, creator) = perms::card_owner(&state.db, card_id).await?;
     let access = board_access(&state.db, &u, board_id).await?;
-    // pasting an image into the description is part of editing the card
+    // pasting an image into the description (or a comment) is part of editing the card (or commenting)
     if inline {
-        if !(access.can(perms::ATTACHMENTS_UPLOAD) || access.can(perms::CARDS_EDIT) || access.can(perms::COMMENTS_CREATE)) {
+        if !(access.can_on(perms::ATTACHMENTS_UPLOAD, creator) || access.can_on(perms::CARDS_EDIT, creator) || access.can(perms::COMMENTS_CREATE)) {
             return Err(AppError::Forbidden);
         }
     } else {
-        access.require(perms::ATTACHMENTS_UPLOAD)?;
+        access.require_on(perms::ATTACHMENTS_UPLOAD, creator)?;
     }
     let max = state.config.max_upload_mb * 1024 * 1024;
+    // what's left under MAX_STORAGE_GB (None = no limit). Uploads running at the same moment can each use the same
+    // remaining space, so the limit can be passed by at most a few uploads' worth: it's a budget, not a hard quota.
+    let room = match storage_limit(&state) {
+        Some(limit) => {
+            let left = limit.saturating_sub(storage_used(&state.db).await?);
+            if left == 0 {
+                return Err(AppError::StorageFull);
+            }
+            Some(left)
+        }
+        None => None,
+    };
 
     let mut field = loop {
         match mp.next_field().await.map_err(|_| AppError::BadRequest("invalid_upload"))? {
@@ -105,11 +117,18 @@ pub async fn upload(
     let read_err = |_| AppError::BadRequest("invalid_upload");
     while let Some(chunk) = field.chunk().await.map_err(read_err)? {
         size += chunk.len();
-        if size > max {
+        let over = if size > max {
+            Some(AppError::TooLarge)
+        } else if room.is_some_and(|r| size as u64 > r) {
+            Some(AppError::StorageFull)
+        } else {
+            None
+        };
+        if let Some(e) = over {
             if let Some(w) = writer.take() {
                 let _ = w.abort().await;
             }
-            return Err(AppError::TooLarge);
+            return Err(e);
         }
         match writer.as_mut() {
             Some(w) => {
@@ -160,6 +179,50 @@ pub async fn upload(
     tx.commit().await?;
     state.hub.notify(board_id, "attachment", Some(card_id), u.id);
     Ok(Json(att))
+}
+
+/// MAX_STORAGE_GB in bytes, or None when there's no limit.
+pub fn storage_limit(state: &AppState) -> Option<u64> {
+    let gb = state.config.max_storage_gb;
+    (gb.is_finite() && gb > 0.0).then(|| (gb * 1e9) as u64)
+}
+
+/// Bytes taken by uploaded files that still exist (a deleted attachment's file is removed right away).
+pub async fn storage_used(db: &sqlx::PgPool) -> AppResult<u64> {
+    let used: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(size), 0)::bigint FROM attachments WHERE deleted_at IS NULL")
+        .fetch_one(db)
+        .await?;
+    Ok(used.max(0) as u64)
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct BoardStorage {
+    id: Uuid,
+    name: String,
+    bytes: i64,
+    files: i64,
+}
+
+#[derive(Serialize)]
+pub struct StorageReport {
+    used_bytes: u64,
+    /// None = no limit
+    limit_bytes: Option<u64>,
+    /// the boards whose files take the most space, largest first
+    boards: Vec<BoardStorage>,
+}
+
+/// GET /admin/storage: how much space uploads take, against MAX_STORAGE_GB.
+pub async fn storage_report(State(state): State<AppState>, _a: SuperAdmin) -> AppResult<Json<StorageReport>> {
+    let boards: Vec<BoardStorage> = sqlx::query_as(
+        "SELECT b.id, b.name, SUM(a.size)::bigint AS bytes, COUNT(*) AS files
+         FROM attachments a JOIN boards b ON b.id = a.board_id
+         WHERE a.deleted_at IS NULL
+         GROUP BY b.id, b.name ORDER BY bytes DESC LIMIT 10",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(StorageReport { used_bytes: storage_used(&state.db).await?, limit_bytes: storage_limit(&state), boards }))
 }
 
 #[derive(Deserialize)]
@@ -234,7 +297,10 @@ pub async fn delete_attachment(
         .await?;
     let access = board_access(&state.db, &u, board_id).await?;
     if uploaded_by != Some(u.id) {
-        access.require(perms::ATTACHMENTS_DELETE)?;
+        match card_id {
+            Some(c) => access.require_on(perms::ATTACHMENTS_DELETE, perms::card_owner_any(&state.db, c).await?.1)?,
+            None => access.require_all(perms::ATTACHMENTS_DELETE)?,
+        }
     }
     let mut tx = state.db.begin().await?;
     sqlx::query("UPDATE attachments SET deleted_at = now() WHERE id = $1").bind(id).execute(&mut *tx).await?;

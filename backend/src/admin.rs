@@ -99,6 +99,7 @@ pub async fn list_users(State(state): State<AppState>, _a: SuperAdmin) -> AppRes
 pub async fn create_user(
     State(state): State<AppState>,
     SuperAdmin(admin): SuperAdmin,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
     Json(r): Json<CreateUser>,
 ) -> AppResult<Json<serde_json::Value>> {
     let locale = r.locale.clone().unwrap_or_else(|| admin.locale.clone());
@@ -116,12 +117,28 @@ pub async fn create_user(
             Err(e) => serde_json::json!({ "sent": false, "error": e }),
         };
     }
+    crate::audit::log(
+        &state,
+        Some(admin.id),
+        "user_created",
+        Some(u.id),
+        ip.as_deref(),
+        serde_json::json!({ "super_admin": u.is_super_admin, "invite": r.send_invite && u.email.is_some() }),
+    )
+    .await;
     Ok(Json(serde_json::json!({ "user": u, "invite": invite })))
 }
 
 /// Emails the user a password-reset link (instead of the admin choosing a password).
-pub async fn send_reset(State(state): State<AppState>, _a: SuperAdmin, Path(id): Path<Uuid>) -> AppResult<Json<serde_json::Value>> {
-    Ok(Json(match crate::auth::send_link_email(&state, id, "reset").await {
+pub async fn send_reset(
+    State(state): State<AppState>,
+    SuperAdmin(me): SuperAdmin,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<serde_json::Value>> {
+    let res = crate::auth::send_link_email(&state, id, "reset").await;
+    crate::audit::log(&state, Some(me.id), "user_reset_link_sent", Some(id), ip.as_deref(), serde_json::json!({ "sent": res.is_ok() })).await;
+    Ok(Json(match res {
         Ok(()) => serde_json::json!({ "sent": true }),
         Err(e) => serde_json::json!({ "sent": false, "error": e }),
     }))
@@ -139,6 +156,7 @@ pub struct UpdateUser {
 pub async fn update_user(
     State(state): State<AppState>,
     SuperAdmin(me): SuperAdmin,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
     Path(id): Path<Uuid>,
     Json(r): Json<UpdateUser>,
 ) -> AppResult<Json<User>> {
@@ -149,6 +167,10 @@ pub async fn update_user(
     if let Some(Some(e)) = &email {
         crate::auth::ensure_email_free(&state.db, e, Some(id)).await?;
     }
+    let before: User = sqlx::query_as(sqlf!("SELECT {USER_COLUMNS} FROM users WHERE id = $1 AND deleted_at IS NULL"))
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
     let user: User = sqlx::query_as(sqlf!(
         "UPDATE users SET display_name = COALESCE($2, display_name), email = CASE WHEN $7 THEN $3 ELSE email END,
          is_super_admin = COALESCE($4, is_super_admin), can_create_boards = COALESCE($5, can_create_boards),
@@ -166,6 +188,26 @@ pub async fn update_user(
     if !user.is_active {
         sqlx::query("DELETE FROM sessions WHERE user_id = $1").bind(id).execute(&state.db).await?;
     }
+    // which fields changed; the yes/no ones with their new value
+    let mut changes = serde_json::Map::new();
+    if before.display_name != user.display_name {
+        changes.insert("display_name".into(), serde_json::Value::Bool(true));
+    }
+    if before.email != user.email {
+        changes.insert("email".into(), serde_json::Value::Bool(true));
+    }
+    for (k, a, b) in [
+        ("is_super_admin", before.is_super_admin, user.is_super_admin),
+        ("can_create_boards", before.can_create_boards, user.can_create_boards),
+        ("is_active", before.is_active, user.is_active),
+    ] {
+        if a != b {
+            changes.insert(k.into(), serde_json::json!({ "to": b }));
+        }
+    }
+    if !changes.is_empty() {
+        crate::audit::log(&state, Some(me.id), "user_updated", Some(id), ip.as_deref(), serde_json::Value::Object(changes)).await;
+    }
     Ok(Json(user))
 }
 
@@ -176,7 +218,8 @@ pub struct ResetPassword {
 
 pub async fn reset_password(
     State(state): State<AppState>,
-    _a: SuperAdmin,
+    SuperAdmin(me): SuperAdmin,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
     Path(id): Path<Uuid>,
     Json(r): Json<ResetPassword>,
 ) -> AppResult<Json<serde_json::Value>> {
@@ -193,6 +236,7 @@ pub async fn reset_password(
         return Err(AppError::NotFound);
     }
     sqlx::query("DELETE FROM sessions WHERE user_id = $1").bind(id).execute(&state.db).await?;
+    crate::audit::log(&state, Some(me.id), "user_password_reset", Some(id), ip.as_deref(), serde_json::json!({})).await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -268,7 +312,12 @@ pub async fn delete_preview(State(state): State<AppState>, _a: SuperAdmin, Path(
 /// Deletes an account. Boards only they were in are deleted (with their files); on shared boards they're
 /// removed (if they were the only owner, the longest-standing other member becomes owner). Their comments
 /// and history stay, shown as "[Deleted User] Name (username)". The username and email become free again.
-pub async fn delete_user(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, Path(id): Path<Uuid>) -> AppResult<Json<serde_json::Value>> {
+pub async fn delete_user(
+    State(state): State<AppState>,
+    SuperAdmin(me): SuperAdmin,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<serde_json::Value>> {
     if id == me.id {
         return Err(AppError::BadRequest("cannot_delete_self"));
     }
@@ -321,10 +370,74 @@ pub async fn delete_user(State(state): State<AppState>, SuperAdmin(me): SuperAdm
         state.hub.notify(b.id, "member", None, me.id);
     }
     tracing::info!(user = %username, by = %me.username, boards_deleted = plan.deleted.len(), files, "user deleted");
+    crate::audit::log(
+        &state,
+        Some(me.id),
+        "user_deleted",
+        Some(id),
+        ip.as_deref(),
+        serde_json::json!({ "username": username, "boards_deleted": plan.deleted.len(), "boards_new_owner": plan.new_owner.len() }),
+    )
+    .await;
     Ok(Json(serde_json::json!({
         "ok": true,
         "boards_deleted": plan.deleted.len(),
         "boards_new_owner": plan.new_owner.len(),
         "files_deleted": files,
     })))
+}
+
+// ---------- security settings ----------
+
+/// `app_settings` key: {"require_2fa": bool}. Read for every request as part of USER_COLUMNS.
+pub const SECURITY_KEY: &str = "security";
+
+#[derive(Serialize, Deserialize)]
+pub struct Security {
+    /// everyone must set up two-factor sign-in before using the app
+    require_2fa: bool,
+}
+
+#[derive(Serialize)]
+pub struct SecurityView {
+    #[serde(flatten)]
+    settings: Security,
+    /// active accounts, and how many of them have no two-factor sign-in yet
+    users: i64,
+    users_without_2fa: i64,
+}
+
+async fn security_view(state: &AppState) -> AppResult<SecurityView> {
+    let (require_2fa, users, without): (bool, i64, i64) = sqlx::query_as(
+        "SELECT COALESCE((SELECT (value->>'require_2fa')::boolean FROM app_settings WHERE key = $1), false),
+                count(*), count(*) FILTER (WHERE totp_enabled_at IS NULL)
+         FROM users WHERE deleted_at IS NULL AND is_active",
+    )
+    .bind(SECURITY_KEY)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(SecurityView { settings: Security { require_2fa }, users, users_without_2fa: without })
+}
+
+pub async fn get_security(State(state): State<AppState>, _a: SuperAdmin) -> AppResult<Json<SecurityView>> {
+    Ok(Json(security_view(&state).await?))
+}
+
+pub async fn save_security(
+    State(state): State<AppState>,
+    SuperAdmin(me): SuperAdmin,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
+    Json(r): Json<Security>,
+) -> AppResult<Json<SecurityView>> {
+    sqlx::query(
+        "INSERT INTO app_settings (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+    )
+    .bind(SECURITY_KEY)
+    .bind(serde_json::to_value(&r).map_err(|e| AppError::Internal(e.into()))?)
+    .execute(&state.db)
+    .await?;
+    tracing::info!(by = %me.username, require_2fa = r.require_2fa, "security settings changed");
+    crate::audit::log(&state, Some(me.id), "settings_changed", None, ip.as_deref(), serde_json::json!({ "area": "security", "require_2fa": r.require_2fa })).await;
+    Ok(Json(security_view(&state).await?))
 }

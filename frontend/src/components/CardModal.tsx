@@ -64,7 +64,7 @@ export function CardModal({
   const q = useQuery({ queryKey: ['card', cardId], queryFn: () => api.get<CardDetail>(`/cards/${cardId}`), retry: false })
   const [uploads, setUploads] = useState<{ name: string; pct: number }[]>([])
   const [dragOver, setDragOver] = useState(false)
-  const canEdit = b.can('cards.edit')
+  const canEdit = b.canCard('cards.edit', summary)
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['card', cardId] })
@@ -84,10 +84,12 @@ export function CardModal({
     })
 
   const uploadFiles = async (files: File[]) => {
+    let done = 0
     for (const f of files) {
       setUploads((u) => [...u, { name: f.name, pct: 0 }])
       try {
         await upload(`/cards/${cardId}/attachments`, f, f.name, (pct) => setUploads((u) => u.map((x) => (x.name === f.name ? { ...x, pct } : x))))
+        done++
       } catch (e) {
         toastError(e)
       } finally {
@@ -95,7 +97,8 @@ export function CardModal({
       }
     }
     refresh()
-    if (files.length) toastSuccess(t('toast.uploaded', { count: files.length }))
+    // only the files that made it: a refused upload already showed its own error
+    if (done) toastSuccess(t('toast.uploaded', { count: done }))
   }
 
   const card = q.data?.card
@@ -127,7 +130,7 @@ export function CardModal({
           // full screen on phones; a floating panel from small tablets up
           className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-surface outline-none sm:inset-auto sm:left-1/2 sm:top-[3dvh] sm:max-h-[94dvh] sm:w-[calc(100vw-16px)] sm:max-w-5xl sm:-translate-x-1/2 sm:rounded-xl sm:border sm:border-line sm:shadow-2xl"
           onDragOver={(e) => {
-            if (e.dataTransfer.types.includes('Files') && b.can('attachments.upload')) {
+            if (e.dataTransfer.types.includes('Files') && b.canCard('attachments.upload', summary)) {
               e.preventDefault()
               setDragOver(true)
             }
@@ -136,7 +139,7 @@ export function CardModal({
           onDrop={(e) => {
             setDragOver(false)
             // drops inside the markdown editor are handled (and prevented) by the editor itself
-            if (e.defaultPrevented || !b.can('attachments.upload')) return
+            if (e.defaultPrevented || !b.canCard('attachments.upload', summary)) return
             e.preventDefault()
             uploadFiles([...e.dataTransfer.files])
           }}
@@ -213,8 +216,8 @@ export function CardModal({
                   <Attachments
                     items={q.data!.attachments}
                     uploads={uploads}
-                    canUpload={b.can('attachments.upload')}
-                    canDeleteAny={b.can('attachments.delete')}
+                    canUpload={b.canCard('attachments.upload', summary)}
+                    canDeleteAny={b.canCard('attachments.delete', summary)}
                     b={b}
                     onUpload={uploadFiles}
                     onChanged={refresh}
@@ -588,11 +591,11 @@ function Sidebar({
   const qc = useQueryClient()
   const card = detail.card
   const data = b.data!
-  const canEdit = b.can('cards.edit')
-  const canStatus = b.can('cards.status')
-  const canAssign = b.can('cards.assign')
-  const canLabels = b.can('cards.labels')
-  const canDue = b.can('cards.due')
+  const canEdit = b.canCard('cards.edit', card)
+  const canStatus = b.canCard('cards.status', card)
+  const canAssign = b.canCard('cards.assign', card)
+  const canLabels = b.canCard('cards.labels', card)
+  const canDue = b.canCard('cards.due', card)
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['card', cardId] })
     qc.invalidateQueries({ queryKey: ['timeline', cardId] })
@@ -625,7 +628,7 @@ function Sidebar({
       <Prop label={t('card.column')}>
         <select
           value={card.list_id}
-          disabled={!b.can('cards.move')}
+          disabled={!b.canCard('cards.move', card)}
           onChange={(e) => move.mutate(e.target.value)}
           className="h-8 w-full rounded-md border border-line bg-surface px-2 text-sm"
         >
@@ -777,9 +780,9 @@ function Sidebar({
         </div>
       </div>
 
-      {(b.can('cards.archive') || b.can('cards.delete')) && (
+      {(b.canCard('cards.archive', card) || b.canCard('cards.delete', card)) && (
         <div className="space-y-1.5">
-          {b.can('cards.archive') && (
+          {b.canCard('cards.archive', card) && (
             <Button
               variant="outline"
               size="sm"
@@ -791,7 +794,7 @@ function Sidebar({
               <Archive size={14} /> {t('card.archive')}
             </Button>
           )}
-          {b.can('cards.delete') && (
+          {b.canCard('cards.delete', card) && (
             <Button variant="outline" size="sm" className="w-full text-red-600" onClick={() => setPurging(true)}>
               <Trash2 size={14} /> {t('archive.deleteForever')}
             </Button>
@@ -813,7 +816,7 @@ function Sidebar({
           onClose={() => setPurging(false)}
         />
       )}
-      {detail.attachments.length === 0 && !b.can('attachments.upload') ? null : (
+      {detail.attachments.length === 0 && !b.canCard('attachments.upload', card) ? null : (
         <p className="flex items-center gap-1 text-[11px] text-muted">
           <ImageIcon size={12} /> {t('card.markdownHint')}
         </p>
@@ -1047,7 +1050,7 @@ function Dependencies({ cardId, b }: { cardId: string; b: BoardHelpers }) {
   const me = byId.get(cardId)
   const waits = (me?.depends_on ?? []).map((id) => byId.get(id)).filter((c): c is CardSummary => !!c)
   const blocking = data.cards.filter((c) => c.depends_on.includes(cardId))
-  const can = b.can('cards.dependencies')
+  const can = b.canCard('cards.dependencies', me)
   if (!me || (!can && waits.length === 0 && blocking.length === 0)) return null
   // everything that (directly or indirectly) waits for this card: picking one of those would make a loop
   const downstream = new Set<string>([cardId])

@@ -9,6 +9,7 @@ import type { Locale, Theme } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
 import { NotificationBell } from './NotificationBell'
 import { SearchPalette } from './SearchPalette'
+import { AnnouncementBanner } from '../pages/AdminTools'
 import { Avatar, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from './ui'
 
 export function Layout() {
@@ -89,6 +90,7 @@ export function Layout() {
           </Menu>
         </div>
       </header>
+      <AnnouncementBanner />
       <main className="min-h-0 flex-1">
         <Outlet />
       </main>

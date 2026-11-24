@@ -101,7 +101,22 @@ fn mailbox(name: &str, email: &str) -> Result<Mailbox, lettre::address::AddressE
     Ok(Mailbox::new((!name.is_empty()).then(|| name.to_string()), email.trim().parse()?))
 }
 
+/// The last send attempt since the server started (Admin → System): when, and the error if it failed.
+static LAST_SEND: std::sync::Mutex<Option<(chrono::DateTime<chrono::Utc>, Option<String>)>> = std::sync::Mutex::new(None);
+
+pub fn last_send() -> Option<(chrono::DateTime<chrono::Utc>, Option<String>)> {
+    LAST_SEND.lock().ok().and_then(|g| g.clone())
+}
+
 pub async fn send(s: &SmtpSettings, to_email: &str, to_name: &str, subject: &str, text: String, html: String) -> Result<(), String> {
+    let r = send_inner(s, to_email, to_name, subject, text, html).await;
+    if let Ok(mut g) = LAST_SEND.lock() {
+        *g = Some((chrono::Utc::now(), r.as_ref().err().cloned()));
+    }
+    r
+}
+
+async fn send_inner(s: &SmtpSettings, to_email: &str, to_name: &str, subject: &str, text: String, html: String) -> Result<(), String> {
     let from = mailbox(if s.from_name.trim().is_empty() { "Kanb" } else { s.from_name.trim() }, &s.from_email)
         .map_err(|e| format!("invalid sender address: {e}"))?;
     let to = mailbox(to_name, to_email).map_err(|e| format!("invalid recipient address: {e}"))?;
@@ -213,7 +228,12 @@ pub struct SaveSettings {
     public_url: String,
 }
 
-pub async fn save_settings(State(state): State<AppState>, _a: SuperAdmin, Json(r): Json<SaveSettings>) -> AppResult<Json<serde_json::Value>> {
+pub async fn save_settings(
+    State(state): State<AppState>,
+    SuperAdmin(me): SuperAdmin,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
+    Json(r): Json<SaveSettings>,
+) -> AppResult<Json<serde_json::Value>> {
     if !["starttls", "tls", "none"].contains(&r.security.as_str()) {
         return Err(AppError::BadRequest("invalid_security"));
     }
@@ -227,7 +247,7 @@ pub async fn save_settings(State(state): State<AppState>, _a: SuperAdmin, Json(r
         port: r.port,
         security: r.security,
         username: r.username.trim().into(),
-        password: r.password.unwrap_or(old.password),
+        password: r.password.unwrap_or_else(|| old.password.clone()),
         from_email: r.from_email.trim().into(),
         from_name: r.from_name.trim().into(),
         public_url: r.public_url.trim().trim_end_matches('/').into(),
@@ -240,6 +260,12 @@ pub async fn save_settings(State(state): State<AppState>, _a: SuperAdmin, Json(r
     .bind(serde_json::to_value(SmtpSettings { password: crate::crypto::seal(&s.password), ..s.clone() }).map_err(|e| anyhow::anyhow!(e))?)
     .execute(&state.db)
     .await?;
+    // which fields changed, never their values (the password is compared in plain text here and not stored)
+    let fields = crate::audit::changed_fields(
+        &serde_json::to_value(&old).unwrap_or_default(),
+        &serde_json::to_value(&s).unwrap_or_default(),
+    );
+    crate::audit::log(&state, Some(me.id), "settings_changed", None, ip.as_deref(), json!({ "area": "email", "fields": fields })).await;
     Ok(Json(json!({ "ok": true })))
 }
 

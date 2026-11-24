@@ -12,6 +12,9 @@ pub enum AppError {
     Unauthorized,
     #[error("forbidden")]
     Forbidden,
+    /// two-factor sign-in is required and this account hasn't set it up yet
+    #[error("two-factor sign-in required")]
+    TwoFactorRequired,
     #[error("not found")]
     NotFound,
     #[error("{0}")]
@@ -24,6 +27,9 @@ pub enum AppError {
     Conflict(&'static str),
     #[error("payload too large")]
     TooLarge,
+    /// uploads together reached MAX_STORAGE_GB
+    #[error("storage full")]
+    StorageFull,
     /// rate limited; seconds until the next attempt is allowed
     #[error("too many attempts")]
     TooManyRequests(u64),
@@ -57,11 +63,14 @@ impl IntoResponse for AppError {
         let (status, code) = match &self {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            AppError::TwoFactorRequired => (StatusCode::FORBIDDEN, "two_factor_required"),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             AppError::BadRequest(c) => (StatusCode::BAD_REQUEST, *c),
             AppError::SignInFailed(c) => (StatusCode::UNAUTHORIZED, *c),
             AppError::Conflict(c) => (StatusCode::CONFLICT, *c),
             AppError::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+            // 413, not 507: a full budget is expected behaviour, not a server fault (5xx is logged and counted as one)
+            AppError::StorageFull => (StatusCode::PAYLOAD_TOO_LARGE, "storage_full"),
             AppError::TooManyRequests(secs) => {
                 let mut r = (StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "too_many_attempts", "retry_after": secs }))).into_response();
                 if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {

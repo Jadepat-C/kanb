@@ -97,6 +97,7 @@ D_DATA=${KANB_DATA:-./data}
 D_TZ=${TZ:-$( (timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null) | head -n1)}
 D_TZ=${D_TZ:-UTC}
 D_UPLOAD=${MAX_UPLOAD_MB:-50}
+D_STORAGE=${MAX_STORAGE_GB:-0}
 D_IMAGE=${KANB_IMAGE:-}
 
 say ""
@@ -170,6 +171,10 @@ while :; do
   ask UPLOAD "5. Largest upload, in MB" "$D_UPLOAD"
   case $UPLOAD in '' | *[!0-9]*) echo "  a whole number" >&2 ;; *) break ;; esac
 done
+while :; do
+  ask STORAGE "   Total space for all uploads together, in GB (0 = no limit)" "$D_STORAGE"
+  case $STORAGE in '' | *[!0-9]*) echo "  a whole number (0 for no limit)" >&2 ;; *) break ;; esac
+done
 
 # ---------------------------------------------------------------- passwords and keys
 
@@ -223,7 +228,7 @@ if [ "$INTERACTIVE" = 1 ]; then
   Listens on     $BIND$([ "$TRUST_PROXY" = true ] && echo "  (behind a proxy)")
   Data folder    $DATA
   Time zone      $TZ_VALUE
-  Uploads up to  $UPLOAD MB
+  Uploads up to  $UPLOAD MB each, $([ "$STORAGE" = 0 ] && echo "no total limit" || echo "$STORAGE GB in total")
   Image          ${IMAGE:-published (ghcr.io)}$([ "$IMAGE" = kanb:local ] && echo " — built from this checkout")
   Passwords      $([ "$UPDATING" = 1 ] && echo "kept" || echo "ready")
 
@@ -241,6 +246,7 @@ TRUST_PROXY=$TRUST_PROXY
 KANB_DATA=$DATA
 TZ=$TZ_VALUE
 MAX_UPLOAD_MB=$UPLOAD
+MAX_STORAGE_GB=$STORAGE
 POSTGRES_PASSWORD=$PG
 S3_ACCESS_KEY=$S3K
 S3_SECRET_KEY=$S3S

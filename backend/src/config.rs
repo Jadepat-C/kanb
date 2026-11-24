@@ -53,6 +53,11 @@ pub struct Config {
     #[arg(long, env = "MAX_UPLOAD_MB", default_value_t = 50)]
     pub max_upload_mb: usize,
 
+    /// Total space all uploaded files together may take, in GB (1 GB = 10^9 bytes). Once reached, uploads are refused
+    /// with "storage_full" until files are deleted. 0 (the default) = no limit.
+    #[arg(long, env = "MAX_STORAGE_GB", default_value_t = 0.0)]
+    pub max_storage_gb: f64,
+
     /// Behind a reverse proxy (the default setup), take the client's address from the proxy's X-Forwarded-For when
     /// the connection comes from a local/private address. Set false when the app is reachable directly, without a
     /// proxy, so clients can't fake their address to dodge sign-in rate limits.

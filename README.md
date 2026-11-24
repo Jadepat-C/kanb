@@ -36,14 +36,27 @@ It works in English and Thai, in light and dark, and on phones, tablets and desk
 
 **Accounts and security**
 - Super admins manage users; each board has its own roles (Owner, Admin, Editor, Commenter, Viewer, or your own)
-  built from a permission matrix.
-- Sign in with username or email, two-factor sign-in with an authenticator app, password reset by email.
+  built from a permission matrix. A role can be limited to the cards its members created, and to the columns they
+  may add cards to (pick one column to send every new card there).
+- Sign in with username or email, two-factor sign-in with an authenticator app (optional, or required for everyone
+  under Admin → Security), password reset by email.
 - Every file download is permission-checked by the app; the file store is never exposed to the internet.
 - Stored secrets (SMTP password, webhook tokens, 2FA secrets) are encrypted with a key only you hold.
 
+**For admins**
+- Activity log: sign-ins and failed sign-ins (with address and device), account, user and settings changes, kept for
+  a year. Secrets are never written to it.
+- Each person's signed-in devices with "sign out everywhere", and when they last used Kanb. Find accounts that
+  haven't been used for 30/90/180 days and deactivate them in one go.
+- Every board in one list, with its owners, size and last activity; boards left without an active owner are flagged
+  and can be given a new one.
+- System page: version and whether a newer release exists, database and file sizes, and whether email is working.
+- A site-wide announcement banner (e.g. planned maintenance), and inviting several people at once from a pasted list.
+
 **Everywhere**
 - English and ไทย (with Buddhist-era years), light and dark themes, dates as dd/mm/yyyy.
-- Works on phones and tablets: long-press to drag, full-screen card panel, phone-sized calendar.
+- Works on phones and tablets: press and hold to drag, hold and let go for the right-click menu, full-screen card
+  panel, phone-sized calendar.
 - Can be installed to a phone's home screen or desktop like an app.
 
 | | |
@@ -137,7 +150,7 @@ name: kanb
 
 services:
   app:
-    image: ghcr.io/jadepat-c/kanb:0.1          # 0.1.x updates; :latest for every release
+    image: ghcr.io/jadepat-c/kanb:0.2          # 0.2.x updates; :latest for every release
     restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
@@ -166,6 +179,7 @@ services:
       SECRET_KEY: ${SECRET_KEY}                 # encrypts stored secrets: keep a copy with your backups
       SETUP_CODE: ${SETUP_CODE}                 # asked for when you create the first admin in the browser
       # MAX_UPLOAD_MB: "50"
+      # MAX_STORAGE_GB: "50"                   # total space for all uploads; 0 or unset = no limit
       # SESSION_DAYS: "30"
       # METRICS_ADDR: "0.0.0.0:9091"            # Prometheus metrics; publish this port to your monitoring only
 
@@ -247,7 +261,7 @@ explains each line.
 | `KANB_BIND` | `127.0.0.1:8080` | Where the app listens on the host. `0.0.0.0:8080` makes it reachable from your network. |
 | `TRUST_PROXY` | `true` | Use the visitor address your reverse proxy passes on, for the sign-in limits. Set `false` if the app faces the internet with no proxy. |
 | `SETUP_CODE` | (from `setup.sh`) | Needed to create the first admin in the browser. If empty, a code is printed by `docker compose logs app`. |
-| `KANB_IMAGE` | `ghcr.io/jadepat-c/kanb:latest` | The app image. Pin a release with e.g. `:0.1`; `:edge` follows the main branch; `kanb:local` (any name not on a registry) builds from your checkout. |
+| `KANB_IMAGE` | `ghcr.io/jadepat-c/kanb:latest` | The app image. Pin a release with e.g. `:0.2`; `:edge` follows the main branch; `kanb:local` (any name not on a registry) builds from your checkout. |
 | `KANB_DATA` | `./data` | Folder for the database (`postgres/`) and uploaded files (`files/`). |
 | `TZ` | `UTC` | Time zone for chat posts, calendar feeds and recurring cards, e.g. `Asia/Bangkok`. |
 | `POSTGRES_PASSWORD` | (required) | Database password. Letters and digits only. |
@@ -255,6 +269,7 @@ explains each line.
 | `SECRET_KEY` | (required) | 64 hex characters. Encrypts the secrets stored in the database. Never change or lose it. |
 | `SESSION_DAYS` | `30` | How long a sign-in lasts without use. |
 | `MAX_UPLOAD_MB` | `50` | Largest file people can upload. Raise your proxy's limit to match. |
+| `MAX_STORAGE_GB` | `0` (no limit) | Total space all uploaded files may take together, in GB. When it's full, new uploads are refused with a message until files are deleted. Admin → Storage shows how much is used and which boards use the most. |
 | `METRICS_ADDR` | (off) | Prometheus metrics at `http://<this address>/metrics`, e.g. `0.0.0.0:9091`. It's a separate port on purpose: publish it to your monitoring only, never through your reverse proxy. See [Monitoring](#monitoring). |
 
 After editing `.env`, apply it with `docker compose up -d`.
@@ -315,8 +330,11 @@ docker compose pull && docker compose up -d     # download the new image
 docker compose up -d --build                    # or, if you build from source: rebuild from what you just pulled
 ```
 
+Admin → System shows the running version and the newest release. It asks GitHub's public releases API only while an
+admin has that page open (at most every 6 hours) and sends nothing about your server.
+
 Database changes are applied automatically when the app starts. To stay on a release, set `KANB_IMAGE` to a version
-tag such as `ghcr.io/jadepat-c/kanb:0.1`. Releases are listed on the [releases page](https://github.com/Jadepat-C/kanb/releases).
+tag such as `ghcr.io/jadepat-c/kanb:0.2`. Releases are listed on the [releases page](https://github.com/Jadepat-C/kanb/releases).
 
 ## Admin commands
 
@@ -390,6 +408,8 @@ npm run dev                                   # http://localhost:5173, with live
 - Secrets in the database are encrypted with AES-256-GCM using `SECRET_KEY`.
 - Webhooks and push notifications only go to public internet addresses unless an admin allows private ones.
 - Calendar feed links contain a random token; only its hash is stored, and making a new link revokes the old one.
+- Signing someone out (or deactivating them) also ends the live updates in tabs they already have open, within a
+  minute. Sign-ins, failed sign-ins and admin actions are recorded in the activity log (Admin → Activity).
 
 Found a security problem? Open a GitHub issue, or if the details could put existing installs at risk, contact the
 maintainer through their GitHub profile first.

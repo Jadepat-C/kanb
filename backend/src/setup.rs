@@ -102,7 +102,9 @@ pub async fn create_first_admin(
     let locale = if r.locale == "th" { "th" } else { "en" };
     let user = crate::admin::insert_user(&state.db, &r.username, r.display_name.trim(), None, &r.password, true, true, locale, false).await?;
     tracing::info!(user = %user.username, "first admin created in the browser");
-    crate::auth::start_session(&state, user.id, &headers, jar).await
+    let client = throttle::client_ip(peer, &headers, state.config.trust_proxy).to_string();
+    crate::audit::log(&state, Some(user.id), "user_created", Some(user.id), Some(&client), serde_json::json!({ "first_admin": true })).await;
+    crate::auth::start_session(&state, user.id, &headers, jar, Some(&client), "setup").await
 }
 
 #[cfg(test)]

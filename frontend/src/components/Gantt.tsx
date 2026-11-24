@@ -56,6 +56,7 @@ export function Gantt({
   onOpen,
   onDates,
   onLink,
+  canEdit,
   itemMenu,
   toolbar,
 }: {
@@ -70,6 +71,8 @@ export function Gantt({
   onDates?: (id: string, dates: { start_at?: string | null; due_at?: string | null }) => void
   /** `cardId` will wait for `dependsOn` */
   onLink?: (cardId: string, dependsOn: string) => void
+  /** may change this card's dates (default: yes whenever onDates is given) */
+  canEdit?: (card: CardSummary) => boolean
   itemMenu?: (card: CardSummary, trigger: ReactElement) => ReactNode
   toolbar?: ReactNode
 }) {
@@ -457,17 +460,19 @@ export function Gantt({
                 {show.people && <People ids={c.assignee_ids} members={members} max={narrow ? 1 : 3} size={18} />}
               </button>
             )
+            // some roles may only change their own cards
+            const ed = editable && (canEdit?.(c) ?? true)
             return (
               <div key={c.id} className="absolute flex w-full border-b border-line" style={{ top: HEAD + i * ROW, height: ROW }}>
                 <CardGlimpse info={glimpseOf(c, gd)} wrap={itemMenu ? (tr) => itemMenu(c, tr) : undefined} suppress={!!drag}>
                   {label}
                 </CardGlimpse>
                 <div
-                  className={clsx('group/row relative', !g && editable && 'cursor-crosshair')}
+                  className={clsx('group/row relative', !g && ed && 'cursor-crosshair')}
                   style={{ width: W }}
-                  onPointerDown={!g && editable ? (e) => begin(e, { mode: 'create', id: c.id, from: dayAt(e.clientX), to: dayAt(e.clientX) }) : undefined}
+                  onPointerDown={!g && ed ? (e) => begin(e, { mode: 'create', id: c.id, from: dayAt(e.clientX), to: dayAt(e.clientX) }) : undefined}
                 >
-                  {!g && editable && !drag && (
+                  {!g && ed && !drag && (
                     <span className="pointer-events-none absolute top-1/2 hidden -translate-y-1/2 whitespace-nowrap text-[10px] text-muted group-hover/row:block" style={{ left: Math.max(4, todayX + 8) }}>
                       {t('gantt.dragToSchedule')}
                     </span>
@@ -477,10 +482,10 @@ export function Gantt({
                     <div
                       data-gantt-card={c.id}
                       title={`#${c.number} ${c.title}`}
-                      className={clsx('group/bar absolute top-1/2 z-10 flex items-center', editable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')}
+                      className={clsx('group/bar absolute top-1/2 z-10 flex items-center', ed ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer')}
                       style={{ left: (g.x0 + 0.5) * px - 8, transform: 'translateY(-50%)' }}
-                      onPointerDown={editable ? (e) => begin(e, { mode: 'move', id: c.id, x: e.clientX, delta: 0, moved: false }) : undefined}
-                      onClick={editable ? () => touchTap.current && onOpen(c.id) : () => onOpen(c.id)}
+                      onPointerDown={ed ? (e) => begin(e, { mode: 'move', id: c.id, x: e.clientX, delta: 0, moved: false }) : undefined}
+                      onClick={ed ? () => touchTap.current && onOpen(c.id) : () => onOpen(c.id)}
                     >
                       <span className="block h-4 w-4 rotate-45 rounded-[3px] border-2 border-white shadow dark:border-[var(--surface)]" style={{ background: color }} />
                       <span className="ml-1.5 whitespace-nowrap text-[11px]">{c.title}</span>
@@ -499,15 +504,15 @@ export function Gantt({
                       title={`#${c.number} ${c.title}`}
                       className={clsx(
                         'group/bar absolute top-[6px] z-10 flex items-center rounded-md text-[11px] font-medium text-white shadow-sm',
-                        editable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
+                        ed ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
                         g.kind === 'open' && 'bg-clip-padding [mask-image:linear-gradient(90deg,#000_60%,transparent)]',
                         c.done && 'opacity-45',
                       )}
                       style={{ left: g.x0 * px + 1, width: Math.max(8, (g.x1 - g.x0) * px - 2), height: ROW - 12, background: color }}
-                      onPointerDown={editable ? (e) => begin(e, { mode: 'move', id: c.id, x: e.clientX, delta: 0, moved: false }) : undefined}
-                      onClick={editable ? () => touchTap.current && onOpen(c.id) : () => onOpen(c.id)}
+                      onPointerDown={ed ? (e) => begin(e, { mode: 'move', id: c.id, x: e.clientX, delta: 0, moved: false }) : undefined}
+                      onClick={ed ? () => touchTap.current && onOpen(c.id) : () => onOpen(c.id)}
                     >
-                      {editable && (
+                      {ed && (
                         <span
                           className="absolute inset-y-0 left-0 w-2 cursor-ew-resize rounded-l-md hover:bg-black/20"
                           onPointerDown={(e) => begin(e, { mode: 'start', id: c.id, x: e.clientX, delta: 0, moved: false })}
@@ -532,7 +537,7 @@ export function Gantt({
                           ))}
                         </span>
                       )}
-                      {editable && (
+                      {ed && (
                         <span
                           className="absolute inset-y-0 right-0 w-2 cursor-ew-resize rounded-r-md hover:bg-black/20"
                           onPointerDown={(e) => begin(e, { mode: 'end', id: c.id, x: e.clientX, delta: 0, moved: false })}

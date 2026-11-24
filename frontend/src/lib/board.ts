@@ -1,18 +1,51 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
+import { useMe } from './auth'
 import type { BoardDetail, CardSummary, Label, Member, Status } from './types'
+
+/** Permissions that a role's "only cards they created" setting narrows to the member's own cards (as on the server). */
+const OWN_SCOPED = new Set([
+  'cards.edit',
+  'cards.status',
+  'cards.due',
+  'cards.dependencies',
+  'cards.assign',
+  'cards.labels',
+  'cards.move',
+  'cards.archive',
+  'cards.delete',
+  'attachments.upload',
+  'attachments.delete',
+])
 
 export function useBoard(boardId: string) {
   const q = useQuery({ queryKey: ['board', boardId], queryFn: () => api.get<BoardDetail>(`/boards/${boardId}`) })
+  const me = useMe().data?.id
   const helpers = useMemo(() => {
     const d = q.data
     const labels = new Map<string, Label>((d?.labels ?? []).map((l) => [l.id, l]))
     const members = new Map<string, Member>((d?.members ?? []).map((m) => [m.user_id, m]))
     const statuses = new Map<string, Status>((d?.statuses ?? []).map((s) => [s.id, s]))
     const perms = new Set(d?.my_permissions ?? [])
-    return { labels, members, statuses, can: (p: string) => perms.has(p) }
-  }, [q.data])
+    const own = !!d?.my_own_cards_only
+    const createIn = d?.my_card_list_ids ? new Set(d.my_card_list_ids) : null
+    const limited = (p: string) => own && OWN_SCOPED.has(p)
+    return {
+      labels,
+      members,
+      statuses,
+      /** holds the permission at all (for some cards at least); use canCard for one card */
+      can: (p: string) => perms.has(p),
+      /** the permission on this card (roles limited to their own cards) */
+      canCard: (p: string, card: { created_by: string | null } | null | undefined) =>
+        perms.has(p) && (!limited(p) || (!!card && !!me && card.created_by === me)),
+      /** the permission on every card, e.g. to sort a whole column */
+      canAll: (p: string) => perms.has(p) && !limited(p),
+      /** may add cards to this column */
+      canCreateIn: (listId: string) => perms.has('cards.create') && (!createIn || createIn.has(listId)),
+    }
+  }, [q.data, me])
   return { ...q, ...helpers }
 }
 
@@ -122,6 +155,8 @@ export function useBoardSocket(boardId: string, onChange?: (ev: ChangeEvent) => 
         setOnline(false)
         setViewers([])
         if (stopped) return
+        // the server also closes it when this session was signed out: checking /me then shows the sign-in page
+        qc.invalidateQueries({ queryKey: ['me'] })
         timer = setTimeout(connect, Math.min(30000, 1000 * 2 ** retry++))
       }
     }

@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Bell, Copy, Dices, Eye, EyeOff, KeyRound, Mail, Pencil, Plus, Search, Send, ShieldCheck, ShieldOff, Trash2, Users } from 'lucide-react'
+import { Bell, Copy, Dices, Eye, EyeOff, HardDrive, History, KeyRound, LayoutGrid, Mail, MonitorSmartphone, Pencil, Plus, Search, Send, Server, ShieldCheck, ShieldOff, Trash2, UserMinus, UserPlus, Users } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Navigate, useSearchParams } from 'react-router'
+import { Link, Navigate, useSearchParams } from 'react-router'
 import { NotificationsAdminTab } from '../components/ContactPoints'
 import { ask } from '../components/dialogs'
 import { toast, toastError, toastSuccess } from '../components/toast'
@@ -11,7 +11,8 @@ import { Avatar, Button, Dialog, Field, Input, Spinner, Toggle } from '../compon
 import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { generatePassword } from '../lib/password'
-import { fmtDate } from '../lib/prefs'
+import { fmtDate, fmtRelative } from '../lib/prefs'
+import { ActivityTab, BoardsTab, BulkInvite, DevicesDialog, matchesActivity, SystemTab, useBulkDeactivate, type ActiveFilter } from './AdminTools'
 import type { User } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
 import { copyText } from '../lib/clipboard'
@@ -24,26 +25,187 @@ export function Admin() {
   const { t } = useTranslation()
   const { data: me } = useMe()
   const [sp, setSp] = useSearchParams()
-  const tab = sp.get('tab') === 'email' ? 'email' : sp.get('tab') === 'notifications' ? 'notifications' : 'users'
+  const tabs = ['users', 'activity', 'boards', 'security', 'email', 'notifications', 'storage', 'system'] as const
+  const tab = tabs.find((k) => k === sp.get('tab')) ?? 'users'
+  const allUsers = useQuery({ queryKey: ['admin-users'], queryFn: () => api.get<User[]>('/admin/users'), enabled: !!me?.is_super_admin }).data ?? []
   if (!me?.is_super_admin) return <Navigate to="/" replace />
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
-      <div className="mb-5 flex items-center gap-1 border-b border-line">
-        {(['users', 'email', 'notifications'] as const).map((k) => (
+      <div className="scroll-thin mb-5 flex items-center gap-1 overflow-x-auto border-b border-line">
+        {tabs.map((k) => (
           <button
             key={k}
             onClick={() => setSp(k === 'users' ? {} : { tab: k })}
             className={clsx(
-              '-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium cursor-pointer',
+              '-mb-px flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium cursor-pointer',
               tab === k ? 'border-accent text-[var(--text)]' : 'border-transparent text-muted hover:text-[var(--text)]',
             )}
           >
-            {k === 'users' ? <Users size={15} /> : k === 'email' ? <Mail size={15} /> : <Bell size={15} />}
-            {t(k === 'users' ? 'admin.title' : k === 'email' ? 'email.title' : 'notifications.title')}
+            {
+              {
+                users: <Users size={15} />,
+                activity: <History size={15} />,
+                boards: <LayoutGrid size={15} />,
+                security: <ShieldCheck size={15} />,
+                email: <Mail size={15} />,
+                notifications: <Bell size={15} />,
+                storage: <HardDrive size={15} />,
+                system: <Server size={15} />,
+              }[k]
+            }
+            {t(
+              {
+                users: 'admin.title',
+                activity: 'audit.title',
+                boards: 'adminBoards.title',
+                security: 'security.title',
+                email: 'email.title',
+                notifications: 'notifications.title',
+                storage: 'storage.title',
+                system: 'system.title',
+              }[k],
+            )}
           </button>
         ))}
       </div>
-      {tab === 'users' ? <UsersTab me={me} /> : tab === 'email' ? <EmailTab me={me} /> : <NotificationsAdminTab />}
+      {tab === 'users' ? (
+        <UsersTab me={me} />
+      ) : tab === 'email' ? (
+        <EmailTab me={me} />
+      ) : tab === 'storage' ? (
+        <StorageTab />
+      ) : tab === 'security' ? (
+        <SecurityTab me={me} />
+      ) : tab === 'activity' ? (
+        <ActivityTab users={allUsers} />
+      ) : tab === 'boards' ? (
+        <BoardsTab users={allUsers} />
+      ) : tab === 'system' ? (
+        <SystemTab />
+      ) : (
+        <NotificationsAdminTab />
+      )}
+    </div>
+  )
+}
+
+interface StorageReport {
+  used_bytes: number
+  limit_bytes: number | null
+  boards: { id: string; name: string; bytes: number; files: number }[]
+}
+
+/** decimal units, like MAX_STORAGE_GB (1 GB = 10^9 bytes) */
+const fmtStorage = (n: number) =>
+  n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${(n / 1e3).toFixed(0)} KB` : `${n} B`
+
+/** How much space uploaded files take, against MAX_STORAGE_GB, and which boards use the most. */
+function StorageTab() {
+  const { t } = useTranslation()
+  const { data } = useQuery({ queryKey: ['admin-storage'], queryFn: () => api.get<StorageReport>('/admin/storage') })
+  if (!data) return <Spinner />
+  const pct = data.limit_bytes ? Math.min(100, (data.used_bytes / data.limit_bytes) * 100) : 0
+  return (
+    <div className="max-w-2xl space-y-6">
+      <section className="rounded-lg border border-line bg-surface p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="font-semibold">{t('storage.uploads')}</h2>
+          <span className="text-sm text-muted">
+            {data.limit_bytes
+              ? t('storage.usedOf', { used: fmtStorage(data.used_bytes), limit: fmtStorage(data.limit_bytes), pct: pct.toFixed(0) })
+              : t('storage.usedNoLimit', { used: fmtStorage(data.used_bytes) })}
+          </span>
+        </div>
+        {data.limit_bytes != null && (
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-black/5 dark:bg-white/10">
+            <div
+              className={clsx('h-full rounded-full', pct >= 100 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-accent')}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        )}
+        <p className="mt-3 text-xs text-muted">{data.limit_bytes ? t('storage.limitHint') : t('storage.noLimitHint')}</p>
+      </section>
+      <section>
+        <h2 className="mb-2 font-semibold">{t('storage.biggest')}</h2>
+        {data.boards.length === 0 ? (
+          <p className="text-sm text-muted">{t('storage.none')}</p>
+        ) : (
+          <ul className="divide-y divide-[var(--border)] rounded-lg border border-line bg-surface">
+            {data.boards.map((b) => (
+              <li key={b.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                <Link to={`/b/${b.id}`} className="min-w-0 flex-1 truncate hover:underline">
+                  {b.name}
+                </Link>
+                <span className="text-xs text-muted">{t('storage.files', { count: b.files })}</span>
+                <span className="w-20 text-right tabular-nums">{fmtStorage(b.bytes)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  )
+}
+
+interface SecurityView {
+  require_2fa: boolean
+  users: number
+  users_without_2fa: number
+}
+
+/** Instance-wide sign-in rules: require two-factor sign-in for everyone. */
+function SecurityTab({ me }: { me: User }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const { data } = useQuery({ queryKey: ['admin-security'], queryFn: () => api.get<SecurityView>('/admin/security') })
+  const save = useMutation({
+    mutationFn: (require_2fa: boolean) => api.put<SecurityView>('/admin/security', { require_2fa }),
+    onSuccess: (v) => {
+      qc.setQueryData(['admin-security'], v)
+      qc.invalidateQueries({ queryKey: ['me'] })
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
+      toastSuccess(v.require_2fa ? t('security.turnedOn') : t('security.turnedOff'))
+    },
+    onError: toastError,
+  })
+  if (!data) return <Spinner />
+  return (
+    <div className="max-w-2xl space-y-4">
+      <section className="space-y-3 rounded-lg border border-line bg-surface p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-semibold">{t('security.require2fa')}</h2>
+            <p className="mt-1 text-sm text-muted">{t('security.require2faHint')}</p>
+          </div>
+          <Toggle
+            checked={data.require_2fa}
+            disabled={save.isPending}
+            onChange={async (on) => {
+              // a site-wide sign-in rule: always confirm, either way
+              const ok = await ask(
+                on
+                  ? {
+                      title: t('security.confirmOnTitle'),
+                      message: me.totp_enabled
+                        ? t('security.confirmOn', { count: data.users_without_2fa })
+                        : t('security.confirmOnSelf', { count: data.users_without_2fa }),
+                      confirmLabel: t('security.turnOn'),
+                      danger: true,
+                    }
+                  : { title: t('security.confirmOffTitle'), message: t('security.confirmOff'), confirmLabel: t('security.turnOff'), danger: true },
+              )
+              if (ok) save.mutate(on)
+            }}
+          />
+        </div>
+        <p className={clsx('text-sm', data.users_without_2fa ? 'text-amber-700 dark:text-amber-400' : 'text-green-700 dark:text-green-400')}>
+          {data.users_without_2fa
+            ? t('security.without', { count: data.users_without_2fa, total: data.users })
+            : t('security.allHave', { total: data.users })}
+        </p>
+        <p className="text-xs text-muted">{t('security.lostPhone')}</p>
+      </section>
     </div>
   )
 }
@@ -56,6 +218,11 @@ function UsersTab({ me }: { me: User }) {
   const [resetting, setResetting] = useState<User | null>(null)
   const [editing, setEditing] = useState<User | null>(null)
   const [deleting, setDeleting] = useState<User | null>(null)
+  const [devices, setDevices] = useState<User | null>(null)
+  const [inviting, setInviting] = useState(false)
+  const [activity, setActivity] = useState<ActiveFilter>('')
+  const emailEnabled = useEmailEnabled()
+  const deactivate = useBulkDeactivate(me)
   const list = useQuery({ queryKey: ['admin-users'], queryFn: () => api.get<User[]>('/admin/users') })
   const update = useMutation({
     mutationFn: (p: Partial<User> & { id: string }) => api.patch(`/admin/users/${p.id}`, p),
@@ -64,7 +231,10 @@ function UsersTab({ me }: { me: User }) {
   })
   // substring match on name / username / email (works for Thai)
   const f = q.trim().toLowerCase().replace(/^@/, '')
-  const users = (list.data ?? []).filter((u) => !f || `${u.display_name} ${u.username} ${u.email ?? ''}`.toLowerCase().includes(f))
+  const users = (list.data ?? []).filter(
+    (u) => (!f || `${u.display_name} ${u.username} ${u.email ?? ''}`.toLowerCase().includes(f)) && matchesActivity(u, activity),
+  )
+  const stale = activity.startsWith('inactive')
 
   return (
     <>
@@ -73,11 +243,35 @@ function UsersTab({ me }: { me: User }) {
           <Search size={15} className="absolute left-2.5 top-2.5 text-muted" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('admin.search')} className="pl-8" />
         </div>
+        <select
+          value={activity}
+          onChange={(e) => setActivity(e.target.value as ActiveFilter)}
+          className="h-9 rounded-md border border-line bg-surface px-2 text-sm"
+          aria-label={t('inactive.filter')}
+        >
+          <option value="">{t('inactive.all')}</option>
+          <option value="inactive30">{t('inactive.days', { count: 30 })}</option>
+          <option value="inactive90">{t('inactive.days', { count: 90 })}</option>
+          <option value="inactive180">{t('inactive.days', { count: 180 })}</option>
+          <option value="unrecorded">{t('inactive.unrecorded')}</option>
+          <option value="deactivated">{t('inactive.deactivated')}</option>
+        </select>
         <span className="text-sm text-muted">{t('admin.count', { count: users.length })}</span>
-        <Button variant="primary" className="ml-auto" onClick={() => setCreating(true)}>
-          <Plus size={16} /> {t('admin.newUser')}
-        </Button>
+        {stale && users.length > 0 && (
+          <Button variant="danger" onClick={() => deactivate(users)}>
+            <UserMinus size={15} /> {t('inactive.deactivateAll')}
+          </Button>
+        )}
+        <div className="ml-auto flex gap-2">
+          <Button onClick={() => setInviting(true)} disabled={!emailEnabled} title={emailEnabled ? undefined : t('invite.needsEmail')}>
+            <UserPlus size={16} /> {t('invite.button')}
+          </Button>
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            <Plus size={16} /> {t('admin.newUser')}
+          </Button>
+        </div>
       </div>
+      {activity === 'unrecorded' && <p className="mb-3 text-xs text-muted">{t('inactive.unrecordedHint')}</p>}
       {list.isLoading ? (
         <Spinner />
       ) : (
@@ -89,6 +283,7 @@ function UsersTab({ me }: { me: User }) {
                 <th className="p-3 font-medium">{t('admin.superAdmin')}</th>
                 <th className="p-3 font-medium">{t('admin.canCreateBoards')}</th>
                 <th className="p-3 font-medium">{t('admin.active')}</th>
+                <th className="p-3 font-medium">{t('inactive.lastActive')}</th>
                 <th className="p-3 font-medium">{t('card.created')}</th>
                 <th className="p-3" />
               </tr>
@@ -130,11 +325,17 @@ function UsersTab({ me }: { me: User }) {
                   <td className="p-3">
                     <Toggle checked={u.is_active} disabled={u.id === me.id} onChange={(v) => update.mutate({ id: u.id, is_active: v })} />
                   </td>
+                  <td className="p-3 text-xs text-muted" title={u.last_seen_at ? fmtDate(u.last_seen_at, true) : t('inactive.notRecorded')}>
+                    {u.last_seen_at ? fmtRelative(u.last_seen_at) : '—'}
+                  </td>
                   <td className="p-3 text-xs text-muted">{fmtDate(u.created_at)}</td>
                   <td className="p-3">
                     <div className="flex justify-end gap-0.5">
                       <IconBtn title={t('common.edit')} onClick={() => setEditing(u)}>
                         <Pencil size={15} />
+                      </IconBtn>
+                      <IconBtn title={t('devices.button')} onClick={() => setDevices(u)}>
+                        <MonitorSmartphone size={15} />
                       </IconBtn>
                       <IconBtn title={t('admin.resetPassword')} onClick={() => setResetting(u)}>
                         <KeyRound size={15} />
@@ -164,7 +365,7 @@ function UsersTab({ me }: { me: User }) {
               ))}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="p-6 text-center text-muted">
+                  <td colSpan={7} className="p-6 text-center text-muted">
                     {t('search.noResults')}
                   </td>
                 </tr>
@@ -177,6 +378,8 @@ function UsersTab({ me }: { me: User }) {
       {resetting && <ResetPassword user={resetting} onClose={() => setResetting(null)} />}
       {editing && <EditUser user={editing} onClose={() => setEditing(null)} />}
       {deleting && <DeleteUser user={deleting} onClose={() => setDeleting(null)} />}
+      {devices && <DevicesDialog user={devices} onClose={() => setDevices(null)} />}
+      {inviting && <BulkInvite users={list.data ?? []} onClose={() => setInviting(false)} />}
     </>
   )
 }

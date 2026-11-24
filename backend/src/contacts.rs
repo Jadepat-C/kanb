@@ -65,7 +65,13 @@ pub async fn admin_get(State(state): State<AppState>, _a: SuperAdmin) -> AppResu
     Ok(Json(json!({ "settings": system(&state).await, "smtp_ready": crate::mail::ready(&smtp) })))
 }
 
-pub async fn admin_save(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, Json(s): Json<System>) -> AppResult<Json<Value>> {
+pub async fn admin_save(
+    State(state): State<AppState>,
+    SuperAdmin(me): SuperAdmin,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
+    Json(s): Json<System>,
+) -> AppResult<Json<Value>> {
+    let old = system(&state).await;
     sqlx::query(
         "INSERT INTO app_settings (key, value) VALUES ($1, $2)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
@@ -75,6 +81,11 @@ pub async fn admin_save(State(state): State<AppState>, SuperAdmin(me): SuperAdmi
     .execute(&state.db)
     .await?;
     tracing::info!(by = %me.username, email = s.email, push = s.push, allow_private = s.allow_private, "notification settings saved");
+    // only yes/no switches here: the new values are fine to keep
+    let fields = crate::audit::changed_fields(&serde_json::to_value(&old).unwrap_or_default(), &serde_json::to_value(&s).unwrap_or_default());
+    if !fields.is_empty() {
+        crate::audit::log(&state, Some(me.id), "settings_changed", None, ip.as_deref(), json!({ "area": "notifications", "fields": fields, "now": s })).await;
+    }
     Ok(Json(json!({ "settings": s })))
 }
 

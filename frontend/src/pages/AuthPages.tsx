@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { KeyRound, Languages, MailCheck, Moon, Sun } from 'lucide-react'
+import { KeyRound, Languages, MailCheck, Moon, ShieldCheck, Sun } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toastSuccess } from '../components/toast'
+import { SetupDialog } from '../components/TwoFactor'
 import { Button, Field, Input, Spinner } from '../components/ui'
 import { api } from '../lib/api'
 import { errorText, setLocale } from '../lib/i18n'
@@ -98,6 +99,37 @@ export function ForceChangePassword({ me }: { me: User }) {
         }}
       />
       {err && <p className="text-sm text-red-600">{err}</p>}
+      <button
+        className="w-full text-center text-xs text-muted hover:underline cursor-pointer"
+        onClick={async () => {
+          await api.post('/auth/logout')
+          qc.setQueryData(['me'], null)
+        }}
+      >
+        {t('auth.signOut')}
+      </button>
+    </AuthCard>
+  )
+}
+
+/** Shown instead of the app while an admin requires two-factor sign-in and this account hasn't set it up. */
+export function ForceTwoFactor({ me }: { me: User }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  return (
+    <AuthCard title={t('twofa.requiredTitle')} subtitle={t('twofa.requiredHint', { name: me.display_name })}>
+      <Button variant="primary" className="w-full" onClick={() => setOpen(true)}>
+        <ShieldCheck size={15} /> {t('twofa.setUpNow')}
+      </Button>
+      {open && (
+        <SetupDialog
+          me={me}
+          holdMe
+          // after the recovery codes have been shown: reload /me, which lets the app in
+          onClose={() => (setOpen(false), qc.invalidateQueries({ queryKey: ['me'] }))}
+        />
+      )}
       <button
         className="w-full text-center text-xs text-muted hover:underline cursor-pointer"
         onClick={async () => {

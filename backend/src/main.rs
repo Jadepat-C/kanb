@@ -4,6 +4,8 @@ macro_rules! sqlf {
 }
 
 mod admin;
+mod admin_tools;
+mod audit;
 mod auth;
 mod avatars;
 mod boards;
@@ -279,6 +281,8 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
     notify::spawn_due_job(state.clone());
     board_contacts::spawn_dispatch(state.clone());
     recurring::spawn_job(state.clone());
+    audit::spawn_pruner(state.clone());
+    let _ = admin_tools::STARTED.set(chrono::Utc::now());
     let upload_limit = config.max_upload_mb * 1024 * 1024 + 1024 * 1024;
 
     let api = Router::new()
@@ -319,6 +323,16 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/admin/users/{id}/password", post(admin::reset_password))
         .route("/admin/users/{id}/2fa", axum::routing::delete(twofa::admin_reset))
         .route("/admin/notifications", get(contacts::admin_get).put(contacts::admin_save))
+        .route("/admin/storage", get(files::storage_report))
+        .route("/admin/security", get(admin::get_security).put(admin::save_security))
+        .route("/admin/audit", get(audit::list))
+        .route("/admin/users/{id}/sessions", get(admin_tools::sessions).delete(admin_tools::revoke_all))
+        .route("/admin/sessions/{id}", axum::routing::delete(admin_tools::revoke_one))
+        .route("/admin/boards", get(admin_tools::boards))
+        .route("/admin/boards/{id}/owners", post(admin_tools::add_owner))
+        .route("/admin/system", get(admin_tools::system))
+        .route("/admin/announcement", get(admin_tools::admin_announcement).put(admin_tools::save_announcement))
+        .route("/announcement", get(admin_tools::announcement))
         .route("/boards", get(boards::list_boards).post(boards::create_board))
         .route("/boards/{id}", get(boards::get_board).patch(boards::update_board).delete(boards::delete_board))
         .route("/boards/{id}/ws", get(realtime::board_ws))

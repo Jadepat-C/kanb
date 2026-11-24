@@ -42,6 +42,8 @@ export function Column({
   const [adding, setAdding] = useState<null | 'top' | 'bottom'>(null)
   const [renaming, setRenaming] = useState(false)
   const openBottom = useCallback(() => setAdding('bottom'), [])
+  // some roles may only add cards to certain columns
+  const canAdd = b.canCreateIn(list.id)
 
   const update = useMutation({
     mutationFn: (p: Partial<List>) => api.patch(`/lists/${list.id}`, p),
@@ -136,7 +138,7 @@ export function Column({
   // shared by the "⋯" menu and the right-click menu
   const ColumnItems = ({ M, withNew }: { M: MenuKit; withNew?: boolean }) => (
     <>
-      {withNew && b.can('cards.create') && (
+      {withNew && canAdd && (
         <>
           <MItem M={M} onSelect={() => (list.folded ? update.mutate({ folded: false }) : undefined, setAdding('top'))}>
             <Plus size={14} /> {t('menu.newCardTop')}
@@ -159,7 +161,7 @@ export function Column({
       <MItem M={M} onSelect={() => update.mutate({ folded: !list.folded })}>
         {list.folded ? <ChevronsLeftRight size={14} /> : <ChevronsRightLeft size={14} />} {list.folded ? t('board.unfold') : t('board.fold')}
       </MItem>
-      {b.can('cards.move') && cards.length > 1 && (
+      {b.canAll('cards.move') && cards.length > 1 && (
         <MSub M={M} icon={<ArrowDownUp size={14} />} label={t('sort.title')}>
           {(
             [
@@ -196,7 +198,7 @@ export function Column({
       )}
       {b.can('lists.delete') && (
         <>
-          {(totalCount === 0 || b.can('cards.delete')) && (
+          {(totalCount === 0 || b.canAll('cards.delete')) && (
             <MItem M={M} danger onSelect={confirmDelete}>
               <Trash2 size={14} /> {t('board.deleteList')}
             </MItem>
@@ -288,7 +290,7 @@ export function Column({
             {totalCount}
             {list.wip_limit != null && `/${list.wip_limit}`}
           </span>
-          {b.can('cards.create') && (
+          {canAdd && (
             addCardMenu(
               'top',
               <button
@@ -333,12 +335,12 @@ export function Column({
         {adding === 'top' && <QuickAdd listId={list.id} boardId={boardId} at="top" onDone={() => setAdding(null)} />}
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((c) => (
-            <CardTile key={c.id} card={c} b={b} onOpen={onOpen} disabled={dragDisabled} onNew={openBottom} viewers={viewersByCard?.get(c.id)} />
+            <CardTile key={c.id} card={c} b={b} onOpen={onOpen} disabled={dragDisabled || !b.canCard('cards.move', c)} onNew={canAdd ? openBottom : undefined} viewers={viewersByCard?.get(c.id)} />
           ))}
         </SortableContext>
         {adding === 'bottom' && <QuickAdd listId={list.id} boardId={boardId} at="bottom" onDone={() => setAdding(null)} />}
       </div>
-      {b.can('cards.create') && adding !== 'bottom' && (
+      {canAdd && adding !== 'bottom' && (
         addCardMenu(
           'bottom',
           <button className="m-2 mt-0 flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-muted hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer">

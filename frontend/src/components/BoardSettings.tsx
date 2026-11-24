@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronRight, Download, Columns3, LayoutTemplate, MessageSquare, Paperclip, Pencil, Plus, Search, Settings2, SquareStack, Trash2, Users } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ShieldCheck, Download, Columns3, LayoutTemplate, MessageSquare, Paperclip, Pencil, Plus, Search, Settings2, SquareStack, Trash2, Users } from 'lucide-react'
 import { Stars } from './CardTile'
 import { boardScope, ContactPointList } from './ContactPoints'
 import { SaveBoardTemplate } from './SaveBoardTemplate'
@@ -16,9 +16,10 @@ import { useNavigate } from 'react-router'
 import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import type { BoardHelpers } from '../lib/board'
-import type { CardTemplate, Role, UserBrief } from '../lib/types'
+import type { CardTemplate, List, Role, UserBrief } from '../lib/types'
 import { toast, toastError } from './toast'
-import { Avatar, Button, ColorPicker, Dialog, Field, Input } from './ui'
+import { DROP, MItem, MSep } from './menu'
+import { Avatar, Button, ColorPicker, Dialog, Field, Input, Menu, MenuContent, MenuTrigger } from './ui'
 
 type Tab = 'general' | 'members' | 'roles' | 'statuses' | 'labels' | 'templates' | 'notifications' | 'archive'
 
@@ -302,12 +303,15 @@ function Roles({ b, boardId }: { b: BoardHelpers; boardId: string }) {
       api.post(`/boards/${boardId}/roles`, {
         name: newName.trim(),
         permissions: copyFrom ? (copyFrom === 'all' ? data.all_permissions : data.roles.find((r) => r.id === copyFrom)?.permissions ?? []) : ['comments.create'],
+        // a copy keeps the original's limits too
+        own_cards_only: data.roles.find((r) => r.id === copyFrom)?.own_cards_only ?? false,
+        card_list_ids: data.roles.find((r) => r.id === copyFrom)?.card_list_ids ?? null,
       }),
     onSuccess: () => (setNewName(''), setCopyFrom(''), refresh()),
     onError: toastError,
   })
   const update = useMutation({
-    mutationFn: (r: Partial<Role> & { id: string }) => api.patch(`/roles/${r.id}`, { name: r.name, permissions: r.permissions }),
+    mutationFn: ({ id, ...body }: Partial<Role> & { id: string }) => api.patch(`/roles/${id}`, body),
     onSuccess: refresh,
     onError: toastError,
   })
@@ -414,6 +418,43 @@ function Roles({ b, boardId }: { b: BoardHelpers; boardId: string }) {
               </tbody>
             )
           })}
+          <tbody>
+            <tr className="border-b border-line bg-black/[0.03] dark:bg-white/[0.04]">
+              <td className="p-2" colSpan={data.roles.length + 1}>
+                <span className="flex items-center gap-1.5 whitespace-nowrap pl-5 font-semibold">
+                  <ShieldCheck size={14} /> {t('permGroup.limits')}
+                </span>
+              </td>
+            </tr>
+            <tr className="border-b border-line">
+              <td className="py-1.5 pl-8 pr-2">
+                <div>{t('roles.ownCards')}</div>
+                <div className="text-[11px] text-muted">{t('roles.ownCardsDesc')}</div>
+              </td>
+              {data.roles.map((r) => (
+                <td key={r.id} className="p-2 text-center">
+                  <input
+                    type="checkbox"
+                    checked={!r.is_owner && r.own_cards_only}
+                    disabled={!can || r.is_owner}
+                    onChange={(e) => update.mutate({ id: r.id, own_cards_only: e.target.checked })}
+                    className="h-4 w-4 accent-[var(--color-accent)]"
+                  />
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <td className="py-1.5 pl-8 pr-2">
+                <div>{t('roles.cardColumns')}</div>
+                <div className="text-[11px] text-muted">{t('roles.cardColumnsDesc')}</div>
+              </td>
+              {data.roles.map((r) => (
+                <td key={r.id} className="p-2 text-center">
+                  <ColumnLimit role={r} lists={data.lists} disabled={!can || r.is_owner} onChange={(ids) => update.mutate({ id: r.id, card_list_ids: ids })} />
+                </td>
+              ))}
+            </tr>
+          </tbody>
         </table>
       </div>
       <p className="text-xs text-muted">{t('settings.owner')}</p>
@@ -443,6 +484,50 @@ function Roles({ b, boardId }: { b: BoardHelpers; boardId: string }) {
         </form>
       )}
     </div>
+  )
+}
+
+/** Which columns a role may add cards to: any (null), or a chosen few. At least one stays ticked; "Any column" undoes the limit. */
+function ColumnLimit({ role, lists, disabled, onChange }: { role: Role; lists: List[]; disabled: boolean; onChange: (ids: string[] | null) => void }) {
+  const { t } = useTranslation()
+  const ids = role.is_owner ? null : role.card_list_ids
+  // columns deleted since are simply ignored
+  const picked = ids ? lists.filter((l) => ids.includes(l.id)) : null
+  const text = !picked ? t('roles.anyColumn') : picked.length === 1 ? picked[0].name : t('roles.nColumns', { count: picked.length })
+  const toggle = (id: string) => {
+    if (!picked) return onChange([id])
+    const next = picked.some((l) => l.id === id) ? picked.filter((l) => l.id !== id) : [...picked, { id }]
+    if (next.length) onChange(next.map((l) => l.id))
+  }
+  return (
+    <Menu modal={false}>
+      <MenuTrigger asChild disabled={disabled}>
+        <button
+          className={clsx(
+            'inline-flex max-w-[140px] items-center gap-1 rounded-md border border-line px-2 py-0.5 text-xs',
+            disabled ? 'opacity-60' : 'cursor-pointer hover:bg-black/5 dark:hover:bg-white/10',
+            picked && 'border-accent text-accent',
+          )}
+        >
+          <span className="truncate">{text}</span>
+          {!disabled && <ChevronDown size={12} className="shrink-0" />}
+        </button>
+      </MenuTrigger>
+      <MenuContent>
+        <MItem M={DROP} keepOpen checked={!picked} onSelect={() => picked && onChange(null)}>
+          {t('roles.anyColumn')}
+        </MItem>
+        <MSep M={DROP} />
+        {lists.map((l) => {
+          const on = !!picked?.some((x) => x.id === l.id)
+          return (
+            <MItem key={l.id} M={DROP} keepOpen checked={on} disabled={on && picked!.length === 1} onSelect={() => toggle(l.id)}>
+              <span className="truncate">{l.name}</span>
+            </MItem>
+          )
+        })}
+      </MenuContent>
+    </Menu>
   )
 }
 
@@ -608,6 +693,7 @@ interface ArchivedCard {
   list_name: string
   archived_at: string
   archived_by: string | null
+  created_by: string | null
 }
 
 function ArchivedCards({ b, boardId }: { b: BoardHelpers; boardId: string }) {
@@ -645,12 +731,12 @@ function ArchivedCards({ b, boardId }: { b: BoardHelpers; boardId: string }) {
                 {c.archived_by && ` · ${c.archived_by}`}
               </div>
             </div>
-            {b.can('cards.archive') && (
+            {b.canCard('cards.archive', c) && (
               <Button size="sm" onClick={() => restore.mutate(c.id)}>
                 <ArchiveRestore size={13} /> {t('archive.restore')}
               </Button>
             )}
-            {b.can('cards.delete') && (
+            {b.canCard('cards.delete', c) && (
               <Button size="sm" variant="danger" onClick={() => setPurging(c)} title={t('archive.deleteForever')}>
                 <Trash2 size={13} />
               </Button>
@@ -713,7 +799,7 @@ function ArchivedColumns({ b, boardId }: { b: BoardHelpers; boardId: string }) {
                       <ArchiveRestore size={13} /> {t('archive.restore')}
                     </Button>
                   )}
-                  {b.can('lists.delete') && (l.card_count === 0 || b.can('cards.delete')) && (
+                  {b.can('lists.delete') && (l.card_count === 0 || b.canAll('cards.delete')) && (
                     <Button
                       size="sm"
                       variant="danger"

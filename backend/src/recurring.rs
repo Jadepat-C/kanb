@@ -99,6 +99,16 @@ async fn manage(state: &AppState, u: &crate::auth::User, board_id: Uuid) -> AppR
     board_access(&state.db, u, board_id).await?.require(perms::TEMPLATES_MANAGE)
 }
 
+/// Saving a rule: managing templates, plus being allowed to add cards to the column it fills.
+async fn manage_rule(state: &AppState, u: &crate::auth::User, board_id: Uuid, list_id: Option<Uuid>) -> AppResult<()> {
+    let access = board_access(&state.db, u, board_id).await?;
+    access.require(perms::TEMPLATES_MANAGE)?;
+    match list_id {
+        Some(l) => access.require_create_in(l),
+        None => Ok(()),
+    }
+}
+
 pub async fn for_board(db: &sqlx::PgPool, board_id: Uuid) -> AppResult<Vec<Recurrence>> {
     Ok(sqlx::query_as(sqlf!("SELECT {COLS} FROM card_recurrences WHERE board_id = $1 ORDER BY created_at")).bind(board_id).fetch_all(db).await?)
 }
@@ -172,7 +182,7 @@ async fn build(state: &AppState, board_id: Uuid, mut r: Recurrence, req: Req) ->
 }
 
 pub async fn create(State(state): State<AppState>, CurrentUser(u): CurrentUser, Path(board_id): Path<Uuid>, Json(req): Json<Req>) -> AppResult<Json<Recurrence>> {
-    manage(&state, &u, board_id).await?;
+    manage_rule(&state, &u, board_id, req.list_id).await?;
     let blank = Recurrence {
         id: Uuid::now_v7(),
         template_id: Uuid::nil(),
@@ -221,7 +231,7 @@ async fn load(state: &AppState, id: Uuid) -> AppResult<(Uuid, Recurrence)> {
 
 pub async fn update(State(state): State<AppState>, CurrentUser(u): CurrentUser, Path(id): Path<Uuid>, Json(req): Json<Req>) -> AppResult<Json<Recurrence>> {
     let (board_id, old) = load(&state, id).await?;
-    manage(&state, &u, board_id).await?;
+    manage_rule(&state, &u, board_id, req.list_id).await?;
     let r = build(&state, board_id, old, req).await?;
     let saved: Recurrence = sqlx::query_as(sqlf!(
         "UPDATE card_recurrences SET template_id = $2, list_id = $3, freq = $4, every = $5, weekdays = $6, month_day = $7,

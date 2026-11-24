@@ -21,8 +21,13 @@ export function useMe() {
   })
   useEffect(() => {
     const h = () => qc.setQueryData(['me'], null)
+    const stale = () => qc.invalidateQueries({ queryKey: ['me'] })
     window.addEventListener('kanban:unauthorized', h)
-    return () => window.removeEventListener('kanban:unauthorized', h)
+    window.addEventListener('kanban:me-stale', stale)
+    return () => {
+      window.removeEventListener('kanban:unauthorized', h)
+      window.removeEventListener('kanban:me-stale', stale)
+    }
   }, [qc])
   // the server-side preference wins once signed in
   useEffect(() => {

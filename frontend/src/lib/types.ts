@@ -13,6 +13,10 @@ export interface User {
   theme: Theme
   avatar_color: string
   must_change_password: boolean
+  /** last time the account used Kanb (null = not recorded yet, not "never") */
+  last_seen_at: string | null
+  /** an admin requires two-factor sign-in for everyone */
+  require_2fa: boolean
   avatar_id: string | null
   notify_email: boolean
   totp_enabled: boolean
@@ -112,6 +116,8 @@ export interface CardSummary {
   depends_on: string[]
   comment_count: number
   attachment_count: number
+  /** who made it (for roles limited to their own cards) */
+  created_by: string | null
   excerpt: string
   checklist_total: number
   checklist_done: number
@@ -137,6 +143,10 @@ export interface Role {
   name: string
   permissions: string[]
   is_owner: boolean
+  /** card and attachment permissions only cover cards the member created */
+  own_cards_only: boolean
+  /** columns the role may add cards to (null = any) */
+  card_list_ids: string[] | null
 }
 
 export interface CardTemplate {
@@ -162,6 +172,9 @@ export interface BoardDetail {
   board: Board
   my_permissions: string[]
   my_role_id: string | null
+  my_own_cards_only: boolean
+  /** columns I may add cards to (null = any) */
+  my_card_list_ids: string[] | null
   all_permissions: string[]
   permission_groups?: [string, string[]][]
   lists: List[]

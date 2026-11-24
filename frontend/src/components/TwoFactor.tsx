@@ -26,6 +26,7 @@ export function TwoFactorSection({ me }: { me: User }) {
         )}
       </div>
       <p className="text-sm text-muted">{me.totp_enabled ? t('twofa.onHint') : t('twofa.offHint')}</p>
+      {me.require_2fa && <p className="text-xs text-muted">{t('twofa.requiredNote')}</p>}
       <div className="flex flex-wrap gap-2">
         {me.totp_enabled ? (
           <>
@@ -33,9 +34,12 @@ export function TwoFactorSection({ me }: { me: User }) {
               <Smartphone size={14} /> {t('twofa.changeDevice')}
             </Button>
             <Button onClick={() => setDialog('codes')}>{t('twofa.newCodes')}</Button>
-            <Button variant="danger" onClick={() => setDialog('disable')}>
-              {t('twofa.turnOff')}
-            </Button>
+            {/* while an admin requires it, it can't be turned off */}
+            {!me.require_2fa && (
+              <Button variant="danger" onClick={() => setDialog('disable')}>
+                {t('twofa.turnOff')}
+              </Button>
+            )}
           </>
         ) : (
           <Button variant="primary" onClick={() => setDialog('setup')}>
@@ -49,7 +53,11 @@ export function TwoFactorSection({ me }: { me: User }) {
   )
 }
 
-function SetupDialog({ me, onClose }: { me: User; onClose: () => void }) {
+/**
+ * `holdMe`: leave the cached /me alone until the dialog closes. On the forced-setup screen, marking 2FA as on right
+ * away would let the app in at once and take the recovery codes off the screen before they're saved.
+ */
+export function SetupDialog({ me, onClose, holdMe }: { me: User; onClose: () => void; holdMe?: boolean }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [setup, setSetup] = useState<{ qr_svg: string; secret: string } | null>(null)
@@ -74,7 +82,7 @@ function SetupDialog({ me, onClose }: { me: User; onClose: () => void }) {
     try {
       const r = await api.post<{ recovery_codes: string[] }>('/me/2fa/enable', { code, password: needPassword ? password : undefined })
       setCodes(r.recovery_codes)
-      qc.setQueryData<User>(['me'], (u) => u && { ...u, totp_enabled: true })
+      if (!holdMe) qc.setQueryData<User>(['me'], (u) => u && { ...u, totp_enabled: true })
     } catch (e) {
       setErr(errorText(e))
     } finally {

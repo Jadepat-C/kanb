@@ -16,6 +16,10 @@ WORKDIR /src
 COPY backend/Cargo.toml backend/Cargo.lock ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src target/release/kanban target/release/deps/kanban* target/release/.fingerprint/kanban-*
 COPY backend/ ./
+# shown under Admin → System; set from the git tag by the release workflow (after the dependency step, so a new
+# version doesn't rebuild the dependencies)
+ARG KANB_VERSION=dev
+ENV KANB_VERSION=${KANB_VERSION}
 # COPY keeps old mtimes, which would make cargo think the placeholder build is still fresh
 RUN touch src/main.rs && cargo build --release
 # Rust's musl target links everything in: one self-contained binary that needs no system C library

@@ -19,12 +19,35 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use axum_extra::extract::CookieJar;
+use sqlx::PgPool;
+
 use crate::{
     AppState,
     auth::{CurrentUser, User},
     error::AppResult,
     perms::board_access,
 };
+
+/// An open socket re-checks its sign-in this often, so signing someone out (or deactivating them) also ends the
+/// live updates in tabs they already had open.
+const RECHECK: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn session_of(jar: &CookieJar) -> String {
+    jar.get(crate::auth::COOKIE_NAME).map(|c| crate::auth::token_hash(c.value())).unwrap_or_default()
+}
+
+/// Still signed in: the session exists and the account is active. A database error counts as yes (try again later).
+async fn still_signed_in(db: &PgPool, session: &str) -> bool {
+    sqlx::query_as::<_, (i32,)>(
+        "SELECT 1 FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now() AND u.is_active",
+    )
+    .bind(session)
+    .fetch_optional(db)
+    .await
+    .map(|r| r.is_some())
+    .unwrap_or(true)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Viewer {
@@ -115,15 +138,18 @@ impl Hub {
 pub async fn board_ws(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
+    jar: CookieJar,
     Path(board_id): Path<Uuid>,
     ws: WebSocketUpgrade,
 ) -> AppResult<Response> {
     board_access(&state.db, &user, board_id).await?;
     let hub = state.hub.clone();
-    Ok(ws.on_upgrade(move |socket| pump(socket, hub, board_id, user)))
+    let (db, session) = (state.db.clone(), session_of(&jar));
+    Ok(ws.on_upgrade(move |socket| pump(socket, hub, board_id, user, db, session)))
 }
 
-async fn pump(mut socket: WebSocket, hub: Hub, board_id: Uuid, user: User) {
+async fn pump(mut socket: WebSocket, hub: Hub, board_id: Uuid, user: User, db: PgPool, session: String) {
+    let mut recheck = tokio::time::interval_at(tokio::time::Instant::now() + RECHECK, RECHECK);
     let _open = crate::metrics::Socket::open("board");
     let mut rx = hub.tx.subscribe();
     let conn = Uuid::new_v4();
@@ -140,6 +166,9 @@ async fn pump(mut socket: WebSocket, hub: Hub, board_id: Uuid, user: User) {
     hub.set(board_id, me.clone());
     loop {
         tokio::select! {
+            _ = recheck.tick() => {
+                if !still_signed_in(&db, &session).await { break; }
+            }
             ev = rx.recv() => match ev {
                 Ok(ev) if ev.board() == Some(board_id) => {
                     let text = serde_json::to_string(&ev).unwrap_or_default();
@@ -171,12 +200,17 @@ async fn pump(mut socket: WebSocket, hub: Hub, board_id: Uuid, user: User) {
 }
 
 /// Per-user socket: pushes a ping whenever the user gets a notification (the browser then refetches).
-pub async fn user_ws(State(state): State<AppState>, CurrentUser(user): CurrentUser, ws: WebSocketUpgrade) -> Response {
+pub async fn user_ws(State(state): State<AppState>, CurrentUser(user): CurrentUser, jar: CookieJar, ws: WebSocketUpgrade) -> Response {
     let mut rx = state.hub.tx.subscribe();
+    let (db, session) = (state.db.clone(), session_of(&jar));
     ws.on_upgrade(move |mut socket| async move {
         let _open = crate::metrics::Socket::open("user");
+        let mut recheck = tokio::time::interval_at(tokio::time::Instant::now() + RECHECK, RECHECK);
         loop {
             tokio::select! {
+                _ = recheck.tick() => {
+                    if !still_signed_in(&db, &session).await { break; }
+                }
                 ev = rx.recv() => match ev {
                     Ok(Out::Notify { user_id }) if user_id == user.id => {
                         if socket.send(Message::Text(r#"{"type":"notify"}"#.into())).await.is_err() { break; }

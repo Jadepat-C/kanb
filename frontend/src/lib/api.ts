@@ -34,6 +34,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     if (res.status === 401 && !path.startsWith('/auth/') && path !== '/me') {
       window.dispatchEvent(new Event('kanban:unauthorized'))
     }
+    // two-factor sign-in became required while signed in: reload /me, which then shows the setup screen
+    if (res.status === 403 && code === 'two_factor_required') window.dispatchEvent(new Event('kanban:me-stale'))
     throw new ApiError(res.status, code, data)
   }
   const text = await res.text()

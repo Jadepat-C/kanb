@@ -46,6 +46,7 @@ export interface MenuCard {
   label_ids?: string[]
   assignee_ids?: string[]
   color?: string | null
+  created_by?: string | null
 }
 
 /** Same time of day as before (09:00 if there was none), on today + `days`. */
@@ -88,7 +89,11 @@ export function CardContextMenu({
   const [renaming, setRenaming] = useState(false)
   const [purging, setPurging] = useState(false)
   const calendar = useCalendarPick()
-  const can = (p: string) => (b ? b.can(p) : p === 'cards.edit' ? !!canEdit : true) // server enforces the rest
+  // with board data: this card's permissions (some roles only change their own cards); the server enforces the rest
+  const can = (p: string) => (b ? b.canCard(p, { created_by: card.created_by ?? null }) : p === 'cards.edit' ? !!canEdit : true)
+  const canCreate = b ? b.can('cards.create') : true
+  // a copy lands in the same column
+  const canDuplicate = b ? !!card.list_id && b.canCreateIn(card.list_id) : true
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['board', card.board_id] })
@@ -126,12 +131,12 @@ export function CardContextMenu({
         </MItem>
       )}
       <MSep M={M} />
-      {onNew && can('cards.create') && (
+      {onNew && canCreate && (
         <MItem M={M} onSelect={onNew}>
           <Plus size={14} /> {t('menu.newCard')}
         </MItem>
       )}
-      {can('cards.create') && (
+      {canDuplicate && (
         <MItem
           M={M}
           onSelect={() => run.mutate(() => api.post(`/cards/${card.id}/duplicate`).then(() => toastSuccess(t('toast.duplicated', { title: card.title }))))}
@@ -139,7 +144,7 @@ export function CardContextMenu({
           <CopyPlus size={14} /> {t('menu.duplicate')}
         </MItem>
       )}
-      {can('cards.create') && b && (
+      {canCreate && b && (
         <MItem
           M={M}
           onSelect={async () => {
@@ -166,7 +171,7 @@ export function CardContextMenu({
         <CalendarCheck size={14} /> {calendar.picked.has(card.id) ? t('feed.removeCard') : t('feed.addCard')}
       </MItem>
 
-      {(data || can('cards.edit') || can('cards.due')) && <MSep M={M} />}
+      {(can('cards.edit') || can('cards.due') || (data && (can('cards.move') || can('cards.status') || can('cards.labels') || can('cards.assign')))) && <MSep M={M} />}
       {data && card.list_id && can('cards.move') && (
         <MSub M={M} icon={<ArrowRightLeft size={14} />} label={t('menu.moveTo')}>
           {data.lists.map((l) => (

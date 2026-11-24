@@ -35,6 +35,7 @@ ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 ROLES = ["anon", "outsider", "viewer", "commenter", "editor", "owner"]
 RUN = secrets.token_hex(3)
+PASSWORDS: list = []  # every password the test sets, to check none ends up in the activity log
 VERBOSE = os.environ.get("VERBOSE") == "1"
 
 
@@ -113,6 +114,7 @@ def make_user(admin: Client, role: str) -> Client:
     c = Client(username)
     c.ok("POST", "/auth/login", {"username": username, "password": first})
     final = "Authz-" + secrets.token_hex(8)
+    PASSWORDS.extend([first, final])
     c.ok("POST", "/me/password", {"current_password": first, "new_password": final})  # admin-set passwords must be changed first
     return login(username, final)
 
@@ -203,6 +205,11 @@ def fresh(w: World, kind: str) -> dict:
         return {"recurrence": o.ok("POST", f"/boards/{f['board']}/recurrences", {"template_id": f["template"], "list_id": f["list"], "freq": "daily", "every": 1, "at_time": "09:00", "enabled": False})["id"]}
     if kind == "board_contact":
         return {"board_contact": o.ok("POST", f"/boards/{f['board']}/contact-points", {"kind": "webhook", "name": "t", "config": {"url": "https://example.com/t"}, "enabled": False})["id"]}
+    if kind in ("tuser", "session"):  # a throwaway signed-in account (signing it out must not touch the test's people)
+        u = make_user(w.admin, "t" + secrets.token_hex(2))
+        if kind == "tuser":
+            return {"tuser": u.id}
+        return {"session": w.admin.ok("GET", f"/admin/users/{u.id}/sessions")[0]["id"]}
     if kind == "member":  # the extra person on the board, to be changed or removed
         o.call("DELETE", f"/boards/{f['board']}/members/{w.extra.id}")
         o.ok("POST", f"/boards/{f['board']}/members", {"user_id": w.extra.id, "role_id": f["role_viewer"]})
@@ -308,6 +315,20 @@ CASES = [
     Case("GET", "/admin/users", "admin"),
     Case("GET", "/admin/email", "admin"),
     Case("GET", "/admin/notifications", "admin"),
+    Case("GET", "/admin/storage", "admin"),
+    Case("GET", "/admin/security", "admin"),
+    Case("GET", "/admin/audit", "admin"),
+    Case("GET", "/admin/audit?topic=failed", "admin"),
+    Case("GET", "/admin/users/{extra_id}/sessions", "admin"),
+    Case("DELETE", "/admin/users/{tuser}/sessions", "admin", fresh="tuser"),
+    Case("DELETE", "/admin/sessions/{session}", "admin", fresh="session"),
+    Case("GET", "/admin/boards", "admin"),
+    Case("POST", "/admin/boards/{board}/owners", "admin", {"user_id": "{extra_id}"}, fresh="board"),
+    Case("GET", "/admin/system", "admin"),
+    Case("GET", "/admin/announcement", "admin"),
+    Case("PUT", "/admin/announcement", "admin", {"text": "", "level": "info"}),
+    Case("GET", "/announcement", "outsider"),
+    Case("PUT", "/admin/security", "admin", {"require_2fa": False}),
     Case("GET", "/admin/users/{extra_id}/delete-preview", "admin"),
     Case("PATCH", "/admin/users/{extra_id}", "admin", {"display_name": "authz extra"}),
     Case("POST", "/admin/users", "admin", {"username": "authz_" + RUN + "_nope", "display_name": "", "password": "Nope-12345678", "is_super_admin": True, "can_create_boards": True, "send_invite": False}),
@@ -436,6 +457,15 @@ def main() -> int:
             checked += 1
             if (st == 101) != expect:
                 problems.append(f"board WebSocket as {who}: got {st}, expected {'101' if expect else 'refusal'}")
+        # 5. the activity log: sign-ins and failed sign-ins are recorded, passwords never are
+        n, msgs = activity_log(w)
+        checked += n
+        problems.extend(msgs)
+
+        # 6. role limits: "only their own cards" and "columns for new cards"
+        n, msgs = role_limits(w, f)
+        checked += n
+        problems.extend(msgs)
     finally:
         if os.environ.get("KEEP") == "1":
             print(f"KEEP=1: left the test users authz_{RUN}_* and their boards in place")
@@ -452,6 +482,131 @@ def main() -> int:
         return 1
     print("all permission checks passed")
     return 0
+
+
+def activity_log(w: World):
+    problems = []
+    victim = w.people["viewer"]
+    Client("anon").call("POST", "/auth/login", {"username": victim.name, "password": "wrong-" + secrets.token_hex(4)})
+    Client("anon").call("POST", "/auth/login", {"username": f"nobody_{RUN}", "password": "wrong"})
+    entries, before = [], None
+    for _ in range(20):  # newest first, 100 per page
+        page = w.admin.ok("GET", "/admin/audit" + (f"?before={before}" if before else ""))
+        entries += page["entries"]
+        if not page["more"]:
+            break
+        before = page["entries"][-1]["id"]
+    if not any(e["kind"] == "sign_in" and e["actor_id"] == victim.id for e in entries):
+        problems.append("activity log: no sign-in entry for a test user")
+    if not any(e["kind"] == "sign_in_failed" and e["target_id"] == victim.id for e in entries):
+        problems.append("activity log: a failed sign-in on a known account wasn't recorded")
+    if not any(e["kind"] == "sign_in_failed" and e["data"].get("typed") == f"nobody_{RUN}" for e in entries):
+        problems.append("activity log: a failed sign-in with an unknown name wasn't recorded")
+    dump = json.dumps(entries)
+    if any(p in dump for p in PASSWORDS):
+        problems.append("activity log: an entry contains a password")
+    return 4, problems
+
+
+def role_limits(w: World, f: dict):
+    """The extra person gets an Editor-like role limited to their own cards and to the first column."""
+    o, me = w.people["owner"], w.extra
+    problems, checked = [], 0
+
+    def expect(label: str, status: int, ok: bool, data: Any = None):
+        nonlocal checked
+        checked += 1
+        if ok and not 200 <= status < 300:
+            problems.append(f"role limits: {label}: expected success, got {status} {data}")
+        elif not ok and status not in (403, 404):
+            problems.append(f"role limits: {label}: expected refusal, got {status} {data}")
+        elif VERBOSE:
+            print(f"  ok  role limits: {label} -> {status}")
+
+    editor = next(r for r in o.ok("GET", f"/boards/{f['board']}")["roles"] if r["name"] == "Editor")
+    role = o.ok("POST", f"/boards/{f['board']}/roles", {"name": "Limited " + RUN, "permissions": editor["permissions"],
+                                                         "own_cards_only": True, "card_list_ids": [f["list"]]})
+    o.call("DELETE", f"/boards/{f['board']}/members/{me.id}")
+    o.ok("POST", f"/boards/{f['board']}/members", {"user_id": me.id, "role_id": role["id"]})
+
+    # bad role settings
+    st, d = o.call("PATCH", f"/roles/{role['id']}", {"card_list_ids": [f["x_list"]]})
+    expect("limit a role to another board's column", 403 if st == 400 else st, False, d)
+    owner_role = next(r for r in o.ok("GET", f"/boards/{f['board']}")["roles"] if r["is_owner"])
+    st, d = o.call("PATCH", f"/roles/{owner_role['id']}", {"own_cards_only": True})
+    expect("limit the Owner role", 403 if st == 400 else st, False, d)
+
+    b = me.ok("GET", f"/boards/{f['board']}")
+    checked += 1
+    if not (b.get("my_own_cards_only") is True and b.get("my_card_list_ids") == [f["list"]]):
+        problems.append(f"role limits: board detail doesn't report my limits: {b.get('my_own_cards_only')} {b.get('my_card_list_ids')}")
+
+    # new cards: only in the allowed column
+    st, mine = me.call("POST", f"/lists/{f['list']}/cards", {"title": "mine", "description": ""})
+    expect("create a card in the allowed column", st, True, mine)
+    st, d = me.call("POST", f"/lists/{f['list2']}/cards", {"title": "nope", "description": ""})
+    expect("create a card in another column", st, False, d)
+    st, d = me.call("POST", f"/lists/{f['list2']}/cards", {"title": "", "description": "", "template_id": f["template"]})
+    expect("create from a template in another column", st, False, d)
+    theirs2 = o.ok("POST", f"/lists/{f['list2']}/cards", {"title": "owner's, column two", "description": ""})["id"]
+    st, d = me.call("POST", f"/cards/{theirs2}/duplicate")
+    expect("duplicate a card into another column", st, False, d)
+    st, d = me.call("POST", f"/boards/{f['board']}/recurrences", {"template_id": f["template"], "list_id": f["list2"], "freq": "daily", "every": 1, "at_time": "09:00", "enabled": False})
+    expect("repeat cards into another column", st, False, d)
+    st, d = me.call("POST", f"/boards/{f['board']}/recurrences", {"template_id": f["template"], "list_id": f["list"], "freq": "daily", "every": 1, "at_time": "09:00", "enabled": False})
+    expect("repeat cards into the allowed column", st, True, d)
+    mine = mine["id"]
+
+    # someone else's card: no changes, but comments are fine
+    theirs = o.ok("POST", f"/lists/{f['list']}/cards", {"title": "owner's", "description": ""})["id"]
+    status, att = o.upload(f"/cards/{theirs}/attachments", "theirs.txt", b"x")
+    def card_calls(c: str):
+        return [
+            ("rename", "PATCH", f"/cards/{c}", {"title": "changed"}),
+            ("set the status", "PATCH", f"/cards/{c}", {"status_id": f["status"]}),
+            ("set the due date", "PATCH", f"/cards/{c}", {"due_at": "2031-01-01T09:00:00Z"}),
+            ("move", "POST", f"/cards/{c}/move", {"list_id": f["list2"], "index": 0}),
+            ("set labels", "PUT", f"/cards/{c}/labels", {"ids": [f["label"]]}),
+            ("assign", "PUT", f"/cards/{c}/assignees", {"ids": [me.id]}),
+            ("set dependencies", "PUT", f"/cards/{c}/dependencies", {"ids": [f["card"]]}),
+        ]
+    for label, m, path, body in card_calls(theirs):
+        st, d = me.call(m, path, body)
+        expect(f"{label} someone else's card", st, False, d)
+    st, d = me.upload(f"/cards/{theirs}/attachments", "x.txt", b"x")
+    expect("attach a file to someone else's card", st, False, d)
+    st, d = me.call("DELETE", f"/attachments/{att['id']}")
+    expect("delete a file on someone else's card", st, False, d)
+    st, d = me.call("POST", f"/cards/{theirs}/comments", {"body": "a comment"})
+    expect("comment on someone else's card", st, True, d)
+    st, d = me.call("DELETE", f"/cards/{theirs}")
+    expect("archive someone else's card", st, False, d)
+    o.ok("DELETE", f"/cards/{theirs}")
+    st, d = me.call("POST", f"/cards/{theirs}/restore")
+    expect("restore someone else's card", st, False, d)
+    st, d = me.call("DELETE", f"/cards/{theirs}/permanent")
+    expect("delete someone else's card", st, False, d)
+    st, d = me.call("POST", f"/lists/{f['list']}/sort", {"by": "title"})
+    expect("sort a whole column", st, False, d)
+
+    # their own card: everything
+    for label, m, path, body in card_calls(mine):
+        st, d = me.call(m, path, body)
+        expect(f"{label} their own card", st, True, d)
+    st, d = me.upload(f"/cards/{mine}/attachments", "mine.txt", b"x")
+    expect("attach a file to their own card", st, True, d)
+    for label, m, path in (("archive", "DELETE", f"/cards/{mine}"), ("restore", "POST", f"/cards/{mine}/restore"),
+                           ("archive again", "DELETE", f"/cards/{mine}"), ("delete", "DELETE", f"/cards/{mine}/permanent")):
+        st, d = me.call(m, path)
+        expect(f"{label} their own card", st, True, d)
+
+    # taking the limits off restores the role's full rights
+    o.ok("PATCH", f"/roles/{role['id']}", {"own_cards_only": False, "card_list_ids": None})
+    st, d = me.call("POST", f"/lists/{f['list2']}/cards", {"title": "now allowed", "description": ""})
+    expect("create in another column after the limit is lifted", st, True, d)
+    st, d = me.call("PATCH", f"/cards/{theirs2}", {"title": "now allowed"})
+    expect("edit someone else's card after the limit is lifted", st, True, d)
+    return checked, problems
 
 
 def cleanup(w: World, prefix: str = ""):

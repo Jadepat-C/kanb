@@ -102,7 +102,12 @@ pub struct CodeReq {
 }
 
 /// Step 2: confirm a code from the app → 2FA is on; returns the recovery codes (shown once).
-pub async fn enable(State(state): State<AppState>, CurrentUser(u): CurrentUser, Json(r): Json<CodeReq>) -> AppResult<Json<Value>> {
+pub async fn enable(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
+    Json(r): Json<CodeReq>,
+) -> AppResult<Json<Value>> {
     // switching to a new phone while 2FA is on: the password too, so an unlocked screen isn't enough
     if u.totp_enabled {
         confirm(&state, &u, &ConfirmReq { code: None, password: r.password.clone() }).await?;
@@ -123,6 +128,7 @@ pub async fn enable(State(state): State<AppState>, CurrentUser(u): CurrentUser, 
     .execute(&state.db)
     .await?;
     tracing::info!(user = %u.username, "two-factor sign-in turned on");
+    crate::audit::log(&state, Some(u.id), "twofa_enabled", Some(u.id), ip.as_deref(), json!({ "new_phone": u.totp_enabled })).await;
     Ok(Json(json!({ "ok": true, "recovery_codes": plain })))
 }
 
@@ -156,10 +162,20 @@ async fn confirm(state: &AppState, u: &User, r: &ConfirmReq) -> AppResult<()> {
     Err(AppError::BadRequest("invalid_credentials"))
 }
 
-pub async fn disable(State(state): State<AppState>, CurrentUser(u): CurrentUser, Json(r): Json<ConfirmReq>) -> AppResult<Json<Value>> {
+pub async fn disable(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
+    Json(r): Json<ConfirmReq>,
+) -> AppResult<Json<Value>> {
+    // while an admin requires it, it stays on (switching phones still works; an admin can reset a lost one)
+    if u.require_2fa {
+        return Err(AppError::BadRequest("twofa_required"));
+    }
     confirm(&state, &u, &r).await?;
     clear(&state, u.id).await?;
     tracing::info!(user = %u.username, "two-factor sign-in turned off by the user");
+    crate::audit::log(&state, Some(u.id), "twofa_disabled", Some(u.id), ip.as_deref(), json!({})).await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -186,10 +202,16 @@ pub async fn clear(state: &AppState, user_id: Uuid) -> AppResult<()> {
 }
 
 /// Admin page: for a lost or replaced phone. The user signs in with just the password and can set it up again.
-pub async fn admin_reset(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, Path(id): Path<Uuid>) -> AppResult<Json<Value>> {
+pub async fn admin_reset(
+    State(state): State<AppState>,
+    SuperAdmin(me): SuperAdmin,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Value>> {
     let (username,): (String,) = sqlx::query_as("SELECT username FROM users WHERE id = $1 AND deleted_at IS NULL").bind(id).fetch_one(&state.db).await?;
     clear(&state, id).await?;
     tracing::info!(user = %username, by = %me.username, "two-factor sign-in reset by an admin");
+    crate::audit::log(&state, Some(me.id), "user_twofa_reset", Some(id), ip.as_deref(), json!({})).await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -246,8 +268,8 @@ pub async fn login_code(
         return Err(AppError::BadRequest("totp_expired"));
     };
     // a ticket allows 5 codes, but someone with the password could keep asking for new tickets: limit per account too
-    let account = format!("code-account:{uid}");
-    state.throttle.check(&account, throttle::CODE_ACCOUNT)?;
+    let limit_key = format!("code-account:{uid}");
+    state.throttle.check(&limit_key, throttle::CODE_ACCOUNT)?;
     let (username, email, secret, last, recovery): (String, Option<String>, Option<String>, Option<i64>, Vec<String>) = sqlx::query_as(
         "SELECT username, email, totp_secret, totp_last_step, totp_recovery FROM users WHERE id = $1 AND is_active AND deleted_at IS NULL",
     )
@@ -274,14 +296,21 @@ pub async fn login_code(
         }
         used
     };
+    let client = throttle::client_ip(peer, &headers, state.config.trust_proxy).to_string();
+    let method = if ok && check(&secret, &account, &r.code, None)?.is_none() { "recovery" } else { "totp" };
     if !ok {
         state.throttle.hit(&ip, throttle::LOGIN_IP);
-        state.throttle.hit(&account, throttle::CODE_ACCOUNT);
+        // (this used to count under the account's email instead of the key checked above, so the per-account limit never kicked in)
+        state.throttle.hit(&limit_key, throttle::CODE_ACCOUNT);
         tracing::warn!(user = %username, "wrong two-factor code");
         crate::metrics::sign_in("two_factor_failed");
+        crate::audit::log(&state, None, "totp_failed", Some(uid), Some(&client), json!({})).await;
         return Err(AppError::SignInFailed("totp_invalid"));
     }
-    state.throttle.clear(&account);
+    state.throttle.clear(&limit_key);
     sqlx::query("DELETE FROM login_challenges WHERE user_id = $1").bind(uid).execute(&state.db).await?;
-    crate::auth::start_session(&state, uid, &headers, jar).await
+    if method == "recovery" {
+        crate::audit::log(&state, Some(uid), "recovery_code_used", Some(uid), Some(&client), json!({})).await;
+    }
+    crate::auth::start_session(&state, uid, &headers, jar, Some(&client), method).await
 }

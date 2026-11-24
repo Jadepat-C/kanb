@@ -43,12 +43,18 @@ pub struct User {
     pub notify_email: bool,
     /// two-factor sign-in (authenticator app) is on
     pub totp_enabled: bool,
+    /// last time the account used Kanb (None = not recorded yet, not "never")
+    pub last_seen_at: Option<DateTime<Utc>>,
+    /// an admin requires two-factor sign-in for everyone (see admin::SECURITY_KEY)
+    pub require_2fa: bool,
     pub created_at: DateTime<Utc>,
 }
 
 pub const USER_COLUMNS: &str = "id, username, display_name, email, is_super_admin, can_create_boards, \
      is_active, locale, theme, avatar_color, must_change_password, avatar_id, notify_email, \
-     (totp_enabled_at IS NOT NULL) AS totp_enabled, created_at";
+     (totp_enabled_at IS NOT NULL) AS totp_enabled, last_seen_at, \
+     COALESCE((SELECT (value->>'require_2fa')::boolean FROM app_settings WHERE key = 'security'), false) AS require_2fa, \
+     created_at";
 
 /// How a user's name is shown in history: "Name · @username"; deleted accounts read "[Deleted User] Name (username)".
 /// Use with the users table aliased as `u`.
@@ -166,6 +172,7 @@ impl FromRequestParts<AppState> for CurrentUser {
                 .bind(state.config.session_days as i32)
                 .execute(&state.db)
                 .await?;
+            sqlx::query("UPDATE users SET last_seen_at = now() WHERE id = $1").bind(user.id).execute(&state.db).await?;
         }
         // Until an admin-set password has been replaced, only "change my password" (and reading /me) works.
         if user.must_change_password {
@@ -177,6 +184,17 @@ impl FromRequestParts<AppState> for CurrentUser {
             let allowed = ["/api/me", "/api/me/password", "/api/auth/logout", "/me", "/me/password", "/auth/logout"];
             if !allowed.contains(&path.as_str()) {
                 return Err(AppError::Forbidden);
+            }
+        } else if user.require_2fa && !user.totp_enabled {
+            // two-factor sign-in is required: until it's set up, only setting it up (and reading /me) works
+            let path = parts
+                .extensions
+                .get::<axum::extract::OriginalUri>()
+                .map(|u| u.path().to_string())
+                .unwrap_or_else(|| parts.uri.path().to_string());
+            let path = path.strip_prefix("/api").unwrap_or(&path);
+            if !["/me", "/me/2fa/setup", "/me/2fa/enable", "/auth/logout"].contains(&path) {
+                return Err(AppError::TwoFactorRequired);
             }
         }
         let cu = CurrentUser(user);
@@ -268,10 +286,17 @@ pub async fn login(
             false
         }
     };
+    let client = throttle::client_ip(peer, &headers, state.config.trust_proxy).to_string();
     if !ok {
         state.throttle.hit(&ip, throttle::LOGIN_IP);
         state.throttle.hit(&account, throttle::LOGIN_ACCOUNT);
         tracing::warn!(username = %req.username, "failed login");
+        // a known account by id; for an unknown name only a short copy of what was typed
+        let data = match &row {
+            Some(_) => serde_json::json!({}),
+            None => serde_json::json!({ "typed": req.username.trim().chars().take(40).collect::<String>() }),
+        };
+        crate::audit::log(&state, None, "sign_in_failed", row.as_ref().map(|r| r.0), Some(&client), data).await;
         crate::metrics::sign_in("failed");
         return Err(AppError::SignInFailed("invalid_credentials"));
     }
@@ -282,22 +307,36 @@ pub async fn login(
         let ticket = crate::twofa::start_challenge(&state, user_id).await?;
         return Ok((jar, Json(serde_json::json!({ "totp_required": true, "ticket": ticket }))));
     }
-    let (jar, Json(user)) = start_session(&state, user_id, &headers, jar).await?;
+    let (jar, Json(user)) = start_session(&state, user_id, &headers, jar, Some(&client), "password").await?;
     Ok((jar, Json(serde_json::to_value(user).map_err(|e| anyhow::anyhow!(e))?)))
 }
 
-/// Signs the user in: new session row + cookie.
-pub async fn start_session(state: &AppState, user_id: Uuid, headers: &HeaderMap, jar: CookieJar) -> AppResult<(CookieJar, Json<User>)> {
+/// Signs the user in: new session row + cookie, "last active", and a sign-in entry in the activity log.
+/// `method`: password | totp | recovery | setup.
+pub async fn start_session(
+    state: &AppState,
+    user_id: Uuid,
+    headers: &HeaderMap,
+    jar: CookieJar,
+    ip: Option<&str>,
+    method: &str,
+) -> AppResult<(CookieJar, Json<User>)> {
     crate::metrics::sign_in("ok");
     let token = new_token();
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).map(|s| s.chars().take(300).collect::<String>());
-    sqlx::query("INSERT INTO sessions (token_hash, user_id, user_agent, expires_at) VALUES ($1, $2, $3, now() + make_interval(days => $4))")
-        .bind(token_hash(&token))
-        .bind(user_id)
-        .bind(ua)
-        .bind(state.config.session_days as i32)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "INSERT INTO sessions (token_hash, user_id, user_agent, ip, expires_at) VALUES ($1, $2, $3, $4, now() + make_interval(days => $5))",
+    )
+    .bind(token_hash(&token))
+    .bind(user_id)
+    .bind(&ua)
+    .bind(ip)
+    .bind(state.config.session_days as i32)
+    .execute(&state.db)
+    .await?;
+    sqlx::query("UPDATE users SET last_seen_at = now() WHERE id = $1").bind(user_id).execute(&state.db).await?;
+    crate::audit::log(state, Some(user_id), "sign_in", Some(user_id), ip, serde_json::json!({ "method": method, "device": ua.map(|u| device_name(&u)) }))
+        .await;
     // opportunistic cleanup
     sqlx::query("DELETE FROM sessions WHERE expires_at < now()").execute(&state.db).await?;
 
@@ -319,12 +358,15 @@ fn time_days(d: i64) -> time::Duration {
     time::Duration::days(d)
 }
 
-pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> AppResult<CookieJar> {
+pub async fn logout(State(state): State<AppState>, crate::audit::ClientIp(ip): crate::audit::ClientIp, jar: CookieJar) -> AppResult<CookieJar> {
     if let Some(c) = jar.get(COOKIE_NAME) {
-        sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
+        let gone: Option<(Uuid,)> = sqlx::query_as("DELETE FROM sessions WHERE token_hash = $1 RETURNING user_id")
             .bind(token_hash(c.value()))
-            .execute(&state.db)
+            .fetch_optional(&state.db)
             .await?;
+        if let Some((uid,)) = gone {
+            crate::audit::log(&state, Some(uid), "sign_out", Some(uid), ip.as_deref(), serde_json::json!({})).await;
+        }
     }
     Ok(jar.remove(Cookie::build(COOKIE_NAME).path("/")))
 }
@@ -395,6 +437,7 @@ pub struct ChangePassword {
 pub async fn change_password(
     State(state): State<AppState>,
     CurrentUser(u): CurrentUser,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
     jar: CookieJar,
     Json(req): Json<ChangePassword>,
 ) -> AppResult<Json<serde_json::Value>> {
@@ -427,6 +470,7 @@ pub async fn change_password(
         .bind(current)
         .execute(&state.db)
         .await?;
+    crate::audit::log(&state, Some(u.id), "password_changed", Some(u.id), ip.as_deref(), serde_json::json!({ "forced": u.must_change_password })).await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -590,5 +634,56 @@ pub async fn reset(
     sqlx::query("UPDATE password_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL").bind(uid).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM sessions WHERE user_id = $1").bind(uid).execute(&mut *tx).await?;
     tx.commit().await?;
+    let client = throttle::client_ip(peer, &headers, state.config.trust_proxy).to_string();
+    crate::audit::log(&state, Some(uid), "password_reset", Some(uid), Some(&client), serde_json::json!({})).await;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// "Firefox on Windows" from a User-Agent header, for the devices list and the activity log.
+pub fn device_name(ua: &str) -> String {
+    let browser = if ua.contains("Edg/") {
+        "Edge"
+    } else if ua.contains("OPR/") || ua.contains("Opera") {
+        "Opera"
+    } else if ua.contains("Firefox/") || ua.contains("FxiOS") {
+        "Firefox"
+    } else if ua.contains("Chrome/") || ua.contains("CriOS") {
+        "Chrome"
+    } else if ua.contains("Safari/") {
+        "Safari"
+    } else {
+        "Browser"
+    };
+    let os = if ua.contains("iPhone") {
+        "iPhone"
+    } else if ua.contains("iPad") {
+        "iPad"
+    } else if ua.contains("Android") {
+        "Android"
+    } else if ua.contains("Windows") {
+        "Windows"
+    } else if ua.contains("Mac OS X") || ua.contains("Macintosh") {
+        "macOS"
+    } else if ua.contains("CrOS") {
+        "ChromeOS"
+    } else if ua.contains("Linux") {
+        "Linux"
+    } else {
+        ""
+    };
+    if os.is_empty() { browser.to_string() } else { format!("{browser} on {os}") }
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::device_name;
+
+    #[test]
+    fn names_common_browsers() {
+        assert_eq!(device_name("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Edg/130.0"), "Edge on Windows");
+        assert_eq!(device_name("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"), "Safari on iPhone");
+        assert_eq!(device_name("Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"), "Firefox on Linux");
+        assert_eq!(device_name("Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"), "Chrome on Android");
+        assert_eq!(device_name("curl/8.0"), "Browser");
+    }
 }

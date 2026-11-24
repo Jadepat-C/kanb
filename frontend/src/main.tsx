@@ -10,7 +10,7 @@ import './index.css'
 import { useMe } from './lib/auth'
 import './lib/i18n'
 import { Admin } from './pages/Admin'
-import { ForceChangePassword, ForgotPassword, ResetPassword } from './pages/AuthPages'
+import { ForceChangePassword, ForceTwoFactor, ForgotPassword, ResetPassword } from './pages/AuthPages'
 import { BoardPage } from './pages/Board'
 import { CalendarPage } from './pages/CalendarPage'
 import { TemplatesPage } from './pages/Templates'
@@ -36,6 +36,8 @@ function RequireAuth({ children }: { children: ReactNode }) {
   if (!me) return <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />
   // an admin-set password must be replaced before anything else
   if (me.must_change_password) return <ForceChangePassword me={me} />
+  // an admin requires two-factor sign-in and this account doesn't have it yet
+  if (me.require_2fa && !me.totp_enabled) return <ForceTwoFactor me={me} />
   return <>{children}</>
 }
 

@@ -253,7 +253,13 @@ pub struct Role {
     pub name: String,
     pub permissions: Vec<String>,
     pub is_owner: bool,
+    /// card and attachment permissions only cover cards the member created
+    pub own_cards_only: bool,
+    /// columns the role may add cards to (None = any)
+    pub card_list_ids: Option<Vec<Uuid>>,
 }
+
+const ROLE_COLS: &str = "id, name, permissions, is_owner, own_cards_only, card_list_ids";
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct Status {
@@ -270,6 +276,10 @@ pub struct BoardDetail {
     board: Board,
     my_permissions: Vec<String>,
     my_role_id: Option<Uuid>,
+    /// my card permissions only cover cards I created
+    my_own_cards_only: bool,
+    /// columns I may add cards to (None = any)
+    my_card_list_ids: Option<Vec<Uuid>>,
     all_permissions: Vec<&'static str>,
     /// [(topic, [permission…])] for the role editor
     permission_groups: Vec<(&'static str, Vec<&'static str>)>,
@@ -320,7 +330,7 @@ pub async fn get_board(
     .fetch_all(db)
     .await?;
     let roles: Vec<Role> =
-        sqlx::query_as("SELECT id, name, permissions, is_owner FROM board_roles WHERE board_id = $1 ORDER BY position, name")
+        sqlx::query_as(sqlf!("SELECT {ROLE_COLS} FROM board_roles WHERE board_id = $1 ORDER BY position, name"))
             .bind(id)
             .fetch_all(db)
             .await?;
@@ -328,6 +338,8 @@ pub async fn get_board(
         board,
         my_permissions: access.granted(),
         my_role_id: access.role_id,
+        my_own_cards_only: access.own_cards_only && !access.is_owner,
+        my_card_list_ids: if access.is_owner { None } else { access.card_list_ids.clone() },
         all_permissions: perms::ALL.to_vec(),
         permission_groups: perms::GROUPS.iter().map(|(g, p)| (*g, p.to_vec())).collect(),
         lists,
@@ -398,6 +410,7 @@ pub async fn restore_board(
 pub async fn purge_board(
     State(state): State<AppState>,
     CurrentUser(u): CurrentUser,
+    crate::audit::ClientIp(ip): crate::audit::ClientIp,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
     crate::perms::board_access_incl_archived(&state.db, &u, id).await?.require(perms::BOARD_DELETE)?;
@@ -405,6 +418,7 @@ pub async fn purge_board(
     sqlx::query("DELETE FROM boards WHERE id = $1").bind(id).execute(&state.db).await?;
     let files = crate::files::delete_board_objects(&state.store, id).await;
     tracing::info!(board = %id, %name, user = %u.username, files, "board permanently deleted");
+    crate::audit::log(&state, Some(u.id), "board_deleted", Some(id), ip.as_deref(), serde_json::json!({ "board_name": name, "files": files })).await;
     state.hub.notify(id, "board_deleted", None, u.id);
     Ok(Json(serde_json::json!({ "ok": true, "files_deleted": files })))
 }
@@ -516,12 +530,14 @@ pub async fn delete_list(
     let access = board_access(&state.db, &u, board_id).await?;
     access.require(perms::LISTS_DELETE)?;
     let mut tx = state.db.begin().await?;
-    let cards: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM cards WHERE list_id = $1").bind(id).fetch_all(&mut *tx).await?;
-    if !cards.is_empty() {
-        access.require(perms::CARDS_DELETE)?;
+    let cards: Vec<(Uuid, Option<Uuid>)> =
+        sqlx::query_as("SELECT id, created_by FROM cards WHERE list_id = $1").bind(id).fetch_all(&mut *tx).await?;
+    // every card in it must be one they may delete
+    for (_, creator) in &cards {
+        access.require_on(perms::CARDS_DELETE, *creator)?;
     }
     let mut keys = Vec::new();
-    for (cid,) in &cards {
+    for (cid, _) in &cards {
         keys.extend(crate::files::purge_card_rows(&mut tx, *cid, board_id).await?);
     }
     sqlx::query("DELETE FROM lists WHERE id = $1").bind(id).execute(&mut *tx).await?;
@@ -815,7 +831,8 @@ pub async fn sort_list(
     Json(r): Json<SortReq>,
 ) -> AppResult<Json<serde_json::Value>> {
     let board_id = board_of_list(&state.db, id).await?;
-    board_access(&state.db, &u, board_id).await?.require(perms::CARDS_MOVE)?;
+    // reorders everyone's cards in the column
+    board_access(&state.db, &u, board_id).await?.require_all(perms::CARDS_MOVE)?;
     // NULL due dates always go last; ties keep their current order
     let order = match (r.by.as_str(), r.desc) {
         ("priority", false) => "priority ASC",
@@ -857,6 +874,26 @@ pub async fn sort_list(
 pub struct RoleReq {
     name: Option<String>,
     permissions: Option<Vec<String>>,
+    own_cards_only: Option<bool>,
+    /// null = any column
+    #[serde(default, deserialize_with = "double_option")]
+    card_list_ids: Option<Option<Vec<Uuid>>>,
+}
+
+/// Column limits must name columns of this board (archived ones are fine: they may come back).
+async fn clean_lists(state: &AppState, board_id: Uuid, ids: Option<Vec<Uuid>>) -> AppResult<Option<Vec<Uuid>>> {
+    let Some(mut ids) = ids else { return Ok(None) };
+    ids.sort();
+    ids.dedup();
+    let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM lists WHERE board_id = $1 AND id = ANY($2)")
+        .bind(board_id)
+        .bind(&ids)
+        .fetch_one(&state.db)
+        .await?;
+    if n as usize != ids.len() {
+        return Err(AppError::BadRequest("invalid_list"));
+    }
+    Ok(Some(ids))
 }
 
 fn clean_perms(p: Vec<String>) -> AppResult<Vec<String>> {
@@ -879,15 +916,18 @@ pub async fn create_role(
         return Err(AppError::BadRequest("name_required"));
     }
     let p = clean_perms(r.permissions.unwrap_or_default())?;
-    let role: Role = sqlx::query_as(
-        "INSERT INTO board_roles (id, board_id, name, permissions, position)
-         VALUES ($1,$2,$3,$4,(SELECT coalesce(max(position),0)+1 FROM board_roles WHERE board_id = $2))
-         RETURNING id, name, permissions, is_owner",
-    )
+    let lists = clean_lists(&state, board_id, r.card_list_ids.flatten()).await?;
+    let role: Role = sqlx::query_as(sqlf!(
+        "INSERT INTO board_roles (id, board_id, name, permissions, own_cards_only, card_list_ids, position)
+         VALUES ($1,$2,$3,$4,$5,$6,(SELECT coalesce(max(position),0)+1 FROM board_roles WHERE board_id = $2))
+         RETURNING {ROLE_COLS}"
+    ))
     .bind(Uuid::now_v7())
     .bind(board_id)
     .bind(name)
     .bind(p)
+    .bind(r.own_cards_only.unwrap_or(false))
+    .bind(lists)
     .fetch_one(&state.db)
     .await?;
     state.hub.notify(board_id, "role", None, u.id);
@@ -906,17 +946,27 @@ pub async fn update_role(
 ) -> AppResult<Json<Role>> {
     let (board_id, is_owner) = role_board(&state, id).await?;
     board_access(&state.db, &u, board_id).await?.require(perms::ROLES_MANAGE)?;
-    if is_owner && r.permissions.is_some() {
+    if is_owner && (r.permissions.is_some() || r.own_cards_only.is_some() || r.card_list_ids.is_some()) {
         return Err(AppError::BadRequest("owner_role_fixed"));
     }
     let p = r.permissions.map(clean_perms).transpose()?;
-    let role: Role = sqlx::query_as(
-        "UPDATE board_roles SET name = COALESCE($2, name), permissions = COALESCE($3, permissions) WHERE id = $1
-         RETURNING id, name, permissions, is_owner",
-    )
+    let lists = match r.card_list_ids {
+        Some(l) => Some(clean_lists(&state, board_id, l).await?),
+        None => None,
+    };
+    let role: Role = sqlx::query_as(sqlf!(
+        "UPDATE board_roles SET name = COALESCE($2, name), permissions = COALESCE($3, permissions),
+                own_cards_only = COALESCE($4, own_cards_only),
+                card_list_ids = CASE WHEN $5 THEN $6 ELSE card_list_ids END
+         WHERE id = $1
+         RETURNING {ROLE_COLS}"
+    ))
     .bind(id)
     .bind(r.name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
     .bind(p)
+    .bind(r.own_cards_only)
+    .bind(lists.is_some())
+    .bind(lists.flatten())
     .fetch_one(&state.db)
     .await?;
     state.hub.notify(board_id, "role", None, u.id);
