@@ -52,18 +52,58 @@ fn my_hash(jar: &CookieJar) -> String {
 }
 
 pub async fn sessions(State(state): State<AppState>, _a: SuperAdmin, jar: CookieJar, Path(user_id): Path<Uuid>) -> AppResult<Json<Vec<Session>>> {
+    Ok(Json(list_sessions(&state, user_id, &jar).await?))
+}
+
+async fn list_sessions(state: &AppState, user_id: Uuid, jar: &CookieJar) -> AppResult<Vec<Session>> {
     let mut rows: Vec<Session> = sqlx::query_as(
         "SELECT id, created_at, last_seen_at, user_agent, ip, token_hash = $2 AS current
          FROM sessions WHERE user_id = $1 AND expires_at > now() ORDER BY last_seen_at DESC",
     )
     .bind(user_id)
-    .bind(my_hash(&jar))
+    .bind(my_hash(jar))
     .fetch_all(&state.db)
     .await?;
     for s in &mut rows {
         s.device = s.user_agent.as_deref().map(crate::auth::device_name).unwrap_or_else(|| "Browser".into());
     }
-    Ok(Json(rows))
+    Ok(rows)
+}
+
+// the same for your own account (Profile → Security)
+
+pub async fn my_sessions(State(state): State<AppState>, CurrentUser(u): CurrentUser, jar: CookieJar) -> AppResult<Json<Vec<Session>>> {
+    Ok(Json(list_sessions(&state, u.id, &jar).await?))
+}
+
+/// Signs you out everywhere except this browser.
+pub async fn revoke_my_others(State(state): State<AppState>, CurrentUser(u): CurrentUser, ClientIp(ip): ClientIp, jar: CookieJar) -> AppResult<Json<Value>> {
+    let r = sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2").bind(u.id).bind(my_hash(&jar)).execute(&state.db).await?;
+    if r.rows_affected() > 0 {
+        crate::audit::log(&state, Some(u.id), "sessions_revoked", Some(u.id), ip.as_deref(), json!({ "count": r.rows_affected(), "own": true })).await;
+    }
+    Ok(Json(json!({ "signed_out": r.rows_affected() })))
+}
+
+/// Signs out one of your other devices (not this one: use Sign out for that).
+pub async fn revoke_my_one(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    ClientIp(ip): ClientIp,
+    jar: CookieJar,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Value>> {
+    let r = sqlx::query("DELETE FROM sessions WHERE id = $1 AND user_id = $2 AND token_hash <> $3")
+        .bind(id)
+        .bind(u.id)
+        .bind(my_hash(&jar))
+        .execute(&state.db)
+        .await?;
+    if r.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    crate::audit::log(&state, Some(u.id), "sessions_revoked", Some(u.id), ip.as_deref(), json!({ "count": 1, "own": true })).await;
+    Ok(Json(json!({ "signed_out": 1 })))
 }
 
 /// "Sign out everywhere" (keeps the admin's own browser signed in when it's their account).

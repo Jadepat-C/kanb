@@ -7,6 +7,7 @@ import { useSearchParams } from 'react-router'
 import { CalendarFeed } from '../components/CalendarFeed'
 import { NotificationPrefs } from '../components/ContactPoints'
 import { TwoFactorSection } from '../components/TwoFactor'
+import { SessionList } from '../components/Sessions'
 import { toast, toastError, toastSuccess } from '../components/toast'
 import { Avatar, Button, ColorPicker, Field, Input } from '../components/ui'
 import { api, upload } from '../lib/api'
@@ -137,6 +138,11 @@ export function Profile() {
               </Button>
             </form>
             <TwoFactorSection me={me} />
+            <section className="space-y-3 rounded-xl border border-line bg-surface p-5">
+              <h2 className="font-semibold">{t('devices.mine')}</h2>
+              <p className="text-sm text-muted">{t('devices.mineHint')}</p>
+              <SessionList />
+            </section>
           </>
         )}
         {tab === 'notifications' && <NotificationPrefs me={me} />}

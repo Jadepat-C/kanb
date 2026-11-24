@@ -328,6 +328,8 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/admin/audit", get(audit::list))
         .route("/admin/users/{id}/sessions", get(admin_tools::sessions).delete(admin_tools::revoke_all))
         .route("/admin/sessions/{id}", axum::routing::delete(admin_tools::revoke_one))
+        .route("/me/sessions", get(admin_tools::my_sessions).delete(admin_tools::revoke_my_others))
+        .route("/me/sessions/{id}", axum::routing::delete(admin_tools::revoke_my_one))
         .route("/admin/boards", get(admin_tools::boards))
         .route("/admin/boards/{id}/owners", post(admin_tools::add_owner))
         .route("/admin/system", get(admin_tools::system))

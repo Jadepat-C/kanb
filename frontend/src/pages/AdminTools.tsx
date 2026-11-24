@@ -4,12 +4,13 @@
  */
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, ExternalLink, Info, LogOut, Megaphone, UserPlus, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ExternalLink, Info, Megaphone, UserPlus, XCircle } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Link } from 'react-router'
 import { ask } from '../components/dialogs'
+import { SessionList } from '../components/Sessions'
 import { toastError, toastSuccess } from '../components/toast'
 import { Button, Dialog, Field, Input, Spinner } from '../components/ui'
 import { DateInput, TimeInput } from '../components/DateInput'
@@ -147,69 +148,14 @@ function describe(t: TFunction, e: AuditEntry, names: Map<string, string>) {
 
 // ---------------------------------------------------------------- devices
 
-interface Session {
-  id: string
-  created_at: string
-  last_seen_at: string
-  device: string
-  ip: string | null
-  current: boolean
-}
-
 export function DevicesDialog({ user, onClose }: { user: User; onClose: () => void }) {
   const { t } = useTranslation()
-  const qc = useQueryClient()
-  const q = useQuery({ queryKey: ['admin-sessions', user.id], queryFn: () => api.get<Session[]>(`/admin/users/${user.id}/sessions`) })
-  const done = (n: number) => {
-    qc.invalidateQueries({ queryKey: ['admin-sessions', user.id] })
-    qc.invalidateQueries({ queryKey: ['admin-audit'] })
-    toastSuccess(t('devices.signedOut', { count: n }))
-  }
-  const all = useMutation({ mutationFn: () => api.del<{ signed_out: number }>(`/admin/users/${user.id}/sessions`), onSuccess: (r) => done(r.signed_out), onError: toastError })
-  const one = useMutation({ mutationFn: (id: string) => api.del(`/admin/sessions/${id}`), onSuccess: () => done(1), onError: toastError })
-  const others = (q.data ?? []).filter((s) => !s.current).length
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title={t('devices.title', { name: user.display_name })}>
       <div className="space-y-3 p-5">
         <p className="text-sm text-muted">{t('devices.hint')}</p>
-        {q.isLoading ? (
-          <Spinner />
-        ) : !q.data?.length ? (
-          <p className="text-sm text-muted">{t('devices.none')}</p>
-        ) : (
-          <ul className="divide-y divide-[var(--border)] rounded-lg border border-line">
-            {q.data.map((s) => (
-              <li key={s.id} className="flex items-center gap-3 px-3 py-2 text-sm">
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium">
-                    {s.device}
-                    {s.current && <span className="ml-1.5 text-xs font-normal text-muted">({t('devices.thisOne')})</span>}
-                  </div>
-                  <div className="text-xs text-muted">
-                    {t('devices.lastActive', { when: fmtRelative(s.last_seen_at) })} · {t('devices.since', { when: fmtDate(s.created_at) })}
-                    {s.ip && <span className="font-mono"> · {s.ip}</span>}
-                  </div>
-                </div>
-                {!s.current && (
-                  <Button size="sm" onClick={() => one.mutate(s.id)} disabled={one.isPending}>
-                    {t('devices.signOut')}
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="flex justify-between gap-2 pt-1">
-          <Button
-            variant="danger"
-            disabled={!others || all.isPending}
-            onClick={async () => {
-              if (await ask({ title: t('devices.signOutAll'), message: t('devices.signOutAllMsg', { name: user.display_name }), confirmLabel: t('devices.signOutAll'), danger: true }))
-                all.mutate()
-            }}
-          >
-            <LogOut size={14} /> {t('devices.signOutAll')}
-          </Button>
+        <SessionList userId={user.id} name={user.display_name} />
+        <div className="flex justify-end">
           <Button variant="ghost" onClick={onClose}>
             {t('common.close')}
           </Button>

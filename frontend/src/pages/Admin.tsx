@@ -31,13 +31,15 @@ export function Admin() {
   if (!me?.is_super_admin) return <Navigate to="/" replace />
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
-      <div className="scroll-thin mb-5 flex items-center gap-1 overflow-x-auto border-b border-line">
+      {/* scrolls sideways on narrow screens, without a scrollbar; the bottom line is a shadow (not a border the tabs
+          overlap by 1px), so nothing overflows downwards and no vertical scrollbar appears either */}
+      <div className="mb-5 flex items-center gap-1 overflow-x-auto overflow-y-hidden shadow-[inset_0_-1px_0_var(--border)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((k) => (
           <button
             key={k}
             onClick={() => setSp(k === 'users' ? {} : { tab: k })}
             className={clsx(
-              '-mb-px flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium cursor-pointer',
+              'flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium cursor-pointer',
               tab === k ? 'border-accent text-[var(--text)]' : 'border-transparent text-muted hover:text-[var(--text)]',
             )}
           >

@@ -232,6 +232,8 @@ const en = {
     none: 'Not signed in anywhere.', thisOne: 'this browser', lastActive: 'active {{when}}', since: 'signed in {{when}}', signOut: 'Sign out',
     signOutAll: 'Sign out everywhere', signOutAllMsg: '{{name}} will be signed out on every device (except this browser, if it’s your own account).',
     signedOut_one: 'Signed out of {{count}} device', signedOut_other: 'Signed out of {{count}} devices',
+    mine: 'Signed-in devices', mineHint: 'Everywhere your account is signed in. Don’t recognise one? Sign it out and change your password.',
+    signOutOthers: 'Sign out everywhere else', signOutOthersMsg: 'Every other browser and phone will be signed out. This one stays signed in.',
   },
   inactive: {
     filter: 'Activity', all: 'All people', days: 'Not active for {{count}} days', unrecorded: 'No activity recorded', deactivated: 'Deactivated',
@@ -661,6 +663,8 @@ const th: Dict = {
     none: 'ไม่ได้เข้าสู่ระบบที่ใดเลย', thisOne: 'เบราว์เซอร์นี้', lastActive: 'ใช้งานล่าสุด {{when}}', since: 'เข้าสู่ระบบ {{when}}', signOut: 'ออกจากระบบ',
     signOutAll: 'ออกจากระบบทุกอุปกรณ์', signOutAllMsg: '{{name}} จะถูกออกจากระบบทุกอุปกรณ์ (ยกเว้นเบราว์เซอร์นี้ ถ้าเป็นบัญชีของคุณเอง)',
     signedOut_one: 'ออกจากระบบ {{count}} อุปกรณ์แล้ว', signedOut_other: 'ออกจากระบบ {{count}} อุปกรณ์แล้ว',
+    mine: 'อุปกรณ์ที่เข้าสู่ระบบ', mineHint: 'ทุกที่ที่บัญชีของคุณเข้าสู่ระบบอยู่ ถ้ามีอุปกรณ์ที่ไม่รู้จัก ให้ออกจากระบบแล้วเปลี่ยนรหัสผ่าน',
+    signOutOthers: 'ออกจากระบบที่อื่นทั้งหมด', signOutOthersMsg: 'เบราว์เซอร์และโทรศัพท์อื่นทั้งหมดจะถูกออกจากระบบ เครื่องนี้ยังอยู่ในระบบ',
   },
   inactive: {
     filter: 'การใช้งาน', all: 'ทุกคน', days: 'ไม่ได้ใช้งาน {{count}} วัน', unrecorded: 'ไม่มีบันทึกการใช้งาน', deactivated: 'ปิดการใช้งานแล้ว',
