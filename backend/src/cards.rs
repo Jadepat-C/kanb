@@ -30,6 +30,8 @@ pub struct CardSummary {
     pub color: Option<String>,
     pub start_at: Option<DateTime<Utc>>,
     pub due_at: Option<DateTime<Utc>>,
+    /// "due soon" reminder, minutes before the due date (None = 1 day, 0 = none)
+    pub remind_minutes: Option<i32>,
     /// status counts as done
     pub done: bool,
     pub done_at: Option<DateTime<Utc>>,
@@ -56,7 +58,7 @@ pub struct CardSummary {
 const DN: &str = crate::auth::DISPLAY_NAME_SQL;
 
 const SUMMARY_SELECT: &str = r#"
-SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status_id, c.color, c.start_at, c.due_at, c.updated_at, c.description, c.done_at, c.created_by,
+SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status_id, c.color, c.start_at, c.due_at, c.remind_minutes, c.updated_at, c.description, c.done_at, c.created_by,
   COALESCE((SELECT is_done FROM board_statuses WHERE id = c.status_id), false) AS done,
   COALESCE((SELECT array_agg(d.depends_on) FROM card_dependencies d JOIN cards x ON x.id = d.depends_on AND x.archived_at IS NULL WHERE d.card_id = c.id), '{}') AS depends_on,
   COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{}') AS label_ids,
@@ -288,6 +290,7 @@ pub struct Card {
     color: Option<String>,
     start_at: Option<DateTime<Utc>>,
     due_at: Option<DateTime<Utc>>,
+    remind_minutes: Option<i32>,
     done_at: Option<DateTime<Utc>>,
     created_by: Option<Uuid>,
     #[sqlx(default)]
@@ -326,7 +329,7 @@ pub async fn get_card(
     let board_id = board_of_card(&state.db, id).await?;
     board_access(&state.db, &u, board_id).await?;
     let card: Card = sqlx::query_as(sqlf!(
-        "SELECT c.id, c.board_id, c.list_id, c.number, c.title, c.description, c.priority, c.status_id, c.color, c.start_at, c.due_at, c.done_at,
+        "SELECT c.id, c.board_id, c.list_id, c.number, c.title, c.description, c.priority, c.status_id, c.color, c.start_at, c.due_at, c.remind_minutes, c.done_at,
                 c.created_by, (SELECT {DN} FROM users u WHERE u.id = c.created_by) AS created_by_name, c.created_at, c.updated_at,
                 COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{{}}') AS label_ids,
                 COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{{}}') AS assignee_ids
@@ -363,6 +366,9 @@ pub struct UpdateCard {
     due_at: Option<Option<DateTime<Utc>>>,
     #[serde(default, deserialize_with = "double_option")]
     start_at: Option<Option<DateTime<Utc>>>,
+    /// null = the default (1 day before), 0 = no reminder
+    #[serde(default, deserialize_with = "double_option")]
+    remind_minutes: Option<Option<i32>>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -391,8 +397,11 @@ pub async fn update_card(
     if r.status_id.is_some() {
         access.require_on(perms::CARDS_STATUS, creator)?;
     }
-    if r.due_at.is_some() || r.start_at.is_some() {
+    if r.due_at.is_some() || r.start_at.is_some() || r.remind_minutes.is_some() {
         access.require_on(perms::CARDS_DUE, creator)?;
+    }
+    if r.remind_minutes.flatten().is_some_and(|m| !(0..=43200).contains(&m)) {
+        return Err(AppError::BadRequest("invalid_reminder"));
     }
     if r.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
         return Err(AppError::BadRequest("title_required"));
@@ -485,6 +494,7 @@ pub async fn update_card(
             color = CASE WHEN $6 THEN $7 ELSE color END,
             due_at = CASE WHEN $8 THEN $9 ELSE due_at END,
             start_at = CASE WHEN $11 THEN $12 ELSE start_at END,
+            remind_minutes = CASE WHEN $13 THEN $14 ELSE remind_minutes END,
             done_at = CASE WHEN NOT $10 THEN done_at
                            WHEN EXISTS (SELECT 1 FROM board_statuses s WHERE s.id = $5 AND s.is_done) THEN COALESCE(done_at, now())
                            ELSE NULL END,
@@ -503,6 +513,8 @@ pub async fn update_card(
     .bind(r.status_id.is_some())
     .bind(r.start_at.is_some())
     .bind(r.start_at.flatten())
+    .bind(r.remind_minutes.is_some())
+    .bind(r.remind_minutes.flatten())
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -970,8 +982,8 @@ pub async fn duplicate_card(
         .await?;
     let new_id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, priority, status_id, color, start_at, due_at, created_by)
-         SELECT $2, board_id, list_id, $3, $4, description, $5, priority, status_id, color, start_at, due_at, $6 FROM cards WHERE id = $1",
+        "INSERT INTO cards (id, board_id, list_id, number, title, description, position, priority, status_id, color, start_at, due_at, remind_minutes, created_by)
+         SELECT $2, board_id, list_id, $3, $4, description, $5, priority, status_id, color, start_at, due_at, remind_minutes, $6 FROM cards WHERE id = $1",
     )
     .bind(id)
     .bind(new_id)

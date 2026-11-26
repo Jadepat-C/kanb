@@ -38,20 +38,24 @@ export const Markdown = memo(function Markdown({
   onToggleTask,
   compact,
   className,
+  fileBase,
 }: {
   source: string
   onToggleTask?: (index: number) => void
   compact?: boolean
   className?: string
+  /** serve this card's pictures and files from here instead of /api/files (a public board link) */
+  fileBase?: string
 }) {
+  const file = (url: unknown) => (fileBase && typeof url === 'string' && url.startsWith('/api/files/') ? fileBase + url.slice('/api/files'.length) : (url as string | undefined))
   return (
     <div className={clsx('md prose prose-sm max-w-none dark:prose-invert', compact && 'md-compact', className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeSanitize, schema], rehypeTaskIndex]}
         components={{
-          a: ({ node: _n, ...p }) => <a {...p} target="_blank" rel="noopener noreferrer" />,
-          img: ({ node: _n, ...p }) => <img {...p} loading="lazy" />,
+          a: ({ node: _n, ...p }) => <a {...p} href={file(p.href)} target="_blank" rel="noopener noreferrer" />,
+          img: ({ node: _n, ...p }) => <img {...p} src={file(p.src)} loading="lazy" />,
           input: ({ node, ...p }) => {
             if (p.type !== 'checkbox') return <input {...p} />
             const idx = Number((node?.properties as Record<string, unknown>)?.dataTaskIndex ?? -1)

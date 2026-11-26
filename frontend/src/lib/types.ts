@@ -19,6 +19,8 @@ export interface User {
   require_2fa: boolean
   avatar_id: string | null
   notify_email: boolean
+  /** what to notify about (see NOTIFY_KINDS) */
+  notify_events: string[]
   totp_enabled: boolean
   created_at: string
 }
@@ -106,6 +108,8 @@ export interface CardSummary {
   color: string | null
   start_at: string | null
   due_at: string | null
+  /** "due soon" reminder in minutes before the due date (null = 1 day, 0 = none) */
+  remind_minutes: number | null
   /** status counts as done */
   done: boolean
   done_at: string | null
@@ -198,6 +202,7 @@ export interface Card {
   color: string | null
   start_at: string | null
   due_at: string | null
+  remind_minutes: number | null
   done_at: string | null
   created_by: string | null
   created_by_name?: string | null

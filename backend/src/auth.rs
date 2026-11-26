@@ -41,6 +41,8 @@ pub struct User {
     pub must_change_password: bool,
     pub avatar_id: Option<Uuid>,
     pub notify_email: bool,
+    /// what to notify this person about (notify::KINDS)
+    pub notify_events: Vec<String>,
     /// two-factor sign-in (authenticator app) is on
     pub totp_enabled: bool,
     /// last time the account used Kanb (None = not recorded yet, not "never")
@@ -51,7 +53,7 @@ pub struct User {
 }
 
 pub const USER_COLUMNS: &str = "id, username, display_name, email, is_super_admin, can_create_boards, \
-     is_active, locale, theme, avatar_color, must_change_password, avatar_id, notify_email, \
+     is_active, locale, theme, avatar_color, must_change_password, avatar_id, notify_email, notify_events, \
      (totp_enabled_at IS NOT NULL) AS totp_enabled, last_seen_at, \
      COALESCE((SELECT (value->>'require_2fa')::boolean FROM app_settings WHERE key = 'security'), false) AS require_2fa, \
      created_at";
@@ -383,6 +385,7 @@ pub struct UpdateMe {
     theme: Option<String>,
     avatar_color: Option<String>,
     notify_email: Option<bool>,
+    notify_events: Option<Vec<String>>,
 }
 
 pub async fn update_me(
@@ -412,7 +415,7 @@ pub async fn update_me(
     let user: User = sqlx::query_as(sqlf!(
         "UPDATE users SET display_name = COALESCE($2, display_name), email = CASE WHEN $7 THEN $3 ELSE email END, \
          locale = COALESCE($4, locale), theme = COALESCE($5, theme), avatar_color = COALESCE($6, avatar_color), notify_email = COALESCE($8, notify_email), \
-         updated_at = now() WHERE id = $1 RETURNING {USER_COLUMNS}"
+         notify_events = COALESCE($9, notify_events), updated_at = now() WHERE id = $1 RETURNING {USER_COLUMNS}"
     ))
     .bind(u.id)
     .bind(req.display_name.map(|s| s.trim().to_string()))
@@ -422,6 +425,8 @@ pub async fn update_me(
     .bind(req.avatar_color)
     .bind(email.is_some())
     .bind(req.notify_email)
+    // known kinds only, kept in display order
+    .bind(req.notify_events.map(|e| crate::notify::KINDS.iter().filter(|k| e.iter().any(|x| x == *k)).map(|k| k.to_string()).collect::<Vec<_>>()))
     .fetch_one(&state.db)
     .await?;
     Ok(Json(user))

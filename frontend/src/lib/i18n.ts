@@ -8,7 +8,7 @@ const en = {
     save: 'Save', cancel: 'Cancel', delete: 'Delete', edit: 'Edit', close: 'Close', add: 'Add', create: 'Create',
     loading: 'Loading…', search: 'Search', name: 'Name', description: 'Description', color: 'Color', none: 'None',
     confirmDelete: 'Delete this? This cannot be undone.', yes: 'Yes', no: 'No', saved: 'Saved', rename: 'Rename',
-    back: 'Back', clear: 'Clear', remove: 'Remove', done: 'Done', next: 'Next', up: 'Move up', down: 'Move down', copy: 'Copy', copied: 'Copied', download: 'Download', settings: 'Settings',
+    back: 'Back', clear: 'Clear', remove: 'Remove', done: 'Done', next: 'Next', up: 'Move up', down: 'Move down', copy: 'Copy', copied: 'Copied', download: 'Download', settings: 'Settings', showPassword: 'Show password', hidePassword: 'Hide password',
   },
   setup: {
     title: 'Set up Kanb', hint: 'Create the first admin account. You can add everyone else from Admin → Users afterwards.',
@@ -46,6 +46,9 @@ const en = {
     created: 'Created', updated: 'Updated', uploading: 'Uploading {{name}}… {{pct}}%', edited: 'edited',
     markdownHint: 'Markdown supported · paste or drop images', editDescription: 'Edit description',
     status_normal: 'In progress', status_blocked: 'Blocked', status_ready: 'Ready',
+    remind: 'Reminder', remindHint: 'When assignees get the “due soon” reminder',
+    remindOpt: { 0: 'No reminder', 15: '15 minutes before', 60: '1 hour before', 180: '3 hours before', 1440: '1 day before', 2880: '2 days before', 10080: '1 week before' },
+    remindCustom: '{{n}} minutes before',
   },
   event: {
     created: 'created this card in {{list}}', title: 'renamed the card from “{{from}}” to “{{to}}”',
@@ -56,7 +59,7 @@ const en = {
     attachment_added: 'attached {{filename}}', duplicated: 'created this card as a copy of #{{from}}', attachment_removed: 'removed attachment {{filename}}',
   },
   settings: {
-    title: 'Board settings', general: 'General', members: 'Members', roles: 'Roles & permissions', labels: 'Labels', templates: 'Templates', notifications: 'Notifications', archive: 'Archive', statuses: 'Statuses', newStatus: 'New status', statusHint: 'Shown as a colored dot on cards and in the column progress bar. New cards get the first status. Tick “Done” for statuses that mean finished: those cards get no due reminders, stop blocking others and count towards progress.', done: 'Done', doneHint: 'Cards with this status count as finished',
+    title: 'Board settings', general: 'General', members: 'Members', roles: 'Roles & permissions', labels: 'Labels', templates: 'Templates', notifications: 'Notifications', share: 'Share', archive: 'Archive', statuses: 'Statuses', newStatus: 'New status', statusHint: 'Shown as a colored dot on cards and in the column progress bar. New cards get the first status. Tick “Done” for statuses that mean finished: those cards get no due reminders, stop blocking others and count towards progress.', done: 'Done', doneHint: 'Cards with this status count as finished',
     addMember: 'Add member', removeMemberMsg: 'Remove {{name}} from this board?', deleteRoleMsg: 'Delete the role “{{name}}”?', deleteLabelMsg: 'Delete the label “{{name}}”? It is removed from all cards.', deleteStatusMsg: 'Delete the status “{{name}}”? Cards using it will have no status.', role: 'Role', newRole: 'New role', owner: 'Owner (all permissions)', deleteBoard: 'Delete board',
     deleteBoardConfirm: 'Delete this board for everyone?', leave: 'Leave board', newLabel: 'New label',
   },
@@ -189,9 +192,13 @@ const en = {
   notifications: {
     title: 'Notifications', markAll: 'Mark all read', empty: 'Nothing yet. You’ll see assignments, @mentions, comments on your cards and due dates here.', unread: 'unread',
     assigned: 'assigned you to {{card}}', mentioned: 'mentioned you in {{card}}', commented: 'commented on {{card}}',
-    due_soon: '{{card}} is due within 24 hours', overdue: '{{card}} is overdue',
-    whenHint: 'You’re notified when someone else assigns you, @mentions you or comments on your cards, and when a card assigned to you (or one you created that nobody is assigned to) is almost due or overdue. Your own changes aren’t sent to you. To get every change on a board, including your own, add a channel in the board’s settings → Notifications.',
-    emailMe: 'Email me my notifications', emailMeHint: 'Assignments, @mentions, comments on my cards and due-date reminders, sent to my email address.',
+    due_soon: '{{card}} is due {{when}}', overdue: '{{card}} is overdue',
+    card_created: 'created {{card}}', card_moved: 'moved {{card}} to {{to}}', status: 'changed the status of {{card}}', card_updated: 'updated {{card}}',
+    attachments: 'changed the attachments of {{card}}', archived: 'archived {{card}}', restored: 'restored {{card}}',
+    clearAll: 'Clear all', clearTitle: 'Clear all notifications?', clearMsg: 'They’re removed from this list for good. Reminders you cleared aren’t sent again.', cleared: 'Notifications cleared', dismiss: 'Clear',
+    whatTitle: 'Notify me about', whatHint: '“My cards” means cards assigned to you, or that you created. Your own changes are never sent to you.',
+    whenHint: 'Pick what you want to hear about; it applies to the bell, email, browser notifications and your contact points. To get every change on a board, including your own, add a channel in the board’s settings → Notifications.',
+    emailMe: 'Email me my notifications', emailMeHint: 'Everything ticked above, sent to my email address.',
     emailMeNoAddress: 'Add your email address in the Account tab to receive them by email.',
   },
   templates: {
@@ -215,7 +222,7 @@ const en = {
       user_created: '{{who}} created the account {{target}}', user_updated: '{{who}} changed {{target}}', user_deleted: '{{who}} deleted {{target}}',
       user_password_reset: '{{who}} set a new password for {{target}}', user_reset_link_sent: '{{who}} sent a password-reset link to {{target}}',
       user_twofa_reset: '{{who}} reset two-factor sign-in for {{target}}', sessions_revoked: '{{who}} signed {{target}} out',
-      settings_changed: '{{who}} changed settings', board_owner_added: '{{who}} added an owner to the board {{target}}', board_deleted: '{{who}} deleted the board {{target}}',
+      settings_changed: '{{who}} changed settings', board_owner_added: '{{who}} added an owner to the board {{target}}', board_deleted: '{{who}} deleted the board {{target}}', board_shared: '{{who}} made a public link to the board {{target}}', board_unshared: '{{who}} turned off the public link to the board {{target}}', board_share_reset: '{{who}} replaced the public link to the board {{target}}', board_share_changed: '{{who}} changed what the public link to {{target}} shows',
     },
     method: { totp: 'with an authenticator code', recovery: 'with a recovery code', setup: 'first-run setup' },
     typed: 'typed “{{name}}” (no such account)',
@@ -224,7 +231,7 @@ const en = {
       can_create_boards_on: 'may create boards', can_create_boards_off: 'may not create boards', is_active_on: 'reactivated', is_active_off: 'deactivated',
     },
     area: { email: 'Email', notifications: 'Notifications', security: 'Security', announcement: 'Announcement' },
-    require2faOn: 'two-factor sign-in required', require2faOff: 'two-factor sign-in optional', removed: 'removed',
+    publicLinksOn: 'public board links allowed', publicLinksOff: 'public board links turned off', require2faOn: 'two-factor sign-in required', require2faOff: 'two-factor sign-in optional', removed: 'removed',
     newOwner: 'new owner: {{name}}', devices_one: '{{count}} device', devices_other: '{{count}} devices',
   },
   devices: {
@@ -290,6 +297,10 @@ const en = {
     confirmOff: 'New and existing accounts will no longer have to set it up, and anyone can turn theirs off. People who already use it keep it until they turn it off.',
     turnOff: 'Make it optional',
     turnOn: 'Require it', turnedOn: 'Two-factor sign-in is now required', turnedOff: 'Two-factor sign-in is optional again',
+    publicLinks: 'Allow public board links', publicLinksHint: 'People who manage a board can make a read-only link that anyone can open without an account (Board settings → Share).',
+    publicBoards_one: '{{count}} board has a public link.', publicBoards_other: '{{count}} boards have a public link.',
+    linksOffTitle: 'Turn off public links?', linksOffMsg_one: 'The {{count}} existing link stops working right away, and nobody can make new ones. Turning this back on makes it work again.', linksOffMsg_other: '{{count}} existing links stop working right away, and nobody can make new ones. Turning this back on makes them work again.',
+    linksOffConfirm: 'Turn off', linksOn: 'Public board links are allowed', linksOff: 'Public board links are off',
   },
   twofa: {
     title: 'Two-factor sign-in', on: 'On', off: 'Off',
@@ -322,7 +333,7 @@ const en = {
     test: 'Send test', testing: 'Sending…', testOk: 'Test message sent. Check that it arrived.', testSent: 'Test sent to {{name}}',
     lastSent: 'Last delivered {{when}}', allEvents: 'all notifications', events: 'Send these notifications',
     keepSecret: '•••••• saved — leave empty to keep', deleteMsg: 'Delete the contact point “{{name}}”?',
-    ev: { assigned: 'Assigned to me', mentioned: '@mentions', commented: 'Comments on my cards', due_soon: 'Due soon', overdue: 'Overdue' },
+    ev: { assigned: 'Assigned to me', mentioned: '@mentions', commented: 'Comments on my cards', due_soon: 'My cards due soon', overdue: 'My cards overdue', card_created: 'New cards on my boards', card_moved: 'My cards moved', status: 'Status of my cards changed', card_updated: 'Other edits to my cards (title, description, dates, labels…)', attachments: 'Files added to or removed from my cards', archived: 'My cards archived or restored' },
     field: {
       url: 'Webhook URL', token: 'Token', secret: 'Signing secret', bot_token: 'Bot token', chat_id: 'Chat ID',
       line_token: 'Channel access token', line_to: 'User / group ID', ntfy_url: 'Topic URL', ntfy_token: 'Access token', gotify_url: 'Server URL', gotify_token: 'App token',
@@ -409,6 +420,19 @@ const en = {
     serviceError: 'This browser’s push service didn’t answer, so notifications can’t be turned on here. Some browsers (for example Chromium builds without Google services) can’t receive web push: try Chrome, Edge, Firefox or Safari.',
     adminTitle: 'Browser notifications', adminHint: 'Let people get pop-up notifications in their browser or on their phone. Each person turns it on for their own devices in Profile.',
   },
+  share: {
+    hint: 'Anyone with the link can see this board without an account: its columns, cards, labels, dates and who is assigned. Nobody can change anything through the link.',
+    enable: 'Public link', link: 'Public link', offByAdmin: 'An administrator has turned public links off for this site.',
+    turnOnTitle: 'Make a public link?', turnOnMsg: 'Anyone who has the link (or finds it) can read this board without signing in. Share it only with people who should see it.', turnOn: 'Make link',
+    turnOffTitle: 'Turn off the public link?', turnOffMsg: 'The link stops working right away. Turning it on again makes a new link.', turnOff: 'Turn off',
+    visitorsCan: 'People with the link can', seeBoard: 'See the board, cards and their descriptions', comments: 'Read comments',
+    files: 'Download attachments', filesHint: 'Pictures inside descriptions are always shown.', neverEdit: 'They can never edit, comment, upload or see member emails.',
+    reset: 'Make a new link', resetTitle: 'Make a new link?', resetMsg: 'The current link stops working. Send the new one to the people who should still see the board.',
+  },
+  publicBoard: {
+    readOnly: 'Read-only view', poweredBy: 'Shared with Kanb', notFound: 'This link doesn’t work', notFoundHint: 'It may have been turned off or replaced by a new one. Ask the person who sent it.',
+    comments: 'Comments', noComments: 'No comments', noDescription: 'No description', attachments: 'Attachments', empty: 'No cards', updated: 'Updated {{when}}', signIn: 'Sign in',
+  },
   date: { placeholder: 'dd/mm/yyyy', pick: 'Pick a date' },
   errors: {
     too_many_attempts_one: 'Too many attempts. Try again in a minute.', too_many_attempts_other: 'Too many attempts. Try again in {{count}} minutes.',
@@ -426,7 +450,7 @@ const en = {
     push_disabled: 'Chat & push notifications are turned off by the admin.', invalid_contact_kind: 'Unknown contact point type.', contact_field_required: 'Fill in the required fields.', contact_field_too_long: 'A field is too long.', invalid_contact_url: 'That URL doesn’t match this service.', invalid_telegram_token: 'That doesn’t look like a bot token (123456789:AA…).', invalid_telegram_chat: 'Chat ID: a number (groups start with -) or @channelname.', invalid_line_to: 'User/group ID: U, C or R followed by 32 characters.', invalid_contact_token: 'That token contains invalid characters.', invalid_ntfy_topic: 'Add the topic to the URL, e.g. https://ntfy.sh/my-topic.', too_many_contacts: 'You can have up to 20 contact points.', template_needs_column: 'A board template needs at least one column.', start_after_due: 'The start date must be on or before the due date.', dependency_cycle: 'That would make a loop: the other card already waits for this one.', invalid_dependency: 'Cards can only wait for cards on the same board.', too_many_dependencies: 'A card can wait for up to 50 cards.', invalid_schedule: 'Check the schedule: pick at least one weekday or a day of the month.', invalid_time: 'Time must look like 09:00.', invalid_format: 'Unknown export format.', invalid_subscription: 'This browser sent an invalid push subscription.',
     too_many_attempts: 'Too many wrong codes. Wait 5 minutes and try again.',
     totp_invalid: 'That code isn’t right (or was already used). Try the next one.', totp_expired: 'Took too long or too many tries. Sign in again.', totp_no_setup: 'Start the setup again.', totp_not_enabled: 'Two-factor sign-in is off.',
-    invalid_template: 'That template belongs to another board.', invalid_due_days: 'Days must be 0–3650.',
+    invalid_template: 'That template belongs to another board.', invalid_due_days: 'Days must be 0–3650.', invalid_reminder: 'Pick a reminder from the list.', public_links_off: 'An administrator has turned public links off.',
   },
 }
 
@@ -439,7 +463,7 @@ const th: Dict = {
     save: 'บันทึก', cancel: 'ยกเลิก', delete: 'ลบ', edit: 'แก้ไข', close: 'ปิด', add: 'เพิ่ม', create: 'สร้าง',
     loading: 'กำลังโหลด…', search: 'ค้นหา', name: 'ชื่อ', description: 'รายละเอียด', color: 'สี', none: 'ไม่มี',
     confirmDelete: 'ต้องการลบใช่หรือไม่? ไม่สามารถย้อนกลับได้', yes: 'ใช่', no: 'ไม่', saved: 'บันทึกแล้ว', rename: 'เปลี่ยนชื่อ',
-    back: 'กลับ', clear: 'ล้าง', remove: 'นำออก', done: 'เสร็จ', next: 'ถัดไป', up: 'เลื่อนขึ้น', down: 'เลื่อนลง', copy: 'คัดลอก', copied: 'คัดลอกแล้ว', download: 'ดาวน์โหลด', settings: 'ตั้งค่า',
+    back: 'กลับ', clear: 'ล้าง', remove: 'นำออก', done: 'เสร็จ', next: 'ถัดไป', up: 'เลื่อนขึ้น', down: 'เลื่อนลง', copy: 'คัดลอก', copied: 'คัดลอกแล้ว', download: 'ดาวน์โหลด', settings: 'ตั้งค่า', showPassword: 'แสดงรหัสผ่าน', hidePassword: 'ซ่อนรหัสผ่าน',
   },
   setup: {
     title: 'ตั้งค่า Kanb', hint: 'สร้างบัญชีผู้ดูแลระบบคนแรก จากนั้นเพิ่มผู้ใช้คนอื่นได้ที่ ผู้ดูแลระบบ → ผู้ใช้',
@@ -477,6 +501,9 @@ const th: Dict = {
     created: 'สร้างเมื่อ', updated: 'แก้ไขล่าสุด', uploading: 'กำลังอัปโหลด {{name}}… {{pct}}%', edited: 'แก้ไขแล้ว',
     markdownHint: 'รองรับ Markdown · วางหรือลากรูปภาพได้', editDescription: 'แก้ไขรายละเอียด',
     status_normal: 'กำลังดำเนินการ', status_blocked: 'ติดปัญหา', status_ready: 'พร้อม',
+    remind: 'การเตือน', remindHint: 'เวลาที่ผู้รับผิดชอบจะได้รับการเตือน “ใกล้ครบกำหนด”',
+    remindOpt: { 0: 'ไม่เตือน', 15: '15 นาทีก่อน', 60: '1 ชั่วโมงก่อน', 180: '3 ชั่วโมงก่อน', 1440: '1 วันก่อน', 2880: '2 วันก่อน', 10080: '1 สัปดาห์ก่อน' },
+    remindCustom: '{{n}} นาทีก่อน',
   },
   event: {
     created: 'สร้างการ์ดนี้ใน {{list}}', title: 'เปลี่ยนชื่อการ์ดจาก “{{from}}” เป็น “{{to}}”',
@@ -487,7 +514,7 @@ const th: Dict = {
     attachment_added: 'แนบไฟล์ {{filename}}', duplicated: 'สร้างการ์ดนี้โดยคัดลอกจาก #{{from}}', attachment_removed: 'ลบไฟล์แนบ {{filename}}',
   },
   settings: {
-    title: 'ตั้งค่าบอร์ด', general: 'ทั่วไป', members: 'สมาชิก', roles: 'บทบาทและสิทธิ์', labels: 'ป้ายกำกับ', templates: 'เทมเพลต', notifications: 'การแจ้งเตือน', archive: 'ที่เก็บ', statuses: 'สถานะ', newStatus: 'สถานะใหม่', statusHint: 'แสดงเป็นจุดสีบนการ์ดและแถบความคืบหน้าของคอลัมน์ การ์ดใหม่จะได้สถานะแรก ติ๊ก “เสร็จ” สำหรับสถานะที่หมายถึงงานเสร็จแล้ว: การ์ดเหล่านั้นจะไม่มีการเตือนกำหนดส่ง ไม่ขวางการ์ดอื่น และนับรวมในความคืบหน้า', done: 'เสร็จ', doneHint: 'การ์ดที่มีสถานะนี้นับว่าเสร็จแล้ว',
+    title: 'ตั้งค่าบอร์ด', general: 'ทั่วไป', members: 'สมาชิก', roles: 'บทบาทและสิทธิ์', labels: 'ป้ายกำกับ', templates: 'เทมเพลต', notifications: 'การแจ้งเตือน', share: 'แชร์', archive: 'ที่เก็บ', statuses: 'สถานะ', newStatus: 'สถานะใหม่', statusHint: 'แสดงเป็นจุดสีบนการ์ดและแถบความคืบหน้าของคอลัมน์ การ์ดใหม่จะได้สถานะแรก ติ๊ก “เสร็จ” สำหรับสถานะที่หมายถึงงานเสร็จแล้ว: การ์ดเหล่านั้นจะไม่มีการเตือนกำหนดส่ง ไม่ขวางการ์ดอื่น และนับรวมในความคืบหน้า', done: 'เสร็จ', doneHint: 'การ์ดที่มีสถานะนี้นับว่าเสร็จแล้ว',
     addMember: 'เพิ่มสมาชิก', removeMemberMsg: 'นำ {{name}} ออกจากบอร์ดนี้หรือไม่?', deleteRoleMsg: 'ลบบทบาท “{{name}}” หรือไม่?', deleteLabelMsg: 'ลบป้าย “{{name}}” หรือไม่? ป้ายจะถูกนำออกจากทุกการ์ด', deleteStatusMsg: 'ลบสถานะ “{{name}}” หรือไม่? การ์ดที่ใช้สถานะนี้จะไม่มีสถานะ', role: 'บทบาท', newRole: 'บทบาทใหม่', owner: 'เจ้าของ (ทุกสิทธิ์)', deleteBoard: 'ลบบอร์ด',
     deleteBoardConfirm: 'ต้องการลบบอร์ดนี้สำหรับทุกคนหรือไม่?', leave: 'ออกจากบอร์ด', newLabel: 'ป้ายกำกับใหม่',
   },
@@ -620,9 +647,13 @@ const th: Dict = {
   notifications: {
     title: 'การแจ้งเตือน', markAll: 'อ่านทั้งหมดแล้ว', empty: 'ยังไม่มีการแจ้งเตือน การมอบหมายงาน การกล่าวถึง (@) ความคิดเห็นในการ์ดของคุณ และกำหนดส่งจะแสดงที่นี่', unread: 'ยังไม่อ่าน',
     assigned: 'มอบหมาย {{card}} ให้คุณ', mentioned: 'กล่าวถึงคุณใน {{card}}', commented: 'แสดงความคิดเห็นใน {{card}}',
-    due_soon: '{{card}} จะครบกำหนดภายใน 24 ชั่วโมง', overdue: '{{card}} เลยกำหนดแล้ว',
-    whenHint: 'คุณจะได้รับแจ้งเมื่อมีคนอื่นมอบหมายงานให้ กล่าวถึงคุณ หรือแสดงความคิดเห็นในการ์ดของคุณ และเมื่อการ์ดที่มอบหมายให้คุณ (หรือการ์ดที่คุณสร้างโดยยังไม่มีผู้รับผิดชอบ) ใกล้ครบกำหนดหรือเลยกำหนด การเปลี่ยนแปลงที่คุณทำเองจะไม่ถูกส่งถึงคุณ หากต้องการรับทุกการเปลี่ยนแปลงในบอร์ด รวมถึงของคุณเอง ให้เพิ่มช่องทางในการตั้งค่าบอร์ด → การแจ้งเตือน',
-    emailMe: 'ส่งการแจ้งเตือนทางอีเมล', emailMeHint: 'การมอบหมายงาน การกล่าวถึง ความคิดเห็นในการ์ดของฉัน และการเตือนกำหนดส่ง',
+    due_soon: '{{card}} จะครบกำหนด {{when}}', overdue: '{{card}} เลยกำหนดแล้ว',
+    card_created: 'สร้าง {{card}}', card_moved: 'ย้าย {{card}} ไปที่ {{to}}', status: 'เปลี่ยนสถานะของ {{card}}', card_updated: 'อัปเดต {{card}}',
+    attachments: 'เปลี่ยนไฟล์แนบของ {{card}}', archived: 'เก็บ {{card}} เข้าที่เก็บ', restored: 'กู้คืน {{card}}',
+    clearAll: 'ล้างทั้งหมด', clearTitle: 'ล้างการแจ้งเตือนทั้งหมด?', clearMsg: 'การแจ้งเตือนจะถูกนำออกจากรายการถาวร การเตือนที่ล้างแล้วจะไม่ถูกส่งซ้ำ', cleared: 'ล้างการแจ้งเตือนแล้ว', dismiss: 'ล้าง',
+    whatTitle: 'แจ้งเตือนฉันเมื่อ', whatHint: '“การ์ดของฉัน” คือการ์ดที่มอบหมายให้คุณ หรือที่คุณสร้าง การเปลี่ยนแปลงที่คุณทำเองจะไม่ถูกส่งถึงคุณ',
+    whenHint: 'เลือกเรื่องที่ต้องการรับแจ้ง ใช้กับกระดิ่ง อีเมล การแจ้งเตือนของเบราว์เซอร์ และช่องทางติดต่อของคุณ หากต้องการรับทุกการเปลี่ยนแปลงในบอร์ด รวมถึงของคุณเอง ให้เพิ่มช่องทางในการตั้งค่าบอร์ด → การแจ้งเตือน',
+    emailMe: 'ส่งการแจ้งเตือนทางอีเมล', emailMeHint: 'ทุกเรื่องที่เลือกไว้ด้านบน ส่งไปยังอีเมลของฉัน',
     emailMeNoAddress: 'เพิ่มอีเมลในแท็บบัญชีเพื่อรับทางอีเมล',
   },
   templates: {
@@ -646,7 +677,7 @@ const th: Dict = {
       user_created: '{{who}} สร้างบัญชี {{target}}', user_updated: '{{who}} แก้ไข {{target}}', user_deleted: '{{who}} ลบ {{target}}',
       user_password_reset: '{{who}} ตั้งรหัสผ่านใหม่ให้ {{target}}', user_reset_link_sent: '{{who}} ส่งลิงก์รีเซ็ตรหัสผ่านให้ {{target}}',
       user_twofa_reset: '{{who}} รีเซ็ตการยืนยันตัวตนสองขั้นตอนของ {{target}}', sessions_revoked: '{{who}} ให้ {{target}} ออกจากระบบ',
-      settings_changed: '{{who}} เปลี่ยนการตั้งค่า', board_owner_added: '{{who}} เพิ่มเจ้าของบอร์ด {{target}}', board_deleted: '{{who}} ลบบอร์ด {{target}}',
+      settings_changed: '{{who}} เปลี่ยนการตั้งค่า', board_owner_added: '{{who}} เพิ่มเจ้าของบอร์ด {{target}}', board_deleted: '{{who}} ลบบอร์ด {{target}}', board_shared: '{{who}} สร้างลิงก์สาธารณะของบอร์ด {{target}}', board_unshared: '{{who}} ปิดลิงก์สาธารณะของบอร์ด {{target}}', board_share_reset: '{{who}} สร้างลิงก์สาธารณะใหม่ของบอร์ด {{target}}', board_share_changed: '{{who}} เปลี่ยนสิ่งที่ลิงก์สาธารณะของ {{target}} แสดง',
     },
     method: { totp: 'ด้วยรหัสจากแอป', recovery: 'ด้วยรหัสกู้คืน', setup: 'ตั้งค่าครั้งแรก' },
     typed: 'พิมพ์ “{{name}}” (ไม่มีบัญชีนี้)',
@@ -655,7 +686,7 @@ const th: Dict = {
       can_create_boards_on: 'สร้างบอร์ดได้', can_create_boards_off: 'สร้างบอร์ดไม่ได้', is_active_on: 'เปิดใช้งานอีกครั้ง', is_active_off: 'ปิดการใช้งาน',
     },
     area: { email: 'อีเมล', notifications: 'การแจ้งเตือน', security: 'ความปลอดภัย', announcement: 'ประกาศ' },
-    require2faOn: 'บังคับการยืนยันสองขั้นตอน', require2faOff: 'การยืนยันสองขั้นตอนไม่บังคับ', removed: 'นำออกแล้ว',
+    publicLinksOn: 'อนุญาตลิงก์สาธารณะของบอร์ด', publicLinksOff: 'ปิดลิงก์สาธารณะของบอร์ด', require2faOn: 'บังคับการยืนยันสองขั้นตอน', require2faOff: 'การยืนยันสองขั้นตอนไม่บังคับ', removed: 'นำออกแล้ว',
     newOwner: 'เจ้าของใหม่: {{name}}', devices_one: '{{count}} อุปกรณ์', devices_other: '{{count}} อุปกรณ์',
   },
   devices: {
@@ -721,6 +752,10 @@ const th: Dict = {
     confirmOff: 'บัญชีใหม่และบัญชีเดิมจะไม่ต้องตั้งค่าอีกต่อไป และทุกคนปิดของตัวเองได้ ผู้ที่ใช้อยู่แล้วจะยังใช้ต่อจนกว่าจะปิดเอง',
     turnOff: 'เปลี่ยนเป็นไม่บังคับ',
     turnOn: 'บังคับใช้', turnedOn: 'บังคับใช้การยืนยันตัวตนสองขั้นตอนแล้ว', turnedOff: 'การยืนยันตัวตนสองขั้นตอนกลับเป็นแบบไม่บังคับ',
+    publicLinks: 'อนุญาตลิงก์สาธารณะของบอร์ด', publicLinksHint: 'ผู้จัดการบอร์ดสามารถสร้างลิงก์แบบอ่านอย่างเดียวที่ทุกคนเปิดได้โดยไม่ต้องมีบัญชี (ตั้งค่าบอร์ด → แชร์)',
+    publicBoards_other: 'มี {{count}} บอร์ดที่มีลิงก์สาธารณะ',
+    linksOffTitle: 'ปิดลิงก์สาธารณะ?', linksOffMsg_other: 'ลิงก์ที่มีอยู่ {{count}} ลิงก์จะใช้ไม่ได้ทันที และไม่มีใครสร้างลิงก์ใหม่ได้ เมื่อเปิดอีกครั้งลิงก์เดิมจะกลับมาใช้ได้',
+    linksOffConfirm: 'ปิด', linksOn: 'อนุญาตลิงก์สาธารณะของบอร์ดแล้ว', linksOff: 'ปิดลิงก์สาธารณะของบอร์ดแล้ว',
   },
   twofa: {
     title: 'การยืนยันตัวตนสองขั้นตอน', on: 'เปิด', off: 'ปิด',
@@ -753,7 +788,7 @@ const th: Dict = {
     test: 'ส่งทดสอบ', testing: 'กำลังส่ง…', testOk: 'ส่งข้อความทดสอบแล้ว ตรวจดูว่าได้รับหรือไม่', testSent: 'ส่งทดสอบไปที่ {{name}} แล้ว',
     lastSent: 'ส่งสำเร็จล่าสุด {{when}}', allEvents: 'การแจ้งเตือนทั้งหมด', events: 'ส่งการแจ้งเตือนเหล่านี้',
     keepSecret: '•••••• บันทึกไว้แล้ว — เว้นว่างเพื่อใช้ค่าเดิม', deleteMsg: 'ลบช่องทาง “{{name}}” หรือไม่?',
-    ev: { assigned: 'มอบหมายให้ฉัน', mentioned: 'การกล่าวถึง (@)', commented: 'ความคิดเห็นในการ์ดของฉัน', due_soon: 'ใกล้ครบกำหนด', overdue: 'เลยกำหนด' },
+    ev: { assigned: 'มอบหมายให้ฉัน', mentioned: 'การกล่าวถึง (@)', commented: 'ความคิดเห็นในการ์ดของฉัน', due_soon: 'การ์ดของฉันใกล้ครบกำหนด', overdue: 'การ์ดของฉันเลยกำหนด', card_created: 'การ์ดใหม่ในบอร์ดของฉัน', card_moved: 'การ์ดของฉันถูกย้าย', status: 'สถานะการ์ดของฉันเปลี่ยน', card_updated: 'การแก้ไขอื่นในการ์ดของฉัน (ชื่อ รายละเอียด วันที่ ป้ายกำกับ…)', attachments: 'เพิ่มหรือลบไฟล์ในการ์ดของฉัน', archived: 'การ์ดของฉันถูกเก็บหรือกู้คืน' },
     field: {
       url: 'Webhook URL', token: 'โทเค็น', secret: 'คีย์ลงนาม', bot_token: 'โทเค็นบอต', chat_id: 'Chat ID',
       line_token: 'Channel access token', line_to: 'User / group ID', ntfy_url: 'URL ของหัวข้อ', ntfy_token: 'Access token', gotify_url: 'URL ของเซิร์ฟเวอร์', gotify_token: 'โทเค็นแอป',
@@ -840,6 +875,19 @@ const th: Dict = {
     serviceError: 'บริการพุชของเบราว์เซอร์นี้ไม่ตอบสนอง จึงเปิดการแจ้งเตือนที่นี่ไม่ได้ บางเบราว์เซอร์ (เช่น Chromium ที่ไม่มีบริการของ Google) รับการแจ้งเตือนเว็บไม่ได้ ลองใช้ Chrome, Edge, Firefox หรือ Safari',
     adminTitle: 'การแจ้งเตือนบนเบราว์เซอร์', adminHint: 'ให้ผู้ใช้รับการแจ้งเตือนแบบป๊อปอัปในเบราว์เซอร์หรือบนโทรศัพท์ แต่ละคนเปิดใช้งานสำหรับอุปกรณ์ของตัวเองในโปรไฟล์',
   },
+  share: {
+    hint: 'ทุกคนที่มีลิงก์สามารถดูบอร์ดนี้ได้โดยไม่ต้องมีบัญชี: คอลัมน์ การ์ด ป้ายกำกับ วันที่ และผู้รับผิดชอบ ไม่มีใครแก้ไขอะไรผ่านลิงก์ได้',
+    enable: 'ลิงก์สาธารณะ', link: 'ลิงก์สาธารณะ', offByAdmin: 'ผู้ดูแลระบบปิดการใช้ลิงก์สาธารณะสำหรับเว็บไซต์นี้',
+    turnOnTitle: 'สร้างลิงก์สาธารณะ?', turnOnMsg: 'ทุกคนที่มีลิงก์ (หรือพบลิงก์) จะอ่านบอร์ดนี้ได้โดยไม่ต้องเข้าสู่ระบบ แชร์เฉพาะกับคนที่ควรเห็นเท่านั้น', turnOn: 'สร้างลิงก์',
+    turnOffTitle: 'ปิดลิงก์สาธารณะ?', turnOffMsg: 'ลิงก์จะใช้ไม่ได้ทันที หากเปิดอีกครั้งจะได้ลิงก์ใหม่', turnOff: 'ปิด',
+    visitorsCan: 'คนที่มีลิงก์สามารถ', seeBoard: 'ดูบอร์ด การ์ด และรายละเอียดการ์ด', comments: 'อ่านความคิดเห็น',
+    files: 'ดาวน์โหลดไฟล์แนบ', filesHint: 'รูปภาพในรายละเอียดการ์ดจะแสดงเสมอ', neverEdit: 'ไม่สามารถแก้ไข แสดงความคิดเห็น อัปโหลด หรือเห็นอีเมลของสมาชิกได้',
+    reset: 'สร้างลิงก์ใหม่', resetTitle: 'สร้างลิงก์ใหม่?', resetMsg: 'ลิงก์ปัจจุบันจะใช้ไม่ได้ ส่งลิงก์ใหม่ให้คนที่ยังควรเห็นบอร์ด',
+  },
+  publicBoard: {
+    readOnly: 'ดูอย่างเดียว', poweredBy: 'แชร์ด้วย Kanb', notFound: 'ลิงก์นี้ใช้ไม่ได้', notFoundHint: 'ลิงก์อาจถูกปิดหรือถูกแทนที่ด้วยลิงก์ใหม่ โปรดสอบถามผู้ที่ส่งลิงก์ให้',
+    comments: 'ความคิดเห็น', noComments: 'ไม่มีความคิดเห็น', noDescription: 'ไม่มีรายละเอียด', attachments: 'ไฟล์แนบ', empty: 'ไม่มีการ์ด', updated: 'อัปเดต {{when}}', signIn: 'เข้าสู่ระบบ',
+  },
   date: { placeholder: 'วว/ดด/ปปปป', pick: 'เลือกวันที่' },
   errors: {
     too_many_attempts_other: 'ลองหลายครั้งเกินไป โปรดลองใหม่ในอีก {{count}} นาที',
@@ -857,7 +905,7 @@ const th: Dict = {
     push_disabled: 'ผู้ดูแลระบบปิดการแจ้งเตือนผ่านแชตและพุชอยู่', invalid_contact_kind: 'ไม่รู้จักประเภทช่องทางนี้', contact_field_required: 'กรอกช่องที่จำเป็นให้ครบ', contact_field_too_long: 'ข้อมูลยาวเกินไป', invalid_contact_url: 'URL ไม่ตรงกับบริการนี้', invalid_telegram_token: 'โทเค็นบอตไม่ถูกต้อง (123456789:AA…)', invalid_telegram_chat: 'Chat ID: ตัวเลข (กลุ่มขึ้นต้นด้วย -) หรือ @ชื่อช่อง', invalid_line_to: 'User/group ID: ขึ้นต้นด้วย U, C หรือ R ตามด้วย 32 ตัวอักษร', invalid_contact_token: 'โทเค็นมีอักขระที่ใช้ไม่ได้', invalid_ntfy_topic: 'ใส่ชื่อหัวข้อใน URL เช่น https://ntfy.sh/my-topic', too_many_contacts: 'เพิ่มได้สูงสุด 20 ช่องทาง', template_needs_column: 'เทมเพลตบอร์ดต้องมีอย่างน้อยหนึ่งคอลัมน์', start_after_due: 'วันเริ่มต้องไม่เกินวันครบกำหนด', dependency_cycle: 'จะเกิดการวนซ้ำ: การ์ดนั้นรอการ์ดนี้อยู่แล้ว', invalid_dependency: 'การ์ดรอได้เฉพาะการ์ดในบอร์ดเดียวกัน', too_many_dependencies: 'การ์ดหนึ่งรอได้สูงสุด 50 การ์ด', invalid_schedule: 'ตรวจสอบกำหนดการ: เลือกอย่างน้อยหนึ่งวันในสัปดาห์หรือวันที่ของเดือน', invalid_time: 'เวลาต้องอยู่ในรูปแบบ 09:00', invalid_format: 'ไม่รู้จักรูปแบบการส่งออก', invalid_subscription: 'เบราว์เซอร์ส่งข้อมูลการสมัครรับแจ้งเตือนไม่ถูกต้อง',
     too_many_attempts: 'ใส่รหัสผิดหลายครั้งเกินไป กรุณารอ 5 นาทีแล้วลองใหม่',
     totp_invalid: 'รหัสไม่ถูกต้อง (หรือใช้ไปแล้ว) ลองรหัสถัดไป', totp_expired: 'ใช้เวลานานเกินไปหรือลองหลายครั้งเกินไป กรุณาเข้าสู่ระบบใหม่', totp_no_setup: 'เริ่มการตั้งค่าใหม่อีกครั้ง', totp_not_enabled: 'ยังไม่ได้เปิดการยืนยันสองขั้นตอน',
-    invalid_template: 'เทมเพลตนี้เป็นของบอร์ดอื่น', invalid_due_days: 'จำนวนวันต้องอยู่ระหว่าง 0–3650',
+    invalid_template: 'เทมเพลตนี้เป็นของบอร์ดอื่น', invalid_due_days: 'จำนวนวันต้องอยู่ระหว่าง 0–3650', invalid_reminder: 'เลือกการเตือนจากรายการ', public_links_off: 'ผู้ดูแลระบบปิดการใช้ลิงก์สาธารณะ',
   },
 }
 

@@ -29,7 +29,12 @@ It works in English and Thai, in light and dark, and on phones, tablets and desk
 **Working together**
 - Live updates: other people's changes appear immediately, and you can see who is looking at or editing a card.
 - Notifications in the app, by email, as browser notifications, or to Discord, Slack, Microsoft Teams, Google Chat,
-  Telegram, LINE, ntfy, Gotify or any webhook, chosen by each person. Boards can also post their activity to a team channel.
+  Telegram, LINE, ntfy, Gotify or any webhook, chosen by each person. Each person ticks what they want to hear about
+  (assignments, @mentions, comments, due dates, and moves, status changes, edits, files or archiving of their cards).
+  Boards can also post their activity to a team channel. The bell can clear notifications one by one or all at once.
+- A "due soon" reminder per card: from 15 minutes to a week before the due date, or none (1 day by default).
+- A read-only public link for a board, for people without an account. The board's managers choose whether visitors
+  also see comments and may download attachments, and can replace or turn off the link at any time.
 - Board and card templates, and recurring cards (daily, weekly, monthly).
 - A personal calendar feed for Google Calendar, Outlook or Apple Calendar: the whole app, chosen boards or single cards.
 - Export a board as CSV, JSON, or a ZIP with every attached file.
@@ -52,6 +57,7 @@ It works in English and Thai, in light and dark, and on phones, tablets and desk
   and can be given a new one.
 - System page: version and whether a newer release exists, database and file sizes, and whether email is working.
 - A site-wide announcement banner (e.g. planned maintenance), and inviting several people at once from a pasted list.
+- Public board links can be turned off for the whole site (Admin → Security), which stops every existing link at once.
 
 **Everywhere**
 - English and ไทย (with Buddhist-era years), light and dark themes, dates as dd/mm/yyyy.
@@ -408,6 +414,10 @@ npm run dev                                   # http://localhost:5173, with live
 - Secrets in the database are encrypted with AES-256-GCM using `SECRET_KEY`.
 - Webhooks and push notifications only go to public internet addresses unless an admin allows private ones.
 - Calendar feed links contain a random token; only its hash is stored, and making a new link revokes the old one.
+- Public board links contain a random 256-bit token. They are read-only, list people by display name only (no
+  emails; usernames appear only where someone wrote an @mention), are marked `noindex`, and stop working when the board is archived, the link is replaced or turned off, or an
+  admin turns public links off. The token is stored as is, so board managers can copy the link again later (anyone who
+  can read the database can read the board anyway).
 - Signing someone out (or deactivating them) also ends the live updates in tabs they already have open, within a
   minute. Sign-ins, failed sign-ins and admin actions are recorded in the activity log (Admin → Activity).
 

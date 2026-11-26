@@ -30,7 +30,7 @@ use crate::{
 pub const EVENTS: [&str; 9] = ["card_created", "card_moved", "status", "assigned", "commented", "due", "card_updated", "attachments", "archived"];
 
 /// card_events.kind → channel event
-fn category(kind: &str) -> Option<&'static str> {
+pub(crate) fn category(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "created" | "duplicated" => "card_created",
         "moved" => "card_moved",
@@ -246,7 +246,7 @@ fn message(base: &str, th: bool, kind: &str, board_id: Uuid, board_name: &str, c
 }
 
 /// dd/mm/yyyy HH:mm in server-local time (set TZ for the container, e.g. Asia/Bangkok). Thai uses the Buddhist year.
-fn fmt_date(th: bool, d: DateTime<Utc>) -> String {
+pub(crate) fn fmt_date(th: bool, d: DateTime<Utc>) -> String {
     let l = d.with_timezone(&Local);
     format!("{:02}/{:02}/{} {}", l.day(), l.month(), l.year() + if th { 543 } else { 0 }, l.format("%H:%M"))
 }
@@ -259,7 +259,7 @@ fn stars(p: Option<i64>, th: bool) -> String {
 }
 
 /// One change as a short line, in the channel's language.
-fn phrase(th: bool, kind: &str, d: &Value) -> Vec<String> {
+pub(crate) fn phrase(th: bool, kind: &str, d: &Value) -> Vec<String> {
     let s = |k: &str| d.get(k).and_then(|v| v.as_str()).unwrap_or("—").to_string();
     let list = |k: &str| d.get(k).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
     let tr = |en: String, thai: String| if th { thai } else { en };
@@ -383,16 +383,15 @@ pub fn comment(state: &AppState, board_id: Uuid, card_id: Uuid, actor_id: Uuid, 
     });
 }
 
-/// Called by the due job: one post per card, kind and due date (cards due within 24 h / overdue up to 7 days).
+/// Called by the due job: one post per card, kind and due date (due soon by the card's reminder time / overdue up to
+/// 7 days).
 pub async fn due_pass(state: &AppState) {
     let sys = contacts::system(state).await;
     if !sys.push {
         return;
     }
-    for (kind, window) in [
-        ("due_soon", "c.due_at > now() AND c.due_at <= now() + interval '24 hours'"),
-        ("overdue", "c.due_at <= now() AND c.due_at > now() - interval '7 days'"),
-    ] {
+    let soon = crate::notify::due_soon_sql();
+    for (kind, window) in [("due_soon", soon.as_str()), ("overdue", "c.due_at <= now() AND c.due_at > now() - interval '7 days'")] {
         let rows: Vec<(Uuid, Uuid, String, i32, String, DateTime<Utc>)> = match sqlx::query_as(sqlf!(
             "INSERT INTO board_due_posts (card_id, kind, due_at)
              SELECT c.id, '{kind}', c.due_at FROM cards c

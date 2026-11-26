@@ -279,6 +279,7 @@ CASES = [
     Case("PATCH", "/cards/{card}", "editor", {"title": "{secret_title}"}),
     Case("PATCH", "/cards/{card}", "editor", {"due_at": "2030-01-16T09:00:00Z"}, note="dates"),
     Case("PATCH", "/cards/{card}", "editor", {"status_id": "{status}"}, note="status"),
+    Case("PATCH", "/cards/{card}", "editor", {"remind_minutes": 60}, note="due reminder"),
     Case("POST", "/cards/{card}/move", "editor", {"list_id": "{list}", "index": 0}),
     Case("POST", "/cards/{card}/duplicate", "editor"),
     Case("DELETE", "/cards/{card}", "editor", fresh="card", note="archive card"),
@@ -309,6 +310,12 @@ CASES = [
     Case("POST", B + "/contact-points", "owner", {"kind": "webhook", "name": "x", "config": {"url": "https://example.com/x"}, "enabled": False}),
     Case("PATCH", "/board-contact-points/{board_contact}", "owner", {"name": "y"}, fresh="board_contact"),
     Case("DELETE", "/board-contact-points/{board_contact}", "owner", fresh="board_contact"),
+    # public link settings
+    Case("GET", B + "/share", "owner"),
+    Case("PUT", B + "/share", "owner", {"enabled": False}),
+    # my own notifications
+    Case("POST", "/notifications/clear", "outsider", {"ids": []}),
+    Case("PATCH", "/me", "outsider", {"notify_email": True}),
     # board templates: anyone who can create boards may add one; only the author (or a super admin) may change it
     Case("PATCH", "/board-templates/{board_template}", "owner", {"name": "authz bt renamed " + RUN}),
     # super admin only
@@ -469,6 +476,16 @@ def main() -> int:
         n, msgs = role_limits(w, f)
         checked += n
         problems.extend(msgs)
+
+        # 7. the public link: read-only, only what the owner allows, only that board
+        n, msgs = public_link(w, f)
+        checked += n
+        problems.extend(msgs)
+
+        # 8. notification choices and "clear"
+        n, msgs = notification_choices(w, f)
+        checked += n
+        problems.extend(msgs)
     finally:
         if os.environ.get("KEEP") == "1":
             print(f"KEEP=1: left the test users authz_{RUN}_* and their boards in place")
@@ -509,6 +526,98 @@ def activity_log(w: World):
     if any(p in dump for p in PASSWORDS):
         problems.append("activity log: an entry contains a password")
     return 4, problems
+
+
+def public_link(w: World, f: dict):
+    o, anon, x = w.people["owner"], Client("anon"), w.people["outsider"]
+    problems, checked = [], 0
+
+    def expect(label: str, ok: bool):
+        nonlocal checked
+        checked += 1
+        if not ok:
+            problems.append("public link: " + label)
+
+    share = o.ok("PUT", f"/boards/{f['board']}/share", {"enabled": True, "comments": False, "files": False})
+    token = share["url"].rsplit("/p/", 1)[1]
+    st, b = anon.call("GET", f"/public/{token}")
+    expect("the board opens without an account", st == 200 and any(c["id"] == f["card"] for c in b["cards"]))
+    dump = json.dumps(b)
+    expect("no usernames, emails, roles or templates in the board", all(k not in dump for k in ('"username"', '"email"', '"roles"', '"templates"', '"my_permissions"')))
+    expect("who created a card is hidden", all(c.get("created_by") is None for c in b["cards"]))
+    expect("comment and file counts hidden while off", all(c["comment_count"] == 0 and c["attachment_count"] == 0 for c in b["cards"]))
+    st, c = anon.call("GET", f"/public/{token}/cards/{f['card']}")
+    expect("a card opens", st == 200 and c["card"]["description"] == "top secret")
+    expect("comments hidden while off", st == 200 and c["comments"] == [] and c["attachments"] == [])
+    expect("files refused while off", anon.call("GET", f"/public/{token}/files/{f['file']}")[0] == 404)
+    png = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                        "1f15c4890000000d49444154789c63000100000500010d0a2db40000000049454e44ae426082")
+    st, pic = o.upload(f"/cards/{f['card2']}/attachments?inline=1", "pic.png", png, "image/png")
+    expect("pictures in descriptions load while downloads are off", st == 200 and anon.call("GET", f"/public/{token}/files/{pic['id']}")[0] == 200)
+    hidden = fresh(w, "list")["list"]
+    hc = o.ok("POST", f"/lists/{hidden}/cards", {"title": "in an archived column", "description": ""})["id"]
+    o.ok("POST", f"/lists/{hidden}/archive")
+    expect("cards in archived columns aren't in the board", hc not in json.dumps(anon.call("GET", f"/public/{token}")[1]))
+    o.ok("PUT", f"/boards/{f['board']}/share", {"comments": True, "files": True})
+    st, c = anon.call("GET", f"/public/{token}/cards/{f['card']}")
+    expect("comments shown when allowed", st == 200 and any(m["id"] == f["comment"] for m in c["comments"]))
+    expect("attachments listed when allowed", st == 200 and any(a["id"] == f["file"] for a in c["attachments"]))
+    expect("files download when allowed", anon.call("GET", f"/public/{token}/files/{f['file']}")[0] == 200)
+    expect("a card from another board is refused", anon.call("GET", f"/public/{token}/cards/{f['x_card']}")[0] == 404)
+    gone = fresh(w, "archived_card")["card"]
+    expect("an archived card is refused", anon.call("GET", f"/public/{token}/cards/{gone}")[0] == 404)
+    expect("a wrong token is refused", anon.call("GET", f"/public/{'0' * 64}")[0] == 404)
+    expect("a malformed token is refused", anon.call("GET", "/public/abc")[0] == 404)
+    expect("nothing can be written through the link", anon.call("POST", f"/public/{token}")[0] in (404, 405))
+    expect("an outsider can't read the share settings", x.call("GET", f"/boards/{f['board']}/share")[0] in (403, 404))
+    # admin switch
+    sec = w.admin.ok("GET", "/admin/security")
+    w.admin.ok("PUT", "/admin/security", {"require_2fa": sec["require_2fa"], "public_links": False})
+    try:
+        expect("links stop while an admin has them off", anon.call("GET", f"/public/{token}")[0] == 404)
+        expect("no new links while off", o.call("PUT", f"/boards/{f['board']}/share", {"reset": True})[0] == 400)
+        w.admin.ok("PUT", "/admin/security", {"require_2fa": sec["require_2fa"]})
+        expect("saving another security setting keeps links off", anon.call("GET", f"/public/{token}")[0] == 404)
+    finally:
+        w.admin.ok("PUT", "/admin/security", {"require_2fa": sec["require_2fa"], "public_links": sec["public_links"]})
+    expect("links work again when allowed", anon.call("GET", f"/public/{token}")[0] == 200)
+    new = o.ok("PUT", f"/boards/{f['board']}/share", {"reset": True})["url"].rsplit("/p/", 1)[1]
+    expect("a new link replaces the old one", new != token and anon.call("GET", f"/public/{token}")[0] == 404 and anon.call("GET", f"/public/{new}")[0] == 200)
+    o.ok("PUT", f"/boards/{f['board']}/share", {"enabled": False})
+    expect("turning it off stops the link", anon.call("GET", f"/public/{new}")[0] == 404)
+    return checked, problems
+
+
+def notification_choices(w: World, f: dict):
+    o, v, e = w.people["owner"], w.people["viewer"], w.people["editor"]
+    problems, checked = [], 0
+
+    def expect(label: str, ok: bool):
+        nonlocal checked
+        checked += 1
+        if not ok:
+            problems.append("notifications: " + label)
+
+    def assigned_to_viewer():
+        o.ok("PUT", f"/cards/{f['card2']}/assignees", {"ids": []})
+        o.ok("PUT", f"/cards/{f['card2']}/assignees", {"ids": [v.id]})
+        return [n for n in v.ok("GET", "/notifications")["items"] if n["kind"] == "assigned" and n["card_id"] == f["card2"]]
+
+    me = v.ok("PATCH", "/me", {"notify_events": ["mentioned", "nonsense"]})
+    expect("unknown kinds are dropped", me["notify_events"] == ["mentioned"])
+    expect("an unticked kind isn't sent", assigned_to_viewer() == [])
+    v.ok("PATCH", "/me", {"notify_events": ["assigned", "mentioned", "commented", "due_soon", "overdue"]})
+    got = assigned_to_viewer()
+    expect("a ticked kind is sent", len(got) >= 1)
+    if got:
+        st, r = e.call("POST", "/notifications/clear", {"ids": [got[0]["id"]]})
+        expect("someone else can't clear my notification", st == 200 and r["cleared"] == 0)
+        v.ok("POST", "/notifications/clear", {"all": True})
+        left = v.ok("GET", "/notifications")
+        expect("clear all empties the list", left["items"] == [] and left["unread"] == 0)
+    o.ok("PUT", f"/cards/{f['card2']}/assignees", {"ids": []})
+    expect("a reminder outside the list is refused", o.call("PATCH", f"/cards/{f['card']}", {"remind_minutes": 99999})[0] == 400)
+    return checked, problems
 
 
 def role_limits(w: World, f: dict):

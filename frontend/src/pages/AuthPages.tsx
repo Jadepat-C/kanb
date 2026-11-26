@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toastSuccess } from '../components/toast'
 import { SetupDialog } from '../components/TwoFactor'
-import { Button, Field, Input, Spinner } from '../components/ui'
+import { Button, Field, Input, PasswordInput, Spinner } from '../components/ui'
 import { api } from '../lib/api'
 import { errorText, setLocale } from '../lib/i18n'
 import { isDark, setTheme } from '../lib/prefs'
@@ -60,10 +60,10 @@ function NewPasswordFields({ onSubmit, busy, submitLabel }: { onSubmit: (pw: str
       }}
     >
       <Field label={t('profile.newPassword')} hint={t('errors.password_too_short')}>
-        <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} minLength={8} required autoFocus autoComplete="new-password" />
+        <PasswordInput value={pw} onChange={(e) => setPw(e.target.value)} minLength={8} required autoFocus autoComplete="new-password" />
       </Field>
       <Field label={t('auth.confirmPassword')}>
-        <Input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} minLength={8} required autoComplete="new-password" />
+        <PasswordInput value={pw2} onChange={(e) => setPw2(e.target.value)} minLength={8} required autoComplete="new-password" />
       </Field>
       {mismatch && <p className="text-sm text-red-600">{t('auth.passwordsDiffer')}</p>}
       <Button variant="primary" className="w-full" disabled={busy || mismatch || pw.length < 8}>

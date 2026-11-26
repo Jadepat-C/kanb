@@ -18,6 +18,7 @@ mod mail;
 mod notify;
 mod perms;
 mod position;
+mod public;
 mod push;
 mod realtime;
 mod recurring;
@@ -279,6 +280,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         metrics::serve(addr, state.clone()).await?;
     }
     notify::spawn_due_job(state.clone());
+    notify::spawn_activity(state.clone());
     board_contacts::spawn_dispatch(state.clone());
     recurring::spawn_job(state.clone());
     audit::spawn_pruner(state.clone());
@@ -360,6 +362,10 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/board-templates/{id}", patch(board_templates::update).delete(board_templates::delete))
         .route("/boards/{id}/save-as-template", post(board_templates::from_board))
         .route("/boards/{id}/export", get(export::export_board))
+        .route("/boards/{id}/share", get(public::get_share).put(public::save_share))
+        .route("/public/{token}", get(public::board))
+        .route("/public/{token}/cards/{id}", get(public::card))
+        .route("/public/{token}/files/{id}", get(public::file))
         .route("/statuses/{id}", patch(boards::update_status).delete(boards::delete_status))
         .route("/lists/{id}/sort", post(boards::sort_list))
         .route("/lists/{id}/archive", post(boards::archive_list))
@@ -391,6 +397,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/search", get(search::search))
         .route("/notifications", get(notify::list))
         .route("/notifications/read", post(notify::mark_read))
+        .route("/notifications/clear", post(notify::clear))
         .route("/notifications/ws", get(realtime::user_ws))
         .route("/calendar", get(cards::calendar))
         .route_layer(middleware::from_fn(metrics::track))

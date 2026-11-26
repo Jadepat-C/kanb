@@ -42,6 +42,9 @@ import { Markdown } from './Markdown'
 import { toast, toastError, toastSuccess } from './toast'
 import { Avatar, Button, ColorPicker, Input, Popover, Spinner } from './ui'
 
+
+/** "Due soon" reminder choices, minutes before the due date (1440 = the default). */
+const REMIND = [0, 15, 60, 180, 1440, 2880, 10080]
 export function CardModal({
   cardId,
   b,
@@ -760,6 +763,25 @@ function Sidebar({
           )}
         </div>
       </Prop>
+
+      {card.due_at && (
+        <Prop label={t('card.remind')}>
+          <select
+            value={card.remind_minutes ?? 1440}
+            disabled={!canDue}
+            title={t('card.remindHint')}
+            aria-label={t('card.remind')}
+            onChange={(e) => patch({ remind_minutes: Number(e.target.value) === 1440 ? null : Number(e.target.value) })}
+            className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm disabled:opacity-60"
+          >
+            {[...REMIND, ...(card.remind_minutes != null && !REMIND.includes(card.remind_minutes) ? [card.remind_minutes] : [])].map((m) => (
+              <option key={m} value={m}>
+                {REMIND.includes(m) ? t(`card.remindOpt.${m}`) : t('card.remindCustom', { n: m })}
+              </option>
+            ))}
+          </select>
+        </Prop>
+      )}
 
       <CalendarPickButton cardId={cardId} />
 

@@ -396,6 +396,28 @@ pub const SECURITY_KEY: &str = "security";
 pub struct Security {
     /// everyone must set up two-factor sign-in before using the app
     require_2fa: bool,
+    /// board owners may share a read-only public link (turning this off stops every existing link)
+    public_links: bool,
+}
+
+/// A change to the security settings; a setting left out keeps its current value (an older page that doesn't know
+/// about a newer setting must not reset it).
+#[derive(Deserialize)]
+pub struct SecurityReq {
+    require_2fa: Option<bool>,
+    public_links: Option<bool>,
+}
+
+/// Admin → Security allows public board links (on unless an admin turned it off).
+pub async fn public_links_allowed(db: &sqlx::PgPool) -> bool {
+    sqlx::query_as::<_, (Option<bool>,)>("SELECT (value->>'public_links')::boolean FROM app_settings WHERE key = $1")
+        .bind(SECURITY_KEY)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|r| r.0)
+        .unwrap_or(true)
 }
 
 #[derive(Serialize)]
@@ -405,18 +427,23 @@ pub struct SecurityView {
     /// active accounts, and how many of them have no two-factor sign-in yet
     users: i64,
     users_without_2fa: i64,
+    /// boards that have a public link
+    public_boards: i64,
 }
 
 async fn security_view(state: &AppState) -> AppResult<SecurityView> {
-    let (require_2fa, users, without): (bool, i64, i64) = sqlx::query_as(
+    let (require_2fa, public_links, users, without): (bool, bool, i64, i64) = sqlx::query_as(
         "SELECT COALESCE((SELECT (value->>'require_2fa')::boolean FROM app_settings WHERE key = $1), false),
+                COALESCE((SELECT (value->>'public_links')::boolean FROM app_settings WHERE key = $1), true),
                 count(*), count(*) FILTER (WHERE totp_enabled_at IS NULL)
          FROM users WHERE deleted_at IS NULL AND is_active",
     )
     .bind(SECURITY_KEY)
     .fetch_one(&state.db)
     .await?;
-    Ok(SecurityView { settings: Security { require_2fa }, users, users_without_2fa: without })
+    let (public_boards,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM boards WHERE public_token IS NOT NULL AND archived_at IS NULL").fetch_one(&state.db).await?;
+    Ok(SecurityView { settings: Security { require_2fa, public_links }, users, users_without_2fa: without, public_boards })
 }
 
 pub async fn get_security(State(state): State<AppState>, _a: SuperAdmin) -> AppResult<Json<SecurityView>> {
@@ -427,8 +454,13 @@ pub async fn save_security(
     State(state): State<AppState>,
     SuperAdmin(me): SuperAdmin,
     crate::audit::ClientIp(ip): crate::audit::ClientIp,
-    Json(r): Json<Security>,
+    Json(req): Json<SecurityReq>,
 ) -> AppResult<Json<SecurityView>> {
+    let before = security_view(&state).await?.settings;
+    let r = Security {
+        require_2fa: req.require_2fa.unwrap_or(before.require_2fa),
+        public_links: req.public_links.unwrap_or(before.public_links),
+    };
     sqlx::query(
         "INSERT INTO app_settings (key, value) VALUES ($1, $2)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
@@ -437,7 +469,25 @@ pub async fn save_security(
     .bind(serde_json::to_value(&r).map_err(|e| AppError::Internal(e.into()))?)
     .execute(&state.db)
     .await?;
-    tracing::info!(by = %me.username, require_2fa = r.require_2fa, "security settings changed");
-    crate::audit::log(&state, Some(me.id), "settings_changed", None, ip.as_deref(), serde_json::json!({ "area": "security", "require_2fa": r.require_2fa })).await;
+    tracing::info!(by = %me.username, require_2fa = r.require_2fa, public_links = r.public_links, "security settings changed");
+    crate::audit::log(
+        &state,
+        Some(me.id),
+        "settings_changed",
+        None,
+        ip.as_deref(),
+        // only what changed
+        {
+            let mut d = serde_json::json!({ "area": "security" });
+            if r.require_2fa != before.require_2fa {
+                d["require_2fa"] = r.require_2fa.into();
+            }
+            if r.public_links != before.public_links {
+                d["public_links"] = r.public_links.into();
+            }
+            d
+        },
+    )
+    .await;
     Ok(Json(security_view(&state).await?))
 }

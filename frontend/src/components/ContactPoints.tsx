@@ -13,7 +13,20 @@ import { toastError, toastSuccess } from './toast'
 import { Button, Dialog, Field, Input, Toggle } from './ui'
 
 type Kind = 'discord' | 'slack' | 'teams' | 'googlechat' | 'telegram' | 'line' | 'ntfy' | 'gotify' | 'webhook'
-const EVENTS = ['assigned', 'mentioned', 'commented', 'due_soon', 'overdue'] as const
+/** What a person can be notified about (as the server's notify::KINDS); the first five are on by default. */
+export const EVENTS = [
+  'assigned',
+  'mentioned',
+  'commented',
+  'due_soon',
+  'overdue',
+  'card_created',
+  'card_moved',
+  'status',
+  'card_updated',
+  'attachments',
+  'archived',
+] as const
 
 const PERSONAL: ContactScope = {
   queryKey: ['contact-points'],
@@ -110,6 +123,7 @@ export function NotificationPrefs({ me }: { me: User }) {
     <section className="space-y-4 rounded-xl border border-line bg-surface p-5">
       <h2 className="font-semibold">{t('notifications.title')}</h2>
       <p className="text-xs text-muted">{t('notifications.whenHint')}</p>
+      <NotifyEvents me={me} />
       {/* email */}
       <div className="space-y-2">
         <label className={clsx('flex items-start gap-2 text-sm', sys && !sys.email && 'opacity-60')}>
@@ -138,6 +152,38 @@ export function NotificationPrefs({ me }: { me: User }) {
         <ContactPointList scope={PERSONAL} />
       </div>
     </section>
+  )
+}
+
+/** Profile: the kinds of notification I want, one checkbox each (saved right away). */
+function NotifyEvents({ me }: { me: User }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const on = new Set(me.notify_events)
+  const toggle = (e: string, v: boolean) => {
+    const next = EVENTS.filter((k) => (k === e ? v : on.has(k)))
+    qc.setQueryData<User>(['me'], { ...me, notify_events: next })
+    api.patch<User>('/me', { notify_events: next }).then(
+      (u) => qc.setQueryData(['me'], u),
+      (err) => (qc.setQueryData(['me'], me), toastError(err)),
+    )
+  }
+  return (
+    <fieldset className="space-y-2 border-t border-line pt-4">
+      <legend className="sr-only">{t('notifications.whatTitle')}</legend>
+      <h3 className="text-sm font-semibold" aria-hidden>
+        {t('notifications.whatTitle')}
+      </h3>
+      <div className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+        {EVENTS.map((e) => (
+          <label key={e} className="flex items-start gap-2 text-sm">
+            <input type="checkbox" checked={on.has(e)} onChange={(ev) => toggle(e, ev.target.checked)} className="mt-1 accent-[var(--color-accent)]" />
+            <span>{t(`contacts.ev.${e}`)}</span>
+          </label>
+        ))}
+      </div>
+      <p className="text-xs text-muted">{t('notifications.whatHint')}</p>
+    </fieldset>
   )
 }
 

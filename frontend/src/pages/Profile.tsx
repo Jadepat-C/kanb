@@ -9,7 +9,7 @@ import { NotificationPrefs } from '../components/ContactPoints'
 import { TwoFactorSection } from '../components/TwoFactor'
 import { SessionList } from '../components/Sessions'
 import { toast, toastError, toastSuccess } from '../components/toast'
-import { Avatar, Button, ColorPicker, Field, Input } from '../components/ui'
+import { Avatar, Button, ColorPicker, Field, Input, PasswordInput } from '../components/ui'
 import { api, upload } from '../lib/api'
 import { avatarUrl, label } from '../lib/user'
 import { useMe, useUpdatePrefs } from '../lib/auth'
@@ -25,6 +25,8 @@ export function Profile() {
   const [color, setColor] = useState<string | null>(me?.avatar_color ?? null)
   const [cur, setCur] = useState('')
   const [next, setNext] = useState('')
+  const [next2, setNext2] = useState('')
+  const mismatch = next2.length > 0 && next !== next2
   const save = useMutation({
     mutationFn: () =>
       api.patch<User>('/me', {
@@ -37,7 +39,7 @@ export function Profile() {
   })
   const pw = useMutation({
     mutationFn: () => api.post('/me/password', { current_password: cur, new_password: next }),
-    onSuccess: () => (setCur(''), setNext(''), toast(t('profile.passwordChanged'))),
+    onSuccess: () => (setCur(''), setNext(''), setNext2(''), toast(t('profile.passwordChanged'))),
     onError: toastError,
   })
   const [sp, setSp] = useSearchParams()
@@ -122,18 +124,22 @@ export function Profile() {
             <form
               onSubmit={(e) => {
                 e.preventDefault()
-                pw.mutate()
+                if (next === next2) pw.mutate()
               }}
               className="space-y-4 rounded-xl border border-line bg-surface p-5"
             >
               <h2 className="font-semibold">{t('profile.changePassword')}</h2>
               <Field label={t('profile.currentPassword')}>
-                <Input type="password" value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
+                <PasswordInput value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
               </Field>
               <Field label={t('profile.newPassword')} hint={t('errors.password_too_short')}>
-                <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={8} autoComplete="new-password" />
+                <PasswordInput value={next} onChange={(e) => setNext(e.target.value)} required minLength={8} autoComplete="new-password" />
               </Field>
-              <Button variant="primary" disabled={pw.isPending}>
+              <Field label={t('auth.confirmPassword')}>
+                <PasswordInput value={next2} onChange={(e) => setNext2(e.target.value)} required minLength={8} autoComplete="new-password" />
+              </Field>
+              {mismatch && <p className="text-sm text-red-600">{t('auth.passwordsDiffer')}</p>}
+              <Button variant="primary" disabled={pw.isPending || mismatch || next.length < 8 || next !== next2}>
                 {t('common.save')}
               </Button>
             </form>

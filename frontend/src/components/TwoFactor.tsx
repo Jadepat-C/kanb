@@ -6,7 +6,7 @@ import { api } from '../lib/api'
 import { errorText } from '../lib/i18n'
 import type { User } from '../lib/types'
 import { toast, toastError, toastSuccess } from './toast'
-import { Button, Dialog, Field, Input } from './ui'
+import { Button, Dialog, Field, Input, PasswordInput } from './ui'
 import { copyText } from '../lib/clipboard'
 
 /** Profile section: turn the authenticator app on/off, switch phones, new recovery codes. */
@@ -105,7 +105,7 @@ export function SetupDialog({ me, onClose, holdMe }: { me: User; onClose: () => 
           <>
             <p className="text-sm text-muted">{t('twofa.passwordFirst')}</p>
             <Field label={t('auth.password')}>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus required autoComplete="current-password" />
+              <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoFocus required autoComplete="current-password" />
             </Field>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={onClose}>
@@ -195,7 +195,7 @@ function PasswordDialog({ mode, onClose }: { mode: 'disable' | 'codes'; onClose:
       >
         <p className="text-sm text-muted">{mode === 'disable' ? t('twofa.turnOffHint') : t('twofa.newCodesHint')}</p>
         <Field label={t('auth.password')}>
-          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus required autoComplete="current-password" />
+          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoFocus required autoComplete="current-password" />
         </Field>
         {err && <p className="text-sm text-red-600">{err}</p>}
         <div className="flex justify-end gap-2">

@@ -232,7 +232,7 @@ pub struct DownloadQuery {
 }
 
 impl DownloadQuery {
-    fn forced(&self) -> bool {
+    pub(crate) fn forced(&self) -> bool {
         self.download.as_deref().is_some_and(|v| !matches!(v, "0" | "false"))
     }
 }
@@ -265,21 +265,26 @@ pub async fn download(
     .await?;
     let (board_id, filename, content_type, key, size) = row;
     board_access(&state.db, &u, board_id).await?;
-    let obj = state.store.get(&ObjPath::from(key.as_str())).await?;
+    serve(&state, &filename, &content_type, &key, size, q.forced(), "private, max-age=86400").await
+}
+
+/// Streams a stored file: images inline, everything else as a download, never sniffed or run as a page.
+pub(crate) async fn serve(state: &AppState, filename: &str, content_type: &str, key: &str, size: i64, forced: bool, cache: &'static str) -> AppResult<Response> {
+    let obj = state.store.get(&ObjPath::from(key)).await?;
     let stream = obj.into_stream().map_err(std::io::Error::other);
 
-    let inline = !q.forced() && INLINE_TYPES.contains(&content_type.as_str());
-    let ct = if inline { content_type.as_str() } else { "application/octet-stream" };
+    let inline = !forced && INLINE_TYPES.contains(&content_type);
+    let ct = if inline { content_type } else { "application/octet-stream" };
     let mut resp = Body::from_stream(stream).into_response();
     let h = resp.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_str(ct).unwrap_or(HeaderValue::from_static("application/octet-stream")));
     h.insert(header::CONTENT_LENGTH, HeaderValue::from(size));
-    if let Ok(v) = HeaderValue::from_str(&content_disposition(if inline { "inline" } else { "attachment" }, &filename)) {
+    if let Ok(v) = HeaderValue::from_str(&content_disposition(if inline { "inline" } else { "attachment" }, filename)) {
         h.insert(header::CONTENT_DISPOSITION, v);
     }
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; sandbox"));
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"));
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
     Ok(resp)
 }
 

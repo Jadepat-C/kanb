@@ -1,7 +1,8 @@
 import clsx from 'clsx'
 import { Dialog as RDialog, DropdownMenu as RMenu, Popover as RPopover } from 'radix-ui'
-import { X } from 'lucide-react'
+import { Eye, EyeOff, X } from 'lucide-react'
 import { forwardRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { closeAutoFocus } from './menu'
 
 type Variant = 'primary' | 'ghost' | 'outline' | 'danger'
@@ -36,6 +37,30 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
         className,
       )}
     />
+  )
+})
+
+/** A password box with an eye button that shows or hides what was typed. */
+export const PasswordInput = forwardRef<HTMLInputElement, Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>>(function PasswordInput(
+  { className, ...p },
+  ref,
+) {
+  const { t } = useTranslation()
+  const [shown, setShown] = useState(false)
+  return (
+    <span className="relative block">
+      <Input ref={ref} {...p} type={shown ? 'text' : 'password'} className={clsx('pr-9', className)} spellCheck={false} autoCapitalize="off" />
+      <button
+        type="button"
+        onClick={() => setShown((v) => !v)}
+        aria-label={shown ? t('common.hidePassword') : t('common.showPassword')}
+        title={shown ? t('common.hidePassword') : t('common.showPassword')}
+        aria-pressed={shown}
+        className="absolute inset-y-0 right-0 flex w-9 items-center justify-center rounded-r-md text-muted hover:text-[var(--text)] cursor-pointer"
+      >
+        {shown ? <EyeOff size={16} /> : <Eye size={16} />}
+      </button>
+    </span>
   )
 })
 

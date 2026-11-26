@@ -136,7 +136,8 @@ function describe(t: TFunction, e: AuditEntry, names: Map<string, string>) {
   }
   if (e.kind === 'settings_changed') {
     extra.push(t(`audit.area.${d.area}`))
-    if (d.area === 'security') extra.push(t(d.require_2fa ? 'audit.require2faOn' : 'audit.require2faOff'))
+    if (d.area === 'security' && typeof d.require_2fa === 'boolean') extra.push(t(d.require_2fa ? 'audit.require2faOn' : 'audit.require2faOff'))
+    if (d.area === 'security' && typeof d.public_links === 'boolean') extra.push(t(d.public_links ? 'audit.publicLinksOn' : 'audit.publicLinksOff'))
     if (Array.isArray(d.fields) && d.fields.length) extra.push(d.fields.join(', '))
     if (d.area === 'announcement') extra.push(d.removed ? t('audit.removed') : `“${String(d.text ?? '')}”`)
   }

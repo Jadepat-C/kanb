@@ -152,22 +152,26 @@ function StorageTab() {
 
 interface SecurityView {
   require_2fa: boolean
+  public_links: boolean
   users: number
   users_without_2fa: number
+  public_boards: number
 }
 
-/** Instance-wide sign-in rules: require two-factor sign-in for everyone. */
+/** Instance-wide rules: require two-factor sign-in for everyone; allow public board links. */
 function SecurityTab({ me }: { me: User }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const { data } = useQuery({ queryKey: ['admin-security'], queryFn: () => api.get<SecurityView>('/admin/security') })
   const save = useMutation({
-    mutationFn: (require_2fa: boolean) => api.put<SecurityView>('/admin/security', { require_2fa }),
-    onSuccess: (v) => {
+    mutationFn: (change: Partial<Pick<SecurityView, 'require_2fa' | 'public_links'>>) =>
+      api.put<SecurityView>('/admin/security', { require_2fa: data!.require_2fa, public_links: data!.public_links, ...change }),
+    onSuccess: (v, change) => {
       qc.setQueryData(['admin-security'], v)
       qc.invalidateQueries({ queryKey: ['me'] })
       qc.invalidateQueries({ queryKey: ['admin-users'] })
-      toastSuccess(v.require_2fa ? t('security.turnedOn') : t('security.turnedOff'))
+      if (change.require_2fa !== undefined) toastSuccess(v.require_2fa ? t('security.turnedOn') : t('security.turnedOff'))
+      else toastSuccess(v.public_links ? t('security.linksOn') : t('security.linksOff'))
     },
     onError: toastError,
   })
@@ -197,7 +201,7 @@ function SecurityTab({ me }: { me: User }) {
                     }
                   : { title: t('security.confirmOffTitle'), message: t('security.confirmOff'), confirmLabel: t('security.turnOff'), danger: true },
               )
-              if (ok) save.mutate(on)
+              if (ok) save.mutate({ require_2fa: on })
             }}
           />
         </div>
@@ -207,6 +211,30 @@ function SecurityTab({ me }: { me: User }) {
             : t('security.allHave', { total: data.users })}
         </p>
         <p className="text-xs text-muted">{t('security.lostPhone')}</p>
+      </section>
+      <section className="space-y-3 rounded-lg border border-line bg-surface p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-semibold">{t('security.publicLinks')}</h2>
+            <p className="mt-1 text-sm text-muted">{t('security.publicLinksHint')}</p>
+          </div>
+          <Toggle
+            checked={data.public_links}
+            disabled={save.isPending}
+            onChange={async (on) => {
+              const ok =
+                on ||
+                (await ask({
+                  title: t('security.linksOffTitle'),
+                  message: t('security.linksOffMsg', { count: data.public_boards }),
+                  confirmLabel: t('security.linksOffConfirm'),
+                  danger: true,
+                }))
+              if (ok) save.mutate({ public_links: on })
+            }}
+          />
+        </div>
+        <p className="text-sm text-muted">{t('security.publicBoards', { count: data.public_boards })}</p>
       </section>
     </div>
   )

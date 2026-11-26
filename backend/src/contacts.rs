@@ -153,7 +153,7 @@ pub(crate) fn open_cfg(kind: &str, mut cfg: Map<String, Value>) -> Map<String, V
     cfg
 }
 
-const EVENTS: [&str; 5] = ["assigned", "mentioned", "commented", "due_soon", "overdue"];
+const EVENTS: [&str; 11] = crate::notify::KINDS;
 
 fn get<'a>(cfg: &'a Map<String, Value>, k: &str) -> &'a str {
     cfg.get(k).and_then(|v| v.as_str()).map(str::trim).unwrap_or("")

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ShieldCheck, Download, Columns3, LayoutTemplate, MessageSquare, Paperclip, Pencil, Plus, Search, Settings2, SquareStack, Trash2, Users } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ShieldCheck, Copy, Download, Globe, RefreshCw, Columns3, LayoutTemplate, MessageSquare, Paperclip, Pencil, Plus, Search, Settings2, SquareStack, Trash2, Users } from 'lucide-react'
 import { Stars } from './CardTile'
 import { boardScope, ContactPointList } from './ContactPoints'
 import { SaveBoardTemplate } from './SaveBoardTemplate'
@@ -17,11 +17,12 @@ import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import type { BoardHelpers } from '../lib/board'
 import type { CardTemplate, List, Role, UserBrief } from '../lib/types'
-import { toast, toastError } from './toast'
+import { toast, toastError, toastSuccess } from './toast'
+import { copyText } from '../lib/clipboard'
 import { DROP, MItem, MSep } from './menu'
-import { Avatar, Button, ColorPicker, Dialog, Field, Input, Menu, MenuContent, MenuTrigger } from './ui'
+import { Avatar, Button, ColorPicker, Dialog, Field, Input, Menu, MenuContent, MenuTrigger, Toggle } from './ui'
 
-type Tab = 'general' | 'members' | 'roles' | 'statuses' | 'labels' | 'templates' | 'notifications' | 'archive'
+type Tab = 'general' | 'members' | 'roles' | 'statuses' | 'labels' | 'templates' | 'notifications' | 'share' | 'archive'
 
 export function BoardSettings({
   open,
@@ -42,8 +43,8 @@ export function BoardSettings({
       <div className="flex flex-col sm:flex-row">
         {/* phones: the tabs wrap onto a few lines so every one stays visible */}
         <nav className="flex flex-wrap gap-1 border-b border-line p-2 sm:w-48 sm:flex-col sm:flex-nowrap sm:border-b-0 sm:border-r">
-          {(['general', 'members', 'roles', 'statuses', 'labels', 'templates', 'notifications', 'archive'] as Tab[])
-            .filter((k) => k !== 'notifications' || b.can('notifications.manage'))
+          {(['general', 'members', 'roles', 'statuses', 'labels', 'templates', 'notifications', 'share', 'archive'] as Tab[])
+            .filter((k) => (k !== 'notifications' || b.can('notifications.manage')) && (k !== 'share' || b.can('board.manage')))
             .map((k) => (
             <button
               key={k}
@@ -65,6 +66,7 @@ export function BoardSettings({
           {tab === 'labels' && <Labels b={b} boardId={boardId} />}
           {tab === 'templates' && <Templates b={b} boardId={boardId} />}
           {tab === 'notifications' && b.can('notifications.manage') && <BoardChannels boardId={boardId} />}
+          {tab === 'share' && b.can('board.manage') && <ShareLink boardId={boardId} />}
           {tab === 'archive' && <ArchivedCards b={b} boardId={boardId} />}
         </div>
       </div>
@@ -1002,6 +1004,99 @@ function BoardChannels({ boardId }: { boardId: string }) {
     <div className="space-y-3">
       <p className="text-sm text-muted">{t('boardChannels.hint')}</p>
       <ContactPointList scope={boardScope(boardId)} />
+    </div>
+  )
+}
+
+interface ShareState {
+  enabled: boolean
+  url: string | null
+  comments: boolean
+  files: boolean
+  /** an admin allows public links on this site */
+  allowed: boolean
+}
+
+/** Share: a read-only public link to the board, with optional comments and downloads. */
+function ShareLink({ boardId }: { boardId: string }) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const key = ['board-share', boardId]
+  const q = useQuery({ queryKey: key, queryFn: () => api.get<ShareState>(`/boards/${boardId}/share`) })
+  const save = useMutation({
+    mutationFn: (body: Partial<ShareState> & { reset?: boolean }) => api.put<ShareState>(`/boards/${boardId}/share`, body),
+    onSuccess: (r) => qc.setQueryData(key, r),
+    onError: (e) => {
+      qc.invalidateQueries({ queryKey: key })
+      toastError(e)
+    },
+  })
+  const s = q.data
+  if (!s) return null
+  // the checkboxes tick right away; the server's answer (or a failure) settles it
+  const option = (change: Pick<Partial<ShareState>, 'comments' | 'files'>) => {
+    qc.setQueryData(key, { ...s, ...change })
+    save.mutate(change)
+  }
+  const copy = (url: string) => copyText(url).then((ok) => (ok ? toastSuccess(t('common.copied')) : toast(t('common.copyManually'))))
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted">{t('share.hint')}</p>
+      {!s.allowed && (
+        <p className="rounded-md bg-amber-500/10 px-2.5 py-2 text-xs text-amber-800 dark:text-amber-300">{t('share.offByAdmin')}</p>
+      )}
+      <label className="flex items-center gap-3">
+        <Toggle
+          checked={s.enabled}
+          disabled={save.isPending || (!s.allowed && !s.enabled)}
+          onChange={async (v) => {
+            if (v ? await ask({ title: t('share.turnOnTitle'), message: t('share.turnOnMsg'), confirmLabel: t('share.turnOn') }) : await ask({ title: t('share.turnOffTitle'), message: t('share.turnOffMsg'), confirmLabel: t('share.turnOff'), danger: true }))
+              save.mutate({ enabled: v })
+          }}
+        />
+        <span className="flex items-center gap-1.5 text-sm font-medium">
+          <Globe size={15} /> {t('share.enable')}
+        </span>
+      </label>
+      {s.enabled && s.url && (
+        <>
+          <div className="flex gap-2">
+            <Input readOnly value={s.url} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" aria-label={t('share.link')} />
+            <Button onClick={() => copy(s.url!)}>
+              <Copy size={14} /> {t('common.copy')}
+            </Button>
+          </div>
+          <fieldset className="space-y-2">
+            <legend className="mb-1 text-sm font-semibold">{t('share.visitorsCan')}</legend>
+            <label className="flex items-start gap-2 text-sm opacity-70">
+              <input type="checkbox" checked disabled className="mt-1" />
+              <span>{t('share.seeBoard')}</span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" checked={s.comments} onChange={(e) => option({ comments: e.target.checked })} className="mt-1 accent-[var(--color-accent)]" />
+              <span>{t('share.comments')}</span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" checked={s.files} onChange={(e) => option({ files: e.target.checked })} className="mt-1 accent-[var(--color-accent)]" />
+              <span>
+                {t('share.files')}
+                <span className="block text-xs text-muted">{t('share.filesHint')}</span>
+              </span>
+            </label>
+            <p className="text-xs text-muted">{t('share.neverEdit')}</p>
+          </fieldset>
+          <div className="flex flex-wrap gap-2 border-t border-line pt-3">
+            <Button
+              size="sm"
+              onClick={async () => {
+                if (await ask({ title: t('share.resetTitle'), message: t('share.resetMsg'), confirmLabel: t('share.reset'), danger: true })) save.mutate({ reset: true })
+              }}
+            >
+              <RefreshCw size={13} /> {t('share.reset')}
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   )
 }

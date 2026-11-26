@@ -3,7 +3,7 @@ import { Languages, Moon, Sun } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router'
-import { Button, Field, Input } from '../components/ui'
+import { Button, Field, Input, PasswordInput } from '../components/ui'
 import { ApiError, api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { errorText, setLocale } from '../lib/i18n'
@@ -142,7 +142,7 @@ export function Login() {
                 <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" required />
               </Field>
               <Field label={t('auth.password')}>
-                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+                <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
               </Field>
               {err && <p className="text-sm text-red-600">{err}</p>}
               <Button variant="primary" className="w-full" disabled={busy}>
@@ -208,10 +208,10 @@ function FirstRun() {
         <Input value={f.display_name} onChange={set('display_name')} autoComplete="name" />
       </Field>
       <Field label={t('auth.password')} hint={t('errors.password_too_short')}>
-        <Input type="password" value={f.password} onChange={set('password')} autoComplete="new-password" minLength={8} required />
+        <PasswordInput value={f.password} onChange={set('password')} autoComplete="new-password" minLength={8} required />
       </Field>
       <Field label={t('setup.confirm')}>
-        <Input type="password" value={f.confirm} onChange={set('confirm')} autoComplete="new-password" minLength={8} required />
+        <PasswordInput value={f.confirm} onChange={set('confirm')} autoComplete="new-password" minLength={8} required />
       </Field>
       {err && <p className="text-sm text-red-600">{err}</p>}
       <Button variant="primary" className="w-full" disabled={busy}>

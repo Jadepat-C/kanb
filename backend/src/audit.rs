@@ -78,7 +78,7 @@ const TOPICS: &[(&str, &[&str])] = &[
     ("account", &["password_changed", "password_reset", "twofa_enabled", "twofa_disabled", "recovery_code_used"]),
     ("users", &["user_created", "user_updated", "user_deleted", "user_password_reset", "user_reset_link_sent", "user_twofa_reset", "sessions_revoked"]),
     ("settings", &["settings_changed"]),
-    ("boards", &["board_owner_added", "board_deleted"]),
+    ("boards", &["board_owner_added", "board_deleted", "board_shared", "board_unshared", "board_share_reset", "board_share_changed"]),
 ];
 
 #[derive(Deserialize)]
