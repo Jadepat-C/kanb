@@ -53,6 +53,8 @@ pub async fn insert_user(
     can_create_boards: bool,
     locale: &str,
     must_change_password: bool,
+    // Some("email" | "review"): a self sign-up that can't be used yet (no "Getting started" board until it's activated)
+    signup: Option<&str>,
 ) -> AppResult<User> {
     let locale = if locale == "th" { "th" } else { "en" };
     let username = validate_username(username)?;
@@ -67,8 +69,10 @@ pub async fn insert_user(
     let id = Uuid::now_v7();
     let color = AVATAR_COLORS[(id.as_u128() % AVATAR_COLORS.len() as u128) as usize];
     let user: User = sqlx::query_as(sqlf!(
-        "INSERT INTO users (id, username, display_name, email, password_hash, is_super_admin, can_create_boards, avatar_color, locale, must_change_password)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING {USER_COLUMNS}"
+        "INSERT INTO users (id, username, display_name, email, password_hash, is_super_admin, can_create_boards, avatar_color, locale,
+                            must_change_password, is_active, signup, signed_up_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, $11::text IS NULL, $11, CASE WHEN $11::text IS NULL THEN NULL ELSE now() END)
+         RETURNING {USER_COLUMNS}"
     ))
     .bind(id)
     .bind(&username)
@@ -80,8 +84,12 @@ pub async fn insert_user(
     .bind(color)
     .bind(locale)
     .bind(must_change_password)
+    .bind(signup)
     .fetch_one(db)
     .await?;
+    if signup.is_some() {
+        return Ok(user);
+    }
     // every new account starts with its own "Getting started" board (best effort: never block account creation)
     if let Err(e) = crate::tutorial::create(db, user.id, locale).await {
         tracing::warn!(error = %e, user = %user.username, "could not create tutorial board");
@@ -90,7 +98,7 @@ pub async fn insert_user(
 }
 
 pub async fn list_users(State(state): State<AppState>, _a: SuperAdmin) -> AppResult<Json<Vec<User>>> {
-    let users: Vec<User> = sqlx::query_as(sqlf!("SELECT {USER_COLUMNS} FROM users WHERE deleted_at IS NULL ORDER BY lower(display_name)"))
+    let users: Vec<User> = sqlx::query_as(sqlf!("SELECT {USER_COLUMNS} FROM users WHERE deleted_at IS NULL AND signup IS NULL ORDER BY lower(display_name)"))
         .fetch_all(&state.db)
         .await?;
     Ok(Json(users))
@@ -104,7 +112,7 @@ pub async fn create_user(
 ) -> AppResult<Json<serde_json::Value>> {
     let locale = r.locale.clone().unwrap_or_else(|| admin.locale.clone());
     // the admin chose this password, so the user must replace it at first sign-in
-    let u = insert_user(&state.db, &r.username, &r.display_name, r.email, &r.password, r.is_super_admin, r.can_create_boards, &locale, true)
+    let u = insert_user(&state.db, &r.username, &r.display_name, r.email, &r.password, r.is_super_admin, r.can_create_boards, &locale, true, None)
         .await
         .map_err(|e| match e {
             AppError::Conflict("already_exists") => AppError::Conflict("username_taken"),
@@ -162,6 +170,11 @@ pub async fn update_user(
 ) -> AppResult<Json<User>> {
     if id == me.id && (r.is_super_admin == Some(false) || r.is_active == Some(false)) {
         return Err(AppError::BadRequest("cannot_demote_self"));
+    }
+    // a sign-up waiting for approval is approved or rejected, not edited (that would let it skip the review)
+    let (pending,): (bool,) = sqlx::query_as("SELECT signup IS NOT NULL FROM users WHERE id = $1 AND deleted_at IS NULL").bind(id).fetch_one(&state.db).await?;
+    if pending {
+        return Err(AppError::NotFound);
     }
     let email = crate::auth::normalize_email(r.email.clone())?;
     if let Some(Some(e)) = &email {

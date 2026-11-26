@@ -12,6 +12,9 @@ pub enum AppError {
     Unauthorized,
     #[error("forbidden")]
     Forbidden,
+    /// refused, with a code the page can explain (e.g. "pending_approval")
+    #[error("{0}")]
+    Denied(&'static str),
     /// two-factor sign-in is required and this account hasn't set it up yet
     #[error("two-factor sign-in required")]
     TwoFactorRequired,
@@ -63,6 +66,7 @@ impl IntoResponse for AppError {
         let (status, code) = match &self {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            AppError::Denied(c) => (StatusCode::FORBIDDEN, *c),
             AppError::TwoFactorRequired => (StatusCode::FORBIDDEN, "two_factor_required"),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             AppError::BadRequest(c) => (StatusCode::BAD_REQUEST, *c),

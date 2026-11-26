@@ -48,6 +48,35 @@
   --ink-3: rgb(27 36 48 / 0.22);
   color-scheme: light;
 }
+/* charts (Analytics): categorical slots in a fixed order, validated for colour-blind separation on both surfaces */
+.viz {
+  --series-1: #257de0;
+  --series-2: #f47230;
+  --series-3: #00b894;
+  --series-4: #f2a600;
+  --series-5: #ee7fac;
+  --series-6: #008a17;
+  --series-7: #6a4ce2;
+  --series-8: #ec4647;
+  --viz-grid: #e7e7e7;
+  --viz-axis: #c2c2c2;
+  --status-critical: #dc3c3d;
+  --status-warning: #e19a00;
+}
+.dark .viz {
+  --series-1: #338ced;
+  --series-2: #e76624;
+  --series-3: #00a888;
+  --series-4: #d28e05;
+  --series-5: #e24d8b;
+  --series-6: #0aac23;
+  --series-7: #9887ef;
+  --series-8: #eb6263;
+  --viz-grid: rgb(255 255 255 / 0.08);
+  --viz-axis: rgb(255 255 255 / 0.22);
+  --status-critical: #eb6263;
+  --status-warning: #fbb315;
+}
 .dark {
   --bg: #10151c;
   --column: #141a22;

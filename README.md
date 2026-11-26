@@ -5,7 +5,7 @@
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
 Kanb is a self-hosted Kanban board for a team or a small organization. You run it on your own server with Docker,
-your files stay on that server, and there is no public sign-up: an admin creates every account.
+your files stay on that server, and by default there is no public sign-up: an admin creates every account.
 
 It works in English and Thai, in light and dark, and on phones, tablets and desktops.
 
@@ -25,6 +25,10 @@ It works in English and Thai, in light and dark, and on phones, tablets and desk
 - Board, calendar (month and week) and Gantt chart for every board, plus a calendar across all your boards.
 - Drag cards between days on the calendar, or move and resize bars on the Gantt chart.
 - Hover any card for a preview; Ctrl+K searches every board and card you can see.
+- Analytics for each board (for roles with "View analytics": Owner and Admin by default): open, finished and overdue
+  cards, on-time rate, lead and cycle time (median and 85th percentile), created vs finished per week, cards per column
+  over time (cumulative flow), work per column against its WIP limit, stale and blocked cards, each person's workload,
+  and breakdowns by label, status and priority, for the last 7 to 365 days.
 
 **Working together**
 - Live updates: other people's changes appear immediately, and you can see who is looking at or editing a card.
@@ -38,8 +42,15 @@ It works in English and Thai, in light and dark, and on phones, tablets and desk
 - Board and card templates, and recurring cards (daily, weekly, monthly).
 - A personal calendar feed for Google Calendar, Outlook or Apple Calendar: the whole app, chosen boards or single cards.
 - Export a board as CSV, JSON, or a ZIP with every attached file.
+- Import a board from Trello or Wekan (their JSON export), from another Kanb (JSON, or ZIP with the files), or from any
+  CSV (Jira, Asana, GitHub Projects, Excel, Google Sheets…: you match its columns to card fields in a preview). People
+  are matched to accounts by username or email; comments keep their original author's name and date, and nobody is
+  notified about imported cards. (Planka has no board export, so it isn't supported.)
 
 **Accounts and security**
+- No public sign-up by default: admins create accounts. Set `ALLOW_SIGNUP=true` to let people register themselves,
+  with email confirmation and, if you want, an admin's approval for each new account (waiting sign-ups arrive as one
+  bundled notification).
 - Super admins manage users; each board has its own roles (Owner, Admin, Editor, Commenter, Viewer, or your own)
   built from a permission matrix. A role can be limited to the cards its members created, and to the columns they
   may add cards to (pick one column to send every new card there).
@@ -134,7 +145,7 @@ that serves HTTPS in front of it (a reverse proxy). Browser notifications and se
 ### After the first sign-in
 
 Everything else is set up in the app. Admin and Profile are in the menu under your avatar (top right).
-- **Users:** Admin → Users. There is no public sign-up. A new user gets a generated password to pass on, or an
+- **Users:** Admin → Users. There is no public sign-up unless you turn it on with `ALLOW_SIGNUP`. A new user gets a generated password to pass on, or an
   email invitation once email is set up, and chooses their own password at first sign-in.
 - **Email:** Admin → Email settings. Any SMTP server works (Gmail with an app password, Microsoft 365, your provider).
   It sends invitations, password resets and notifications.
@@ -186,6 +197,7 @@ services:
       SETUP_CODE: ${SETUP_CODE}                 # asked for when you create the first admin in the browser
       # MAX_UPLOAD_MB: "50"
       # MAX_STORAGE_GB: "50"                   # total space for all uploads; 0 or unset = no limit
+      # ALLOW_SIGNUP: "true"                    # people may create their own account (approval: Admin → Users)
       # SESSION_DAYS: "30"
       # METRICS_ADDR: "0.0.0.0:9091"            # Prometheus metrics; publish this port to your monitoring only
 
@@ -276,6 +288,7 @@ explains each line.
 | `SESSION_DAYS` | `30` | How long a sign-in lasts without use. |
 | `MAX_UPLOAD_MB` | `50` | Largest file people can upload. Raise your proxy's limit to match. |
 | `MAX_STORAGE_GB` | `0` (no limit) | Total space all uploaded files may take together, in GB. When it's full, new uploads are refused with a message until files are deleted. Admin → Storage shows how much is used and which boards use the most. |
+| `ALLOW_SIGNUP` | `false` | Adds "Create an account" to the sign-in page (`/register`). In Admin → Users → Sign-up you choose whether an admin approves each new account (the default) or they can be used right away, and whether they may create boards. When email is set up, people confirm their address first; unconfirmed accounts are removed after a day. With it off, the page and its API don't exist. |
 | `METRICS_ADDR` | (off) | Prometheus metrics at `http://<this address>/metrics`, e.g. `0.0.0.0:9091`. It's a separate port on purpose: publish it to your monitoring only, never through your reverse proxy. See [Monitoring](#monitoring). |
 
 After editing `.env`, apply it with `docker compose up -d`.

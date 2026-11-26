@@ -22,6 +22,7 @@ import http.client
 import http.cookiejar
 import json
 import os
+import re
 import secrets
 import sys
 import urllib.error
@@ -67,13 +68,21 @@ class Client:
             raise SystemExit(f"setup failed: {self.name} {method} {path} -> {status} {data}")
         return data
 
-    def upload(self, path: str, filename: str, content: bytes, ctype: str = "text/plain"):
+    def upload(self, path: str, filename: str, content: bytes, ctype: str = "text/plain", options: Any = None):
         boundary = "authz" + secrets.token_hex(8)
-        raw = (
+        raw = b""
+        if options is not None:
+            raw += (f'--{boundary}\r\nContent-Disposition: form-data; name="options"\r\n\r\n' + json.dumps(options) + "\r\n").encode()
+        raw += (
             f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
             f"Content-Type: {ctype}\r\n\r\n"
         ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
         return self.call("POST", path, raw=raw, ctype=f"multipart/form-data; boundary={boundary}")
+
+    def download(self, path: str) -> bytes:
+        req = urllib.request.Request(BASE + "/api" + path, headers={"Origin": BASE})
+        with self.opener.open(req, timeout=60) as r:
+            return r.read()
 
     def websocket(self, path: str) -> int:
         """Status of a WebSocket upgrade (101 = connected)."""
@@ -249,6 +258,8 @@ CASES = [
     Case("POST", B + "/restore", "owner", fresh="archived_board"),
     Case("DELETE", B + "/permanent", "owner", fresh="board"),
     Case("GET", B + "/archived-cards", "viewer"),
+    Case("GET", B + "/analytics", "owner", note="the Editor role doesn't have View analytics"),
+    Case("GET", B + "/analytics?days=365", "owner"),
     Case("GET", B + "/archived-lists", "viewer"),
     Case("GET", B + "/export?format=json", "viewer"),
     Case("GET", B + "/export?format=zip", "viewer"),
@@ -332,6 +343,9 @@ CASES = [
     Case("GET", "/admin/boards", "admin"),
     Case("POST", "/admin/boards/{board}/owners", "admin", {"user_id": "{extra_id}"}, fresh="board"),
     Case("GET", "/admin/system", "admin"),
+    Case("GET", "/admin/signups", "admin"),
+    Case("POST", "/admin/signups/approve", "admin", {"ids": []}),
+    Case("POST", "/admin/signups/reject", "admin", {"ids": []}),
     Case("GET", "/admin/announcement", "admin"),
     Case("PUT", "/admin/announcement", "admin", {"text": "", "level": "info"}),
     Case("GET", "/announcement", "outsider"),
@@ -486,6 +500,16 @@ def main() -> int:
         n, msgs = notification_choices(w, f)
         checked += n
         problems.extend(msgs)
+
+        # 9. importing boards
+        n, msgs = import_flow(w, f)
+        checked += n
+        problems.extend(msgs)
+
+        # 10. self sign-up (only when the server runs with ALLOW_SIGNUP=true)
+        n, msgs = signup_flow(w)
+        checked += n
+        problems.extend(msgs)
     finally:
         if os.environ.get("KEEP") == "1":
             print(f"KEEP=1: left the test users authz_{RUN}_* and their boards in place")
@@ -620,6 +644,285 @@ def notification_choices(w: World, f: dict):
     return checked, problems
 
 
+TRELLO = {
+    "id": "b1", "name": "From Trello", "desc": "trello board", "idOrganization": None, "shortLink": "abc", "prefs": {},
+    "lists": [{"id": "l2", "name": "Doing", "closed": False, "pos": 2}, {"id": "l1", "name": "To do", "closed": False, "pos": 1},
+              {"id": "l3", "name": "Old", "closed": True, "pos": 3}],
+    "labels": [{"id": "g", "name": "Bug", "color": "red"}, {"id": "h", "name": "", "color": "green_dark"}, {"id": "x", "name": "Evil", "color": "url(https://evil)"}],
+    "members": [{"id": "m1", "fullName": "Somebody Else", "username": "nobody_here_xyz"}],
+    "cards": [
+        {"id": "c1", "idShort": 7, "name": "First", "desc": "hello", "idList": "l1", "closed": False, "pos": 1, "due": "2030-02-01T10:00:00.000Z",
+         "dueComplete": True, "dateLastActivity": "2024-05-01T10:00:00.000Z", "idLabels": ["g", "h", "x"], "idMembers": ["m1"],
+         "attachments": [{"name": "spec.pdf", "url": "https://trello.com/1/cards/c1/attachments/spec.pdf"}]},
+        {"id": "c2", "idShort": 8, "name": "Second", "desc": "", "idList": "l2", "closed": True, "pos": 1, "idLabels": [], "idMembers": []},
+    ],
+    "checklists": [{"id": "k1", "idCard": "c1", "name": "Steps", "pos": 1,
+                    "checkItems": [{"name": "two", "state": "incomplete", "pos": 2}, {"name": "one", "state": "complete", "pos": 1}]}],
+    "actions": [{"type": "commentCard", "date": "2024-04-01T09:00:00.000Z", "data": {"card": {"id": "c1"}, "text": "a trello comment @someone"},
+                 "memberCreator": {"fullName": "Somebody Else"}}],
+}
+
+WEKAN = {
+    "_format": "wekan-board-1.0.0", "title": "From Wekan", "labels": [{"_id": "L1", "name": "Ops", "color": "blue"}],
+    "lists": [{"_id": "A", "title": "Backlog", "archived": False, "sort": 0}],
+    "cards": [{"_id": "C1", "title": "Wekan card", "description": "w", "listId": "A", "archived": False, "sort": 0, "labelIds": ["L1"],
+               "members": ["U1"], "dueAt": "2030-03-01T00:00:00.000Z", "cardNumber": 3}],
+    "checklists": [{"_id": "K", "cardId": "C1", "title": "Todo", "sort": 0}],
+    "checklistItems": [{"_id": "I", "checklistId": "K", "cardId": "C1", "title": "item", "isFinished": True, "sort": 0}],
+    "comments": [{"_id": "M", "text": "wekan comment", "userId": "U1", "createdAt": "2024-01-01T00:00:00.000Z"}],
+    "activities": [{"activityType": "addComment", "commentId": "M", "cardId": "C1"}],
+    "users": [{"_id": "U1", "username": "wekan_person_xyz", "profile": {"fullname": "Wekan Person"}}],
+}
+
+
+def import_flow(w: World, f: dict):
+    o, anon = w.people["owner"], Client("anon")
+    problems, checked = [], 0
+
+    def expect(label: str, ok: bool):
+        nonlocal checked
+        checked += 1
+        if not ok:
+            problems.append("import: " + label)
+
+    def imp(who: Client, name: str, data: bytes, ctype: str = "application/json", options: Any = None, path: str = "/import"):
+        return who.upload(path, name, data, ctype, options if options is not None else {"name": f"authz import {RUN} {name}"})
+
+    def cards_of(board: str):
+        b = o.ok("GET", f"/boards/{board}")
+        return b, b["cards"]
+
+    # who may import
+    tj = json.dumps(TRELLO).encode()
+    expect("anon is refused", imp(anon, "t.json", tj)[0] == 401)
+    nob = make_user(w.admin, "noboards")
+    w.admin.ok("PATCH", f"/admin/users/{nob.id}", {"can_create_boards": False})
+    expect("someone who can't create boards is refused", imp(nob, "t.json", tj)[0] == 403)
+    expect("an unknown file is refused", imp(o, "x.bin", b"\x00\x01garbage")[0] == 400)
+    expect("a damaged ZIP is refused", imp(o, "x.zip", b"PK\x03\x04garbage", "application/zip")[0] == 400)
+    expect("broken JSON is refused", imp(o, "x.json", b'{"format":"kanban-board-export", "cards": [')[0] == 400)
+
+    # the viewer wants to hear about new cards on their boards; an import must not tell them
+    v = w.people["viewer"]
+    imported: list = []
+    v.ok("PATCH", "/me", {"notify_events": ["assigned", "mentioned", "commented", "due_soon", "overdue", "card_created"]})
+
+    # Trello
+    st, r = imp(o, "trello.json", tj, options={})
+    expect(f"Trello imports ({st} {r})", st == 200 and r.get("cards") == 2)
+    if st == 200:
+        b, cards = cards_of(r["board_id"])
+        expect("Trello: columns in board order", [l["name"] for l in b["lists"]] == ["To do", "Doing"])
+        expect("Trello: board name from the file", b["board"]["name"] == "From Trello")
+        first = next((c for c in cards if c["title"] == "First"), None)
+        expect("Trello: card number kept", first is not None and first["number"] == 7)
+        expect("Trello: closed card archived", all(c["title"] != "Second" for c in cards))
+        expect("Trello: colours are only hex", all(l["color"].startswith("#") and len(l["color"]) == 7 for l in b["labels"]))
+        if first:
+            d = o.ok("GET", f"/cards/{first['id']}")["card"]
+            expect("Trello: checklist in order", "- [x] one\n- [ ] two" in d["description"])
+            expect("Trello: attachment kept as a link", "spec.pdf" in d["description"])
+            expect("Trello: unmatched assignee stays as text", "Somebody Else" in d["description"])
+            expect("Trello: done with a done date", first["done"] and first["done_at"].startswith("2024-05-01"))
+            tl = o.ok("GET", f"/cards/{first['id']}/timeline")
+            cm = [i for i in tl if i["type"] == "comment"]
+            expect("Trello: comment kept with its author as a name", len(cm) == 1 and cm[0]["imported"] and cm[0]["author_name"] == "Somebody Else" and cm[0]["author_id"] is None)
+        new = o.ok("POST", f"/lists/{b['lists'][0]['id']}/cards", {"title": "after import", "description": ""})
+        expect("a new card gets the next number", o.ok("GET", f"/cards/{new['id']}")["card"]["number"] == 9)
+
+    # Wekan
+    st, r = imp(o, "wekan.json", json.dumps(WEKAN).encode(), options={})
+    expect(f"Wekan imports ({st} {r})", st == 200 and r.get("cards") == 1)
+    if st == 200:
+        _, cards = cards_of(r["board_id"])
+        d = o.ok("GET", f"/cards/{cards[0]['id']}")["card"]
+        expect("Wekan: checklist, number and label", "- [x] item" in d["description"] and d["number"] == 3 and len(d["label_ids"]) == 1)
+        tl = o.ok("GET", f"/cards/{cards[0]['id']}/timeline")
+        expect("Wekan: comment found through its activity", any(i["type"] == "comment" and i["body"] == "wekan comment" for i in tl))
+
+    # Kanb round trips: JSON, ZIP (with files) and CSV
+    png = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                        "1f15c4890000000d49444154789c63000100000500010d0a2db40000000049454e44ae426082")
+    st, pic = o.upload(f"/cards/{f['card']}/attachments?inline=1", "pic.png", png, "image/png")
+    o.ok("PATCH", f"/cards/{f['card']}", {"description": f"top secret ![](/api/files/{pic['id']})"})
+    src = o.ok("GET", f"/boards/{f['board']}")
+    src_numbers = sorted(c["number"] for c in src["cards"])
+    for fmt_, ctype in (("json", "application/json"), ("zip", "application/zip"), ("csv", "text/csv")):
+        data = o.download(f"/boards/{f['board']}/export?format={fmt_}")
+        st, prev = imp(o, f"board.{fmt_}", data, ctype, path="/import/preview")
+        expect(f"{fmt_}: preview ({st})", st == 200 and prev.get("cards", 0) >= len(src["cards"]))
+        if fmt_ != "csv":
+            expect(f"{fmt_}: the board's people are matched", st == 200 and any(p["account"] and p["account"]["id"] == w.people["editor"].id for p in prev["people"]))
+        st, r = imp(o, f"board.{fmt_}", data, ctype)
+        expect(f"{fmt_}: imports ({st} {r})", st == 200)
+        if st != 200:
+            continue
+        imported.append(r["board_id"])
+        b, cards = cards_of(r["board_id"])
+        # CSV doesn't say which columns were archived, so cards in an archived column come back in an open one
+        same = len(cards) >= len(src["cards"]) if fmt_ == "csv" else len(cards) == len(src["cards"])
+        expect(f"{fmt_}: same open cards ({len(cards)} vs {len(src['cards'])})", same)
+        if fmt_ in ("json", "zip"):
+            expect(f"{fmt_}: card numbers kept", sorted(c["number"] for c in cards) == src_numbers)
+            card = next(c for c in cards if c["number"] == next(x["number"] for x in src["cards"] if x["id"] == f["card"]))
+            card2 = next(c for c in cards if c["number"] == next(x["number"] for x in src["cards"] if x["id"] == f["card2"]))
+            expect(f"{fmt_}: dependency kept", card["id"] in card2["depends_on"])
+            expect(f"{fmt_}: editor added as a member", any(m["user_id"] == w.people["editor"].id for m in b["members"]))
+            tl = o.ok("GET", f"/cards/{card['id']}/timeline")
+            expect(f"{fmt_}: comments imported, not linked to accounts", any(i["type"] == "comment" and i["imported"] and i["author_id"] is None for i in tl))
+            d = o.ok("GET", f"/cards/{card['id']}")
+        if fmt_ == "zip":
+            files = d["attachments"]
+            expect("zip: attached file copied", any(a["filename"] == "secret.txt" for a in files))
+            ok_file = all(o.call("GET", f"/files/{a['id']}")[0] == 200 for a in files)
+            expect("zip: copied files download", ok_file)
+            expect("zip: picture link points at the copy", f"/api/files/{pic['id']}" not in d["card"]["description"] and "/api/files/" in d["card"]["description"])
+            m = re.search(r"/api/files/([0-9a-f-]{36})", d["card"]["description"])
+            expect("zip: the copied picture loads", bool(m) and o.call("GET", f"/files/{m.group(1)}")[0] == 200)
+        if fmt_ == "json":
+            expect("json: picture link left as it was (no files in JSON)", f"/api/files/{pic['id']}" in d["card"]["description"])
+    # CSV made by hand: semicolons, quotes, Thai text, month-first dates
+    csv_text = "Name;List;Due date;Tags\r\n\"Write, test\";Backlog;03/04/2030;a, b\r\nงานภาษาไทย;Doing;12/31/2030;\r\n"
+    st, prev = imp(o, "plan.csv", csv_text.encode(), "text/csv", options={"csv": {"title": 0, "column": 1, "due": 2, "labels": 3, "day_first": False}}, path="/import/preview")
+    expect(f"csv: preview with a column choice ({st})", st == 200 and prev["cards"] == 2 and prev["csv"]["headers"][0] == "Name")
+    st, r = imp(o, "plan.csv", csv_text.encode(), "text/csv", options={"name": "csv " + RUN, "csv": {"title": 0, "column": 1, "due": 2, "labels": 3, "day_first": False}})
+    if st == 200:
+        b, cards = cards_of(r["board_id"])
+        c1 = next((c for c in cards if c["title"] == "Write, test"), None)
+        expect("csv: month-first date read", c1 is not None and c1["due_at"] is not None and c1["due_at"][5:7] == "03")
+        expect("csv: columns and labels made", [l["name"] for l in b["lists"]] == ["Backlog", "Doing"] and len(b["labels"]) == 2)
+    else:
+        expect(f"csv: imports ({st} {r})", False)
+    expect("csv that isn't UTF-8 is refused", imp(o, "bad.csv", b"T\xe9st\r\nx\r\n", "text/csv")[0] == 400)
+    # matching people by email is for super admins only (else it reveals who has an account)
+    _, me_editor = w.people["editor"].call("GET", "/me")
+    if me_editor.get("email") is None:
+        w.admin.ok("PATCH", f"/admin/users/{w.people['editor'].id}", {"email": f"authz_{RUN}_editor@example.com"})
+    who = f"Title,Assignee\r\nx,authz_{RUN}_editor@example.com\r\n".encode()
+    st, as_owner = imp(o, "who.csv", who, "text/csv", path="/import/preview")
+    st2, as_admin = imp(w.admin, "who.csv", who, "text/csv", path="/import/preview")
+    expect("email matching hidden from non-admins", st == 200 and all(p["account"] is None for p in as_owner["people"]))
+    expect("email matching works for super admins", st2 == 200 and any(p["account"] for p in as_admin["people"]))
+    # a "Done" column means finished, without inventing a finish date
+    st, r = imp(o, "done.csv", b"Title,List\r\nshipped it,Done\r\nnot yet,Doing\r\n", "text/csv", options={"name": "done " + RUN})
+    if st == 200:
+        _, cards = cards_of(r["board_id"])
+        c = next(c for c in cards if c["title"] == "shipped it")
+        expect("csv: a card in a Done column is finished, with no made-up date", c["done"] and c["done_at"] is None)
+    # colours are only ever #hex (they end up in style attributes, also on public links)
+    expect("a colour that isn't #hex is refused", o.call("PATCH", f"/boards/{f['board']}", {"color": "url(https://example.com/x)"})[0] == 400)
+    expect("a label colour that isn't #hex is refused", o.call("POST", f"/boards/{f['board']}/labels", {"name": "x", "color": "red;background:url(x)"})[0] == 400)
+    # nothing was sent about the imported cards (the activity job runs every 5 s, 8 s behind)
+    import time
+    time.sleep(16)
+    about = [n["kind"] for n in v.ok("GET", "/notifications")["items"] if n["board_id"] in imported]
+    expect(f"no notifications about imported cards ({about})", about == [])
+    v.ok("PATCH", "/me", {"notify_events": ["assigned", "mentioned", "commented", "due_soon", "overdue"]})
+    return checked, problems
+
+
+MAILPIT = os.environ.get("MAILPIT_URL", "http://127.0.0.1:58025").rstrip("/")
+
+
+def confirm_token(email: str) -> Optional[str]:
+    """The token in the newest confirmation email to `email`, from Mailpit (None if Mailpit isn't reachable)."""
+    try:
+        q = urllib.parse.quote(f"to:{email}")
+        with urllib.request.urlopen(f"{MAILPIT}/api/v1/search?query={q}", timeout=10) as r:
+            msgs = json.load(r).get("messages") or []
+        if not msgs:
+            return None
+        with urllib.request.urlopen(f"{MAILPIT}/api/v1/message/{msgs[0]['ID']}", timeout=10) as r:
+            text = json.load(r).get("Text", "")
+        import re
+        m = re.search(r"confirm-email\?token=([0-9a-f]{64})", text)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def signup_flow(w: World):
+    anon = Client("anon")
+    problems, checked = [], 0
+
+    def expect(label: str, ok: bool):
+        nonlocal checked
+        checked += 1
+        if not ok:
+            problems.append("sign-up: " + label)
+
+    opts = anon.ok("GET", "/auth/options")
+    body = lambda name, **kw: dict({"username": f"authz_{RUN}_{name}", "display_name": f"authz {name}", "email": f"authz_{RUN}_{name}@example.com", "password": "Signup-" + RUN + "-pw", "locale": "en"}, **kw)
+    PASSWORDS.append("Signup-" + RUN + "-pw")
+    if not opts.get("signup"):
+        expect("register is closed when ALLOW_SIGNUP is off", anon.call("POST", "/auth/register", body("closed"))[0] == 404)
+        expect("confirm is closed when ALLOW_SIGNUP is off", anon.call("POST", "/auth/confirm", {"token": "0" * 64})[0] == 404)
+        return checked, problems
+    prev = w.admin.ok("GET", "/admin/signups")
+    w.admin.ok("PUT", "/admin/signups", {"approval": "review", "can_create_boards": True})
+    try:
+        b1 = body("su1")
+        st, r = anon.call("POST", "/auth/register", b1)
+        expect(f"sign-up accepted ({st} {r})", st == 200 and r.get("status") in ("confirm_email", "review"))
+        if r.get("status") == "confirm_email":
+            st, e = Client("su1").call("POST", "/auth/login", {"username": b1["username"], "password": b1["password"]})
+            expect("an unconfirmed account can't sign in", st == 403 and e.get("error") == "email_not_confirmed")
+            token = confirm_token(b1["email"])
+            if token is None:
+                problems.append("sign-up: no confirmation email found in Mailpit (set MAILPIT_URL)")
+            else:
+                expect("a confirm link can't reset a password", anon.call("POST", "/auth/reset", {"token": token, "password": "Hijack-12345678"})[0] == 400)
+                st, r = anon.call("POST", "/auth/confirm", {"token": token})
+                expect("the confirm link moves it to review", st == 200 and r.get("status") == "review")
+                expect("a confirm link works once", anon.call("POST", "/auth/confirm", {"token": token})[0] == 400)
+        st, e = Client("su1").call("POST", "/auth/login", {"username": b1["username"], "password": b1["password"]})
+        expect("a waiting account can't sign in, and is told why", st == 403 and e.get("error") == "pending_approval")
+        st, e = Client("su1").call("POST", "/auth/login", {"username": b1["username"], "password": "wrong-password"})
+        expect("a wrong password on a waiting account says nothing more", st == 401 and e.get("error") == "invalid_credentials")
+        waiting = {x["username"]: x["id"] for x in w.admin.ok("GET", "/admin/signups")["waiting"]}
+        su1 = waiting.get(b1["username"])
+        expect("the admin sees it waiting", su1 is not None)
+        expect("it isn't in the normal user list", all(u["username"] != b1["username"] for u in w.admin.ok("GET", "/admin/users")))
+        if su1:
+            expect("it can't be edited (and so activated) like a normal user", w.admin.call("PATCH", f"/admin/users/{su1}", {"is_active": True})[0] == 404)
+            expect("only an admin can approve", w.people["owner"].call("POST", "/admin/signups/approve", {"ids": [su1]})[0] == 403)
+        b2 = body("su2")
+        anon.call("POST", "/auth/register", b2)
+        tok2 = confirm_token(b2["email"])
+        if tok2:
+            anon.call("POST", "/auth/confirm", {"token": tok2})
+        bundles = [n for n in w.admin.ok("GET", "/notifications")["items"] if n["kind"] == "signup" and not n["read_at"]]
+        expect(f"admins get one bundled notification ({len(bundles)})", len(bundles) == 1 and bundles[0]["data"].get("count", 0) >= 2 and bundles[0]["board_id"] is None)
+        bot = body("bot", website="http://spam.example")
+        st, _ = anon.call("POST", "/auth/register", bot)
+        expect("the hidden field quietly drops bots", st == 200 and bot["username"] not in json.dumps(w.admin.ok("GET", "/admin/signups")))
+        if su1:
+            expect("approve", w.admin.ok("POST", "/admin/signups/approve", {"ids": [su1]})["approved"] == 1)
+            expect("an approved account can sign in", Client("su1").call("POST", "/auth/login", {"username": b1["username"], "password": b1["password"]})[0] == 200)
+            expect("reject can't delete a normal account", w.admin.ok("POST", "/admin/signups/reject", {"ids": [su1]})["rejected"] == 0)
+        su2 = {x["username"]: x["id"] for x in w.admin.ok("GET", "/admin/signups")["waiting"]}.get(b2["username"])
+        if su2:
+            expect("reject", w.admin.ok("POST", "/admin/signups/reject", {"ids": [su2]})["rejected"] == 1)
+            expect("a rejected account is gone", Client("su2").call("POST", "/auth/login", {"username": b2["username"], "password": b2["password"]})[0] == 401)
+        left = [n for n in w.admin.ok("GET", "/notifications")["items"] if n["kind"] == "signup" and not n["read_at"]]
+        if not w.admin.ok("GET", "/admin/signups")["waiting"]:
+            expect("the bundle is marked read once nobody is waiting", left == [])
+        # automatic approval
+        w.admin.ok("PUT", "/admin/signups", {"approval": "auto", "can_create_boards": False})
+        b3 = body("su3")
+        me = Client("su3")
+        st, r = me.call("POST", "/auth/register", b3)
+        if r.get("status") == "confirm_email":
+            tok3 = confirm_token(b3["email"])
+            st, r = me.call("POST", "/auth/confirm", {"token": tok3 or ""})
+        expect(f"automatic approval signs them in ({r})", st == 200 and r.get("status") == "active")
+        st, u = me.call("GET", "/me")
+        expect("…with the admin's board setting", st == 200 and u.get("can_create_boards") is False)
+    finally:
+        w.admin.ok("PUT", "/admin/signups", {"approval": prev["approval"], "can_create_boards": prev["can_create_boards"]})
+    return checked, problems
+
+
 def role_limits(w: World, f: dict):
     """The extra person gets an Editor-like role limited to their own cards and to the first column."""
     o, me = w.people["owner"], w.extra
@@ -731,6 +1034,10 @@ def cleanup(w: World, prefix: str = ""):
     for u in users if isinstance(users, list) else []:
         if isinstance(u, dict) and str(u.get("username", "")).startswith(prefix) and not u.get("deleted_at"):
             w.admin.call("DELETE", f"/admin/users/{u['id']}")
+    _, su = w.admin.call("GET", "/admin/signups")
+    waiting = [x["id"] for x in (su or {}).get("waiting", []) if str(x.get("username", "")).startswith(prefix)] if isinstance(su, dict) else []
+    if waiting:
+        w.admin.call("POST", "/admin/signups/reject", {"ids": waiting})
     _, bts = w.admin.call("GET", "/board-templates")
     for t in bts if isinstance(bts, list) else []:
         if isinstance(t, dict) and str(t.get("name", "")).startswith("authz") and (prefix == "authz_" or RUN in str(t.get("name"))):

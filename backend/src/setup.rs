@@ -52,7 +52,9 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 pub async fn needs_setup(db: &sqlx::PgPool) -> AppResult<bool> {
-    let (empty,): (bool,) = sqlx::query_as("SELECT NOT EXISTS (SELECT 1 FROM users)").fetch_one(db).await?;
+    // no admin yet (a self sign-up waiting for approval doesn't count)
+    let (empty,): (bool,) =
+        sqlx::query_as("SELECT NOT EXISTS (SELECT 1 FROM users WHERE is_super_admin AND deleted_at IS NULL AND signup IS NULL)").fetch_one(db).await?;
     Ok(empty)
 }
 
@@ -100,7 +102,7 @@ pub async fn create_first_admin(
         return Err(AppError::SignInFailed("setup_code_invalid"));
     }
     let locale = if r.locale == "th" { "th" } else { "en" };
-    let user = crate::admin::insert_user(&state.db, &r.username, r.display_name.trim(), None, &r.password, true, true, locale, false).await?;
+    let user = crate::admin::insert_user(&state.db, &r.username, r.display_name.trim(), None, &r.password, true, true, locale, false, None).await?;
     tracing::info!(user = %user.username, "first admin created in the browser");
     let client = throttle::client_ip(peer, &headers, state.config.trust_proxy).to_string();
     crate::audit::log(&state, Some(user.id), "user_created", Some(user.id), Some(&client), serde_json::json!({ "first_admin": true })).await;

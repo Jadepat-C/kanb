@@ -18,7 +18,9 @@ import {
   Search,
   Settings,
   Trash2,
+  FileUp,
 } from 'lucide-react'
+import { ImportBoard } from '../components/ImportBoard'
 import type React from 'react'
 import { Fragment, useMemo, useRef, useState, type FormEvent, type ReactElement, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -71,6 +73,7 @@ export function Boards() {
     onError: toastError,
   })
   const canCreate = !!(me?.can_create_boards || me?.is_super_admin)
+  const [importing, setImporting] = useState(false)
 
   // drag & drop arrangement (per user). Only with no filter, so the saved order covers every board.
   const canArrange = tab === 'active' && !filter.trim() && !owner
@@ -228,10 +231,16 @@ export function Boards() {
             <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t('search.filterBoards')} className="pl-8" />
           </div>
           {canCreate && (
-            <Button variant="primary" onClick={() => setCreating(true)}>
-              <Plus size={16} /> {t('boards.new')}
-            </Button>
+            <>
+              <Button onClick={() => setImporting(true)}>
+                <FileUp size={15} /> {t('import.button')}
+              </Button>
+              <Button variant="primary" onClick={() => setCreating(true)}>
+                <Plus size={16} /> {t('boards.new')}
+              </Button>
+            </>
           )}
+          <ImportBoard open={importing} onOpenChange={setImporting} />
         </div>
         {tab === 'archived' && <p className="mb-3 text-sm text-muted">{t('archive.boardsHint')}</p>}
         {tab === 'active' && boards.length > 1 && (

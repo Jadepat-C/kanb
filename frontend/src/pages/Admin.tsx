@@ -12,7 +12,7 @@ import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { generatePassword } from '../lib/password'
 import { fmtDate, fmtRelative } from '../lib/prefs'
-import { ActivityTab, BoardsTab, BulkInvite, DevicesDialog, matchesActivity, SystemTab, useBulkDeactivate, type ActiveFilter } from './AdminTools'
+import { ActivityTab, BoardsTab, BulkInvite, DevicesDialog, matchesActivity, SignupPanel, SystemTab, useSignups, useBulkDeactivate, type ActiveFilter } from './AdminTools'
 import type { User } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
 import { copyText } from '../lib/clipboard'
@@ -27,6 +27,7 @@ export function Admin() {
   const [sp, setSp] = useSearchParams()
   const tabs = ['users', 'activity', 'boards', 'security', 'email', 'notifications', 'storage', 'system'] as const
   const tab = tabs.find((k) => k === sp.get('tab')) ?? 'users'
+  const waiting = useSignups(!!me?.is_super_admin).data?.waiting.length ?? 0
   const allUsers = useQuery({ queryKey: ['admin-users'], queryFn: () => api.get<User[]>('/admin/users'), enabled: !!me?.is_super_admin }).data ?? []
   if (!me?.is_super_admin) return <Navigate to="/" replace />
   return (
@@ -66,6 +67,11 @@ export function Admin() {
                 storage: 'storage.title',
                 system: 'system.title',
               }[k],
+            )}
+            {k === 'users' && waiting > 0 && (
+              <span className="min-w-4 rounded-full bg-red-600 px-1 text-center text-[10px] font-semibold leading-4 text-white" title={t('signup.waitingCount', { count: waiting })}>
+                {waiting}
+              </span>
             )}
           </button>
         ))}
@@ -268,6 +274,7 @@ function UsersTab({ me }: { me: User }) {
 
   return (
     <>
+      <SignupPanel />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="relative w-full max-w-xs">
           <Search size={15} className="absolute left-2.5 top-2.5 text-muted" />

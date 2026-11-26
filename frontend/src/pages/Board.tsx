@@ -13,7 +13,8 @@ import { useDragSensors } from '../lib/dnd'
 import { arrayMove, horizontalListSortingStrategy, SortableContext, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { CalendarDays, ChartGantt, Check, Columns3, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
+import { CalendarDays, ChartColumn, ChartGantt, Check, Columns3, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
+import { Analytics } from '../components/Analytics'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -43,7 +44,8 @@ export function BoardPage() {
   const { t } = useTranslation()
   const [sp, setSp] = useSearchParams()
   const openCard = sp.get('card')
-  const view = sp.get('view') === 'calendar' ? 'calendar' : sp.get('view') === 'gantt' ? 'gantt' : 'board'
+  const view =
+    sp.get('view') === 'calendar' ? 'calendar' : sp.get('view') === 'gantt' ? 'gantt' : sp.get('view') === 'analytics' ? 'analytics' : 'board'
   const openCardId = (cid: string) => {
     sp.set('card', cid)
     setSp(sp)
@@ -340,6 +342,9 @@ export function BoardPage() {
         <span className="h-3 w-3 rounded-sm" style={{ background: data.board.color }} />
         <h1 className="mr-2 truncate text-lg font-semibold">{data.board.name}</h1>
         {data.statuses.some((s) => s.is_done) && data.cards.length > 0 && <Progress done={data.cards.filter((c) => c.done).length} total={data.cards.length} />}
+        {/* the filters narrow the board, calendar and Gantt; Analytics always covers the whole board */}
+        {view !== 'analytics' && (
+          <>
         <div className="relative w-full max-w-[220px]">
           <Search size={14} className="absolute left-2.5 top-2.5 text-muted" />
           <Input value={text} onChange={(e) => setText(e.target.value)} placeholder={t('search.filterCards')} className="h-8 pl-8" />
@@ -427,9 +432,11 @@ export function BoardPage() {
             <X size={14} /> {t('board.clearFilters')}
           </Button>
         )}
+          </>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <div className="flex rounded-md border border-line p-0.5">
-            {(['board', 'calendar', 'gantt'] as const).map((v) => (
+            {(['board', 'calendar', 'gantt', 'analytics'] as const).filter((v) => v !== 'analytics' || b.can('analytics.view')).map((v) => (
               <button
                 key={v}
                 onClick={() => {
@@ -442,7 +449,7 @@ export function BoardPage() {
                   view === v ? 'bg-accent text-white' : 'text-muted hover:bg-black/5 dark:hover:bg-white/10',
                 )}
               >
-                {v === 'board' ? <Columns3 size={13} /> : v === 'calendar' ? <CalendarDays size={13} /> : <ChartGantt size={13} />}
+                {v === 'board' ? <Columns3 size={13} /> : v === 'calendar' ? <CalendarDays size={13} /> : v === 'gantt' ? <ChartGantt size={13} /> : <ChartColumn size={13} />}
                 <span className="hidden sm:inline">{t(`calendar.${v}`)}</span>
               </button>
             ))}
@@ -458,7 +465,9 @@ export function BoardPage() {
         </div>
       </div>
 
-      {view === 'gantt' ? (
+      {view === 'analytics' && b.can('analytics.view') ? (
+        <Analytics boardId={boardId} onOpenCard={openCardId} />
+      ) : view === 'gantt' ? (
         <div className="min-h-0 flex-1 pt-2">
           <Gantt
             cards={ganttCards}

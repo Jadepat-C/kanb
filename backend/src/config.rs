@@ -64,6 +64,11 @@ pub struct Config {
     #[arg(long, env = "TRUST_PROXY", default_value_t = true, action = clap::ArgAction::Set)]
     pub trust_proxy: bool,
 
+    /// Let people create their own account on the sign-in page (/register). Off by default: only admins create
+    /// accounts. Whether new accounts need an admin's approval is chosen in Admin → Users.
+    #[arg(long, env = "ALLOW_SIGNUP", default_value_t = false, action = clap::ArgAction::Set)]
+    pub allow_signup: bool,
+
     /// Code asked for when creating the first admin in the browser (deploy/setup.sh writes one). If unset and there
     /// are no accounts yet, a random code is printed in the server log at startup.
     #[arg(long, env = "SETUP_CODE", hide_env_values = true)]

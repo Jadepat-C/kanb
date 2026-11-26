@@ -229,7 +229,7 @@ export interface CardDetail {
 }
 
 export type TimelineItem =
-  | { type: 'comment'; id: string; author_id: string | null; author_name?: string | null; author_color?: string | null; author_avatar?: string | null; body: string; created_at: string; edited: boolean }
+  | { type: 'comment'; id: string; author_id: string | null; author_name?: string | null; author_color?: string | null; author_avatar?: string | null; imported?: boolean; body: string; created_at: string; edited: boolean }
   | { type: 'event'; id: number; actor_id: string | null; actor_name?: string | null; actor_color?: string | null; actor_avatar?: string | null; kind: string; data: Record<string, unknown>; created_at: string }
 
 export interface SearchResult {

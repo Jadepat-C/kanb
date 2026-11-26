@@ -117,8 +117,8 @@ struct Row {
     locale: String,
     name: String,
     actor: Option<String>,
-    board_id: Uuid,
-    board_name: String,
+    board_id: Option<Uuid>,
+    board_name: Option<String>,
     card_id: Option<Uuid>,
     card_number: Option<i32>,
     card_title: Option<String>,
@@ -164,7 +164,7 @@ async fn render(state: &AppState, id: i64) -> Result<Option<Message>, String> {
         "SELECT n.user_id, n.kind, n.data, u.email, u.notify_email, u.locale, u.display_name AS name,
                 (SELECT {dn} FROM users u WHERE u.id = n.actor_id) AS actor,
                 n.board_id, b.name AS board_name, n.card_id, c.number AS card_number, c.title AS card_title, n.created_at
-         FROM notifications n JOIN users u ON u.id = n.user_id JOIN boards b ON b.id = n.board_id
+         FROM notifications n JOIN users u ON u.id = n.user_id LEFT JOIN boards b ON b.id = n.board_id
          LEFT JOIN cards c ON c.id = n.card_id WHERE n.id = $1",
         dn = crate::auth::DISPLAY_NAME_SQL
     ))
@@ -187,31 +187,39 @@ async fn render(state: &AppState, id: i64) -> Result<Option<Message>, String> {
         .unwrap_or_default();
     let to = r.data.get("to").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let restored = r.data.get("restored").and_then(|v| v.as_bool()).unwrap_or(false);
+    let board_name = r.board_name.clone().unwrap_or_else(|| "Kanb".into());
+    let count = r.data.get("count").and_then(|v| v.as_i64()).unwrap_or(1);
+    let names = r.data.get("names").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
     let (subject, line) = match (r.kind.as_str(), th) {
-        ("assigned", false) => (format!("{actor} assigned you: {card}"), format!("{actor} assigned you to {card} on {}.", r.board_name)),
-        ("assigned", true) => (format!("{actor} มอบหมายงานให้คุณ: {card}"), format!("{actor} มอบหมาย {card} ในบอร์ด {} ให้คุณ", r.board_name)),
-        ("mentioned", false) => (format!("{actor} mentioned you in {card}"), format!("{actor} mentioned you in {card} on {}.", r.board_name)),
-        ("mentioned", true) => (format!("{actor} กล่าวถึงคุณใน {card}"), format!("{actor} กล่าวถึงคุณใน {card} (บอร์ด {})", r.board_name)),
-        ("commented", false) => (format!("{actor} commented on {card}"), format!("{actor} commented on {card} on {}.", r.board_name)),
-        ("commented", true) => (format!("{actor} แสดงความคิดเห็นใน {card}"), format!("{actor} แสดงความคิดเห็นใน {card} (บอร์ด {})", r.board_name)),
-        ("due_soon", false) => (format!("Due soon: {card}"), format!("{card} on {} is due {due}.", r.board_name)),
-        ("due_soon", true) => (format!("ใกล้ครบกำหนด: {card}"), format!("{card} (บอร์ด {}) จะครบกำหนด {due}", r.board_name)),
-        ("overdue", false) => (format!("Overdue: {card}"), format!("{card} on {} is past its due date.", r.board_name)),
-        ("overdue", true) => (format!("เลยกำหนด: {card}"), format!("{card} (บอร์ด {}) เลยกำหนดส่งแล้ว", r.board_name)),
-        ("card_created", false) => (format!("{actor} created {card}"), format!("{actor} created {card} on {}.", r.board_name)),
-        ("card_created", true) => (format!("{actor} สร้าง {card}"), format!("{actor} สร้าง {card} ในบอร์ด {}", r.board_name)),
-        ("card_moved", false) => (format!("{actor} moved {card} to {to}"), format!("{actor} moved {card} on {} to {to}.", r.board_name)),
-        ("card_moved", true) => (format!("{actor} ย้าย {card} ไปที่ {to}"), format!("{actor} ย้าย {card} (บอร์ด {}) ไปที่ {to}", r.board_name)),
-        ("status", false) => (format!("{actor} changed the status of {card}"), format!("{actor} changed the status of {card} on {}.", r.board_name)),
-        ("status", true) => (format!("{actor} เปลี่ยนสถานะของ {card}"), format!("{actor} เปลี่ยนสถานะของ {card} (บอร์ด {})", r.board_name)),
-        ("card_updated", false) => (format!("{actor} updated {card}"), format!("{actor} updated {card} on {}.", r.board_name)),
-        ("card_updated", true) => (format!("{actor} อัปเดต {card}"), format!("{actor} อัปเดต {card} (บอร์ด {})", r.board_name)),
-        ("attachments", false) => (format!("{actor} changed attachments on {card}"), format!("{actor} changed the attachments of {card} on {}.", r.board_name)),
-        ("attachments", true) => (format!("{actor} เปลี่ยนไฟล์แนบใน {card}"), format!("{actor} เปลี่ยนไฟล์แนบใน {card} (บอร์ด {})", r.board_name)),
-        ("archived", false) if restored => (format!("{actor} restored {card}"), format!("{actor} restored {card} on {} from the archive.", r.board_name)),
-        ("archived", true) if restored => (format!("{actor} กู้คืน {card}"), format!("{actor} กู้คืน {card} (บอร์ด {}) จากที่เก็บ", r.board_name)),
-        ("archived", false) => (format!("{actor} archived {card}"), format!("{actor} archived {card} on {}.", r.board_name)),
-        ("archived", true) => (format!("{actor} เก็บ {card} เข้าที่เก็บ"), format!("{actor} เก็บ {card} (บอร์ด {}) เข้าที่เก็บ", r.board_name)),
+        ("signup", false) => (
+            if count == 1 { "1 sign-up is waiting for approval".to_string() } else { format!("{count} sign-ups are waiting for approval") },
+            format!("Newest: {names}. Approve or reject them in Admin → Users."),
+        ),
+        ("signup", true) => (format!("มีผู้สมัคร {count} คนรอการอนุมัติ"), format!("ล่าสุด: {names} อนุมัติหรือปฏิเสธได้ที่ ผู้ดูแลระบบ → ผู้ใช้")),
+        ("assigned", false) => (format!("{actor} assigned you: {card}"), format!("{actor} assigned you to {card} on {}.", board_name)),
+        ("assigned", true) => (format!("{actor} มอบหมายงานให้คุณ: {card}"), format!("{actor} มอบหมาย {card} ในบอร์ด {} ให้คุณ", board_name)),
+        ("mentioned", false) => (format!("{actor} mentioned you in {card}"), format!("{actor} mentioned you in {card} on {}.", board_name)),
+        ("mentioned", true) => (format!("{actor} กล่าวถึงคุณใน {card}"), format!("{actor} กล่าวถึงคุณใน {card} (บอร์ด {})", board_name)),
+        ("commented", false) => (format!("{actor} commented on {card}"), format!("{actor} commented on {card} on {}.", board_name)),
+        ("commented", true) => (format!("{actor} แสดงความคิดเห็นใน {card}"), format!("{actor} แสดงความคิดเห็นใน {card} (บอร์ด {})", board_name)),
+        ("due_soon", false) => (format!("Due soon: {card}"), format!("{card} on {} is due {due}.", board_name)),
+        ("due_soon", true) => (format!("ใกล้ครบกำหนด: {card}"), format!("{card} (บอร์ด {}) จะครบกำหนด {due}", board_name)),
+        ("overdue", false) => (format!("Overdue: {card}"), format!("{card} on {} is past its due date.", board_name)),
+        ("overdue", true) => (format!("เลยกำหนด: {card}"), format!("{card} (บอร์ด {}) เลยกำหนดส่งแล้ว", board_name)),
+        ("card_created", false) => (format!("{actor} created {card}"), format!("{actor} created {card} on {}.", board_name)),
+        ("card_created", true) => (format!("{actor} สร้าง {card}"), format!("{actor} สร้าง {card} ในบอร์ด {}", board_name)),
+        ("card_moved", false) => (format!("{actor} moved {card} to {to}"), format!("{actor} moved {card} on {} to {to}.", board_name)),
+        ("card_moved", true) => (format!("{actor} ย้าย {card} ไปที่ {to}"), format!("{actor} ย้าย {card} (บอร์ด {}) ไปที่ {to}", board_name)),
+        ("status", false) => (format!("{actor} changed the status of {card}"), format!("{actor} changed the status of {card} on {}.", board_name)),
+        ("status", true) => (format!("{actor} เปลี่ยนสถานะของ {card}"), format!("{actor} เปลี่ยนสถานะของ {card} (บอร์ด {})", board_name)),
+        ("card_updated", false) => (format!("{actor} updated {card}"), format!("{actor} updated {card} on {}.", board_name)),
+        ("card_updated", true) => (format!("{actor} อัปเดต {card}"), format!("{actor} อัปเดต {card} (บอร์ด {})", board_name)),
+        ("attachments", false) => (format!("{actor} changed attachments on {card}"), format!("{actor} changed the attachments of {card} on {}.", board_name)),
+        ("attachments", true) => (format!("{actor} เปลี่ยนไฟล์แนบใน {card}"), format!("{actor} เปลี่ยนไฟล์แนบใน {card} (บอร์ด {})", board_name)),
+        ("archived", false) if restored => (format!("{actor} restored {card}"), format!("{actor} restored {card} on {} from the archive.", board_name)),
+        ("archived", true) if restored => (format!("{actor} กู้คืน {card}"), format!("{actor} กู้คืน {card} (บอร์ด {}) จากที่เก็บ", board_name)),
+        ("archived", false) => (format!("{actor} archived {card}"), format!("{actor} archived {card} on {}.", board_name)),
+        ("archived", true) => (format!("{actor} เก็บ {card} เข้าที่เก็บ"), format!("{actor} เก็บ {card} (บอร์ด {}) เข้าที่เก็บ", board_name)),
         _ => return Ok(None),
     };
     // card activity: the individual changes, in the recipient's language
@@ -219,9 +227,17 @@ async fn render(state: &AppState, id: i64) -> Result<Option<Message>, String> {
         a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" · ")
     });
     let base = base_url(state).await;
-    let link = match r.card_id {
-        Some(c) => format!("{base}/b/{}?card={c}", r.board_id),
-        None => format!("{base}/b/{}", r.board_id),
+    let link = match (r.kind.as_str(), r.board_id, r.card_id) {
+        ("signup", ..) => format!("{base}/admin?tab=users"),
+        (_, Some(b), Some(c)) => format!("{base}/b/{b}?card={c}"),
+        (_, Some(b), None) => format!("{base}/b/{b}"),
+        _ => base.clone(),
+    };
+    let open_label = match (r.kind.as_str(), th) {
+        ("signup", true) => "ดูผู้สมัคร",
+        ("signup", false) => "Review sign-ups",
+        (_, true) => "เปิดการ์ด",
+        _ => "Open the card",
     };
     Ok(Some(Message {
         user_id: r.user_id,
@@ -234,9 +250,9 @@ async fn render(state: &AppState, id: i64) -> Result<Option<Message>, String> {
         line,
         snippet: changes.unwrap_or_else(|| r.data.get("snippet").and_then(|v| v.as_str()).unwrap_or("").to_string()),
         link,
-        open_label: if th { "เปิดการ์ด" } else { "Open the card" },
-        board_id: r.board_id,
-        board_name: r.board_name,
+        open_label,
+        board_id: r.board_id.unwrap_or(Uuid::nil()),
+        board_name,
         card_id: r.card_id,
         card_number: r.card_number,
         card_title: r.card_title,
@@ -295,8 +311,8 @@ pub fn snippet(text: &str) -> String {
 pub struct Item {
     id: i64,
     kind: String,
-    board_id: Uuid,
-    board_name: String,
+    board_id: Option<Uuid>,
+    board_name: Option<String>,
     card_id: Option<Uuid>,
     card_number: Option<i32>,
     card_title: Option<String>,
@@ -318,7 +334,7 @@ pub async fn list(State(state): State<AppState>, CurrentUser(u): CurrentUser, Qu
     let items: Vec<Item> = sqlx::query_as(sqlf!(
         "SELECT n.id, n.kind, n.board_id, b.name AS board_name, n.card_id, c.number AS card_number, c.title AS card_title,
                 {dn} AS actor_name, u.avatar_color AS actor_color, u.avatar_id AS actor_avatar, n.data, n.created_at, n.read_at
-         FROM notifications n JOIN boards b ON b.id = n.board_id
+         FROM notifications n LEFT JOIN boards b ON b.id = n.board_id
          LEFT JOIN cards c ON c.id = n.card_id LEFT JOIN users u ON u.id = n.actor_id
          WHERE n.user_id = $1 AND n.cleared_at IS NULL AND ($2 = false OR n.read_at IS NULL)
          ORDER BY n.id DESC LIMIT 50",
@@ -388,16 +404,104 @@ pub async fn clear(State(state): State<AppState>, CurrentUser(u): CurrentUser, J
     Ok(Json(json!({ "cleared": res.rows_affected() })))
 }
 
+// ---------- sign-ups waiting for approval (super admins) ----------
+
+/// Keeps each super admin's "sign-ups waiting" notification current, as one bundled notification however many
+/// people sign up: `new` = someone just joined the queue (the bundle moves to the top as unread and lists the newest
+/// names); otherwise (approved / rejected) the count is updated in place, and the bundle leaves the bell once nothing
+/// is waiting. There is never more than one in the bell.
+/// Email, push and chat go out at most once an hour per admin; the bell always updates.
+pub async fn signups_changed(state: &AppState, new: bool) {
+    if let Err(e) = signups_inner(state, new).await {
+        tracing::warn!(error = %e, "sign-up notification failed");
+    }
+}
+
+async fn signups_inner(state: &AppState, new: bool) -> anyhow::Result<()> {
+    let mut tx = state.db.begin().await?;
+    // one at a time, so two sign-ups at the same moment don't make two bundles
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('kanb-signup-notify'))").execute(&mut *tx).await?;
+    let (count, names): (i64, Vec<String>) = sqlx::query_as(
+        "SELECT count(*), COALESCE((SELECT array_agg(n) FROM (SELECT display_name || ' (@' || username || ')' AS n FROM users
+                  WHERE signup = 'review' AND deleted_at IS NULL ORDER BY signed_up_at DESC LIMIT 5) x), '{}')
+         FROM users WHERE signup = 'review' AND deleted_at IS NULL",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let admins: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE is_super_admin AND is_active AND deleted_at IS NULL AND signup IS NULL")
+        .fetch_all(&mut *tx)
+        .await?;
+    let data = json!({ "count": count, "names": names });
+    let mut deliver = Vec::new();
+    for (uid,) in &admins {
+        if count == 0 {
+            sqlx::query(
+                "UPDATE notifications SET read_at = COALESCE(read_at, now()), cleared_at = now()
+                 WHERE user_id = $1 AND kind = 'signup' AND cleared_at IS NULL",
+            )
+            .bind(uid)
+            .execute(&mut *tx)
+            .await?;
+            continue;
+        }
+        if !new {
+            sqlx::query("UPDATE notifications SET data = data || $2 WHERE user_id = $1 AND kind = 'signup' AND cleared_at IS NULL")
+                .bind(uid)
+                .bind(&data)
+                .execute(&mut *tx)
+                .await?;
+            continue;
+        }
+        sqlx::query(
+            "UPDATE notifications SET read_at = COALESCE(read_at, now()), cleared_at = now()
+             WHERE user_id = $1 AND kind = 'signup' AND cleared_at IS NULL",
+        )
+            .bind(uid)
+            .execute(&mut *tx)
+            .await?;
+        let (recent,): (bool,) = sqlx::query_as(
+            "SELECT EXISTS (SELECT 1 FROM notifications WHERE user_id = $1 AND kind = 'signup' AND (data->>'sent')::boolean
+                             AND created_at > now() - interval '1 hour')",
+        )
+        .bind(uid)
+        .fetch_one(&mut *tx)
+        .await?;
+        let mut d = data.clone();
+        d["sent"] = (!recent).into();
+        let (id,): (i64,) = sqlx::query_as("INSERT INTO notifications (user_id, kind, data) VALUES ($1, 'signup', $2) RETURNING id")
+            .bind(uid)
+            .bind(&d)
+            .fetch_one(&mut *tx)
+            .await?;
+        deliver.push((*uid, id, !recent));
+    }
+    tx.commit().await?;
+    for (uid,) in &admins {
+        state.hub.notify_user(*uid);
+    }
+    for (uid, id, send) in deliver {
+        if send {
+            delivered(state, uid, id);
+        }
+    }
+    Ok(())
+}
+
 // ---------- due-date reminders ----------
 
 /// Cards whose "due soon" reminder is due: within the card's reminder time (default 1 day) of the due date.
 /// Use with the cards table aliased as `c`.
+/// An imported card is only reminded about times after it arrived (its old due dates are history).
 pub fn due_soon_sql() -> String {
     format!(
-        "c.due_at > now() AND COALESCE(c.remind_minutes, {d}) > 0 AND c.due_at <= now() + make_interval(mins => COALESCE(c.remind_minutes, {d}))",
+        "c.due_at > now() AND COALESCE(c.remind_minutes, {d}) > 0 AND c.due_at <= now() + make_interval(mins => COALESCE(c.remind_minutes, {d}))
+         AND (c.imported_at IS NULL OR c.due_at - make_interval(mins => COALESCE(c.remind_minutes, {d})) > c.imported_at)",
         d = DEFAULT_REMIND_MINUTES
     )
 }
+
+/// Cards that became overdue in the last 7 days (and, if imported, after they arrived).
+pub const OVERDUE_SQL: &str = "c.due_at <= now() AND c.due_at > now() - interval '7 days' AND (c.imported_at IS NULL OR c.due_at > c.imported_at)";
 
 /// Every 10 minutes: "due soon" (the card's reminder time before the due date) and "overdue" (each sent once per
 /// card, person, due date and reminder time). Overdue reminders only cover the last 7 days, so old forgotten cards
@@ -414,7 +518,7 @@ pub fn spawn_due_job(state: AppState) {
                     soon.as_str(),
                     format!("jsonb_build_object('due_at', c.due_at, 'remind', COALESCE(c.remind_minutes, {DEFAULT_REMIND_MINUTES}))"),
                 ),
-                ("overdue", "c.due_at <= now() AND c.due_at > now() - interval '7 days'", "jsonb_build_object('due_at', c.due_at)".to_string()),
+                ("overdue", OVERDUE_SQL, "jsonb_build_object('due_at', c.due_at)".to_string()),
             ] {
                 let rows: Result<Vec<(i64, Uuid)>, sqlx::Error> = sqlx::query_as(sqlf!(
                     // the assignees; a card nobody is assigned to reminds whoever created it (still on the board)

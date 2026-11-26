@@ -113,6 +113,7 @@ pub async fn create_board(
     CurrentUser(u): CurrentUser,
     Json(r): Json<CreateBoard>,
 ) -> AppResult<Json<Board>> {
+    check_color(r.color.as_deref())?;
     if !(u.is_super_admin || u.can_create_boards) {
         return Err(AppError::Forbidden);
     }
@@ -365,6 +366,7 @@ pub async fn update_board(
     Path(id): Path<Uuid>,
     Json(r): Json<UpdateBoard>,
 ) -> AppResult<Json<Board>> {
+    check_color(r.color.as_deref())?;
     board_access(&state.db, &u, id).await?.require(perms::BOARD_MANAGE)?;
     if r.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
         return Err(AppError::BadRequest("name_required"));
@@ -480,6 +482,7 @@ pub async fn update_list(
     Path(id): Path<Uuid>,
     Json(r): Json<UpdateList>,
 ) -> AppResult<Json<List>> {
+    check_color(r.color.as_ref().and_then(|c| c.as_deref()))?;
     let board_id = board_of_list(&state.db, id).await?;
     board_access(&state.db, &u, board_id).await?.require(perms::LISTS_EDIT)?;
     let mut tx = state.db.begin().await?;
@@ -640,6 +643,14 @@ pub async fn set_board_order(
 }
 
 /// Key for inserting at `index` into an ordered list of existing keys.
+/// Colours end up in style attributes (also on public board links): only `#rrggbb` / `#rgb` may be stored.
+pub fn check_color(c: Option<&str>) -> AppResult<()> {
+    match c {
+        Some(c) if crate::import_formats::hex(c).is_none() => Err(AppError::BadRequest("invalid_color")),
+        _ => Ok(()),
+    }
+}
+
 pub fn position_at(keys: &[String], index: usize) -> String {
     let index = index.min(keys.len());
     let before = if index == 0 { None } else { Some(keys[index - 1].as_str()) };
@@ -666,6 +677,7 @@ pub async fn create_label(
     Path(board_id): Path<Uuid>,
     Json(r): Json<LabelReq>,
 ) -> AppResult<Json<Label>> {
+    check_color(r.color.as_deref())?;
     board_access(&state.db, &u, board_id).await?.require(perms::LABELS_MANAGE)?;
     let name = r.name.unwrap_or_default().trim().to_string();
     if name.is_empty() {
@@ -688,6 +700,7 @@ pub async fn update_label(
     Path(id): Path<Uuid>,
     Json(r): Json<LabelReq>,
 ) -> AppResult<Json<Label>> {
+    check_color(r.color.as_deref())?;
     let (board_id,): (Uuid,) = sqlx::query_as("SELECT board_id FROM labels WHERE id = $1").bind(id).fetch_one(&state.db).await?;
     board_access(&state.db, &u, board_id).await?.require(perms::LABELS_MANAGE)?;
     let l: Label = sqlx::query_as(
@@ -731,6 +744,7 @@ pub async fn create_status(
     Path(board_id): Path<Uuid>,
     Json(r): Json<StatusReq>,
 ) -> AppResult<Json<Status>> {
+    check_color(r.color.as_deref())?;
     board_access(&state.db, &u, board_id).await?.require(perms::STATUSES_MANAGE)?;
     let name = r.name.unwrap_or_default().trim().to_string();
     if name.is_empty() {
@@ -757,6 +771,7 @@ pub async fn update_status(
     Path(id): Path<Uuid>,
     Json(r): Json<StatusReq>,
 ) -> AppResult<Json<Status>> {
+    check_color(r.color.as_deref())?;
     let (board_id,): (Uuid,) =
         sqlx::query_as("SELECT board_id FROM board_statuses WHERE id = $1").bind(id).fetch_one(&state.db).await?;
     board_access(&state.db, &u, board_id).await?.require(perms::STATUSES_MANAGE)?;

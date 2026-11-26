@@ -484,6 +484,7 @@ function Activity({ cardId, b, uploader }: { cardId: string; b: BoardHelpers; up
               <div className="min-w-0 flex-1 rounded-lg border border-line bg-surface-2 px-3 py-2">
                 <div className="mb-1 flex items-center gap-2 text-xs">
                   <span className="font-semibold">{name(i.author_id, i.author_name)}</span>
+                  {i.imported && <span className="text-muted">({t('import.importedComment')})</span>}
                   <span className="text-muted" title={fmtDate(i.created_at, true)}>
                     {fmtRelative(i.created_at)}
                     {i.edited && ` · ${t('card.edited')}`}
@@ -547,7 +548,7 @@ function EventIcon({ kind }: { kind: string }) {
   if (kind === 'assignees') return <Users size={s} />
   if (kind === 'due') return <CalendarClock size={s} />
   if (kind === 'archived') return <Archive size={s} />
-  if (kind === 'created') return <Plus size={s} />
+  if (kind === 'created' || kind === 'imported') return <Plus size={s} />
   return <Pencil size={s} />
 }
 

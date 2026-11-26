@@ -17,6 +17,7 @@ pub const STATUSES_MANAGE: &str = "statuses.manage";
 pub const LABELS_MANAGE: &str = "labels.manage";
 pub const TEMPLATES_MANAGE: &str = "templates.manage";
 pub const NOTIFICATIONS_MANAGE: &str = "notifications.manage"; // board chat/push channels
+pub const ANALYTICS_VIEW: &str = "analytics.view"; // the board's Analytics view (KPIs)
 // Members & roles
 pub const MEMBERS_MANAGE: &str = "members.manage"; // add / remove members, change their role
 pub const ROLES_MANAGE: &str = "roles.manage"; // create / edit / delete roles
@@ -45,7 +46,7 @@ pub const ATTACHMENTS_DELETE: &str = "attachments.delete";
 
 /// Permissions by topic, in display order (the role editor shows these groups).
 pub const GROUPS: &[(&str, &[&str])] = &[
-    ("board", &[BOARD_MANAGE, STATUSES_MANAGE, LABELS_MANAGE, TEMPLATES_MANAGE, NOTIFICATIONS_MANAGE, BOARD_ARCHIVE, BOARD_DELETE]),
+    ("board", &[BOARD_MANAGE, STATUSES_MANAGE, LABELS_MANAGE, TEMPLATES_MANAGE, NOTIFICATIONS_MANAGE, ANALYTICS_VIEW, BOARD_ARCHIVE, BOARD_DELETE]),
     ("members", &[MEMBERS_MANAGE, ROLES_MANAGE]),
     ("lists", &[LISTS_CREATE, LISTS_EDIT, LISTS_ARCHIVE, LISTS_DELETE]),
     ("cards", &[CARDS_CREATE, CARDS_EDIT, CARDS_STATUS, CARDS_DUE, CARDS_DEPENDENCIES, CARDS_ASSIGN, CARDS_LABELS, CARDS_MOVE, CARDS_ARCHIVE, CARDS_DELETE]),
@@ -59,6 +60,7 @@ pub const ALL: &[&str] = &[
     LABELS_MANAGE,
     TEMPLATES_MANAGE,
     NOTIFICATIONS_MANAGE,
+    ANALYTICS_VIEW,
     BOARD_ARCHIVE,
     BOARD_DELETE,
     MEMBERS_MANAGE,

@@ -58,7 +58,7 @@ jobs:
           set -a; . ./.env.example; set +a
           KANBAN_ADMIN_PASSWORD=ci-admin-password ./target/debug/kanban create-admin --username ci_admin
           # never send real email or webhooks from CI
-          MAIL_REDIRECT=127.0.0.1:51025 WEBHOOK_REDIRECT=http://127.0.0.1:9 ./target/debug/kanban > server.log 2>&1 &
+          ALLOW_SIGNUP=true MAIL_REDIRECT=127.0.0.1:51025 WEBHOOK_REDIRECT=http://127.0.0.1:9 ./target/debug/kanban > server.log 2>&1 &
           for _ in $(seq 1 60); do curl -fsS localhost:8080/api/health && exit 0; sleep 1; done
           cat server.log; exit 1
       - name: Every endpoint, as every kind of user

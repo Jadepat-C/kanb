@@ -175,6 +175,12 @@ while :; do
   ask STORAGE "   Total space for all uploads together, in GB (0 = no limit)" "$D_STORAGE"
   case $STORAGE in '' | *[!0-9]*) echo "  a whole number (0 for no limit)" >&2 ;; *) break ;; esac
 done
+# off unless chosen: on a server open to the internet, anyone could then make an account
+if yesno "   Let people create their own account on the sign-in page? (you choose in Admin whether to approve each one)" "$([ "${ALLOW_SIGNUP:-false}" = true ] && echo y || echo n)"; then
+  SIGNUP=true
+else
+  SIGNUP=false
+fi
 
 # ---------------------------------------------------------------- passwords and keys
 
@@ -229,6 +235,7 @@ if [ "$INTERACTIVE" = 1 ]; then
   Data folder    $DATA
   Time zone      $TZ_VALUE
   Uploads up to  $UPLOAD MB each, $([ "$STORAGE" = 0 ] && echo "no total limit" || echo "$STORAGE GB in total")
+  Sign-up        $([ "$SIGNUP" = true ] && echo "people can create their own account" || echo "off (admins create accounts)")
   Image          ${IMAGE:-published (ghcr.io)}$([ "$IMAGE" = kanb:local ] && echo " — built from this checkout")
   Passwords      $([ "$UPDATING" = 1 ] && echo "kept" || echo "ready")
 
@@ -247,6 +254,7 @@ KANB_DATA=$DATA
 TZ=$TZ_VALUE
 MAX_UPLOAD_MB=$UPLOAD
 MAX_STORAGE_GB=$STORAGE
+ALLOW_SIGNUP=$SIGNUP
 POSTGRES_PASSWORD=$PG
 S3_ACCESS_KEY=$S3K
 S3_SECRET_KEY=$S3S

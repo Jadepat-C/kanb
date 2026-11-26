@@ -260,10 +260,10 @@ pub async fn login(
     // rate limits come before the (deliberately slow) password check
     let ip = throttle::ip_key("login", throttle::client_ip(peer, &headers, state.config.trust_proxy));
     state.throttle.check(&ip, throttle::LOGIN_IP)?;
-    let row: Option<(Uuid, Option<String>, bool, bool)> =
+    let row: Option<(Uuid, Option<String>, bool, bool, Option<String>)> =
         // usernames can't contain '@', so anything with '@' is looked up as an email
         sqlx::query_as(
-            "SELECT id, password_hash, is_active, totp_enabled_at IS NOT NULL FROM users
+            "SELECT id, password_hash, is_active, totp_enabled_at IS NOT NULL, signup FROM users
              WHERE deleted_at IS NULL
                AND CASE WHEN strpos($1, '@') > 0 THEN lower(email) = lower($1) ELSE lower(username) = lower($1) END",
         )
@@ -278,7 +278,8 @@ pub async fn login(
     state.throttle.check(&account, throttle::LOGIN_ACCOUNT)?;
     let password = req.password.clone();
     let ok = match &row {
-        Some((_, Some(hash), true, _)) => {
+        // a self sign-up still waiting is checked too, to tell its owner why they can't sign in yet
+        Some((_, Some(hash), true, _, _)) | Some((_, Some(hash), _, _, Some(_))) => {
             let hash = hash.clone();
             verify_password_bounded(password, hash).await?
         }
@@ -303,7 +304,12 @@ pub async fn login(
         return Err(AppError::SignInFailed("invalid_credentials"));
     }
     state.throttle.clear(&account);
-    let (user_id, _, _, totp_on) = row.unwrap();
+    let (user_id, _, _, totp_on, signup) = row.unwrap();
+    match signup.as_deref() {
+        Some("email") => return Err(AppError::Denied("email_not_confirmed")),
+        Some(_) => return Err(AppError::Denied("pending_approval")),
+        None => {}
+    }
     if totp_on {
         // step 2: the authenticator code (POST /auth/login/code with this ticket)
         let ticket = crate::twofa::start_challenge(&state, user_id).await?;
@@ -498,6 +504,11 @@ pub async fn create_password_token(db: &sqlx::PgPool, user_id: Uuid, purpose: &s
 
 /// Emails a set-password (invite) or reset link. Err = SMTP error text for the admin.
 pub async fn send_link_email(state: &AppState, user_id: Uuid, purpose: &str) -> Result<(), String> {
+    send_link_email_for(state, user_id, purpose, if purpose == "invite" { 72 } else { 1 }).await
+}
+
+/// Emails a one-time link for `purpose`: invite / reset (→ /reset-password) or confirm (→ /confirm-email).
+pub async fn send_link_email_for(state: &AppState, user_id: Uuid, purpose: &str, hours: i32) -> Result<(), String> {
     let s = crate::mail::load(state).await.map_err(|e| e.to_string())?;
     if !crate::mail::ready(&s) {
         return Err("email is not set up".into());
@@ -509,11 +520,30 @@ pub async fn send_link_email(state: &AppState, user_id: Uuid, purpose: &str) -> 
             .await
             .map_err(|e| e.to_string())?;
     let email = email.ok_or("user has no email")?;
-    let hours = if purpose == "invite" { 72 } else { 1 };
     let token = create_password_token(&state.db, user_id, purpose, hours).await.map_err(|e| e.to_string())?;
     let base = crate::mail::base_url(state, &s);
-    let link = format!("{base}/reset-password?token={token}");
+    let page = if purpose == "confirm" { "confirm-email" } else { "reset-password" };
+    let link = format!("{base}/{page}?token={token}");
     let (subject, text, html) = crate::mail::link_email(purpose, &locale, &name, &username, &link, &format!("{base}/login"));
+    crate::mail::send(&s, &email, &name, &subject, text, html).await
+}
+
+/// "Your account was approved" (after a self sign-up). Ok when the server can't send email or the account has none.
+pub async fn send_approved_email(state: &AppState, user_id: Uuid) -> Result<(), String> {
+    let s = crate::mail::load(state).await.map_err(|e| e.to_string())?;
+    if !crate::mail::ready(&s) {
+        return Ok(());
+    }
+    let (name, username, email, locale): (String, String, Option<String>, String) =
+        sqlx::query_as("SELECT display_name, username, email, locale FROM users WHERE id = $1 AND deleted_at IS NULL")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
+    let Some(email) = email else { return Ok(()) };
+    let base = crate::mail::base_url(state, &s);
+    let login = format!("{base}/login");
+    let (subject, text, html) = crate::mail::link_email("approved", &locale, &name, &username, &login, &login);
     crate::mail::send(&s, &email, &name, &subject, text, html).await
 }
 
@@ -521,7 +551,7 @@ pub async fn send_link_email(state: &AppState, user_id: Uuid, purpose: &str) -> 
 pub async fn options(State(state): State<AppState>) -> AppResult<Json<serde_json::Value>> {
     let s = crate::mail::load(&state).await?;
     let needs_setup = crate::setup::needs_setup(&state.db).await?;
-    Ok(Json(serde_json::json!({ "email_enabled": crate::mail::ready(&s), "needs_setup": needs_setup })))
+    Ok(Json(serde_json::json!({ "email_enabled": crate::mail::ready(&s), "needs_setup": needs_setup, "signup": state.config.allow_signup && !needs_setup })))
 }
 
 #[derive(Deserialize)]
@@ -585,7 +615,8 @@ pub async fn check_token(
     state.throttle.check(&ip, throttle::TOKEN_IP)?;
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT u.username, t.purpose FROM password_tokens t JOIN users u ON u.id = t.user_id
-         WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now() AND u.deleted_at IS NULL AND u.is_active",
+         WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now() AND u.deleted_at IS NULL AND u.is_active
+           AND t.purpose IN ('invite', 'reset')",
     )
     .bind(token_hash(&r.token))
     .fetch_optional(&state.db)
@@ -617,7 +648,7 @@ pub async fn reset(
     let mut tx = state.db.begin().await?;
     let row: Option<(Uuid,)> = sqlx::query_as(
         "UPDATE password_tokens t SET used_at = now() FROM users u
-         WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now()
+         WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now() AND t.purpose IN ('invite', 'reset')
            AND u.id = t.user_id AND u.deleted_at IS NULL AND u.is_active
          RETURNING t.user_id",
     )

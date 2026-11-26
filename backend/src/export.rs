@@ -39,6 +39,8 @@ struct XCard {
     description: String,
     column: String,
     column_archived: bool,
+    #[serde(skip)]
+    list_id: Uuid,
     status: Option<String>,
     done: bool,
     done_at: Option<DateTime<Utc>>,
@@ -66,6 +68,7 @@ struct XComment {
 
 #[derive(Serialize, sqlx::FromRow)]
 struct XFile {
+    id: Uuid,
     card_id: Option<Uuid>,
     filename: String,
     content_type: String,
@@ -91,8 +94,8 @@ async fn collect(state: &AppState, board_id: Uuid) -> AppResult<Export> {
     let dn = crate::auth::DISPLAY_NAME_SQL;
     let (name, description, color, created_at, archived_at): (String, String, String, DateTime<Utc>, Option<DateTime<Utc>>) =
         sqlx::query_as("SELECT name, description, color, created_at, archived_at FROM boards WHERE id = $1").bind(board_id).fetch_one(&state.db).await?;
-    let lists: Vec<(String, Option<String>, Option<i32>, bool)> = sqlx::query_as(
-        "SELECT name, color, wip_limit, archived_at IS NOT NULL FROM lists WHERE board_id = $1 ORDER BY archived_at IS NOT NULL, position COLLATE \"C\"",
+    let lists: Vec<(String, Option<String>, Option<i32>, bool, Uuid)> = sqlx::query_as(
+        "SELECT name, color, wip_limit, archived_at IS NOT NULL, id FROM lists WHERE board_id = $1 ORDER BY archived_at IS NOT NULL, position COLLATE \"C\"",
     )
     .bind(board_id)
     .fetch_all(&state.db)
@@ -108,7 +111,7 @@ async fn collect(state: &AppState, board_id: Uuid) -> AppResult<Export> {
     .fetch_all(&state.db)
     .await?;
     let cards: Vec<XCard> = sqlx::query_as(sqlf!(
-        "SELECT c.id, c.number, c.title, c.description, l.name AS column, l.archived_at IS NOT NULL AS column_archived,
+        "SELECT c.id, c.number, c.title, c.description, l.name AS column, l.archived_at IS NOT NULL AS column_archived, c.list_id,
                 s.name AS status, COALESCE(s.is_done, false) AS done, c.done_at, c.priority, c.color,
                 COALESCE((SELECT array_agg(x.name ORDER BY x.name) FROM card_labels cl JOIN labels x ON x.id = cl.label_id WHERE cl.card_id = c.id), '{{}}') AS labels,
                 COALESCE((SELECT array_agg({dn} ORDER BY u.display_name) FROM card_assignees a JOIN users u ON u.id = a.user_id WHERE a.card_id = c.id), '{{}}') AS assignees,
@@ -122,14 +125,14 @@ async fn collect(state: &AppState, board_id: Uuid) -> AppResult<Export> {
     .fetch_all(&state.db)
     .await?;
     let comments: Vec<XComment> = sqlx::query_as(sqlf!(
-        "SELECT cm.card_id, (SELECT {dn} FROM users u WHERE u.id = cm.author_id) AS author, cm.body, cm.created_at, cm.updated_at
+        "SELECT cm.card_id, COALESCE((SELECT {dn} FROM users u WHERE u.id = cm.author_id), cm.imported_author) AS author, cm.body, cm.created_at, cm.updated_at
          FROM comments cm JOIN cards c ON c.id = cm.card_id WHERE c.board_id = $1 AND cm.deleted_at IS NULL ORDER BY cm.created_at"
     ))
     .bind(board_id)
     .fetch_all(&state.db)
     .await?;
     let mut files: Vec<XFile> = sqlx::query_as(
-        "SELECT card_id, filename, content_type, size, is_inline AS inline, created_at, object_key FROM attachments
+        "SELECT id, card_id, filename, content_type, size, is_inline AS inline, created_at, object_key FROM attachments
          WHERE board_id = $1 AND deleted_at IS NULL ORDER BY created_at",
     )
     .bind(board_id)
@@ -142,14 +145,16 @@ async fn collect(state: &AppState, board_id: Uuid) -> AppResult<Export> {
     let json = json!({
         "format": "kanban-board-export", "version": 1, "exported_at": Utc::now(),
         "board": { "name": name, "description": description, "color": color, "created_at": created_at, "archived_at": archived_at },
-        "columns": lists.iter().map(|(n, c, w, a)| json!({ "name": n, "color": c, "wip_limit": w, "archived": a })).collect::<Vec<_>>(),
+        "columns": lists.iter().map(|(n, c, w, a, _)| json!({ "name": n, "color": c, "wip_limit": w, "archived": a })).collect::<Vec<_>>(),
         "statuses": statuses.iter().map(|(n, c, d)| json!({ "name": n, "color": c, "done": d })).collect::<Vec<_>>(),
         "labels": labels.iter().map(|(n, c)| json!({ "name": n, "color": c })).collect::<Vec<_>>(),
         "members": members.iter().map(|(n, u, r)| json!({ "name": n, "username": u, "role": r })).collect::<Vec<_>>(),
         "cards": cards.iter().map(|c| {
             let mut v = serde_json::to_value(c).unwrap_or_default();
             v["comments"] = comments.iter().filter(|m| m.card_id == c.id).map(|m| json!({ "author": m.author, "body": m.body, "created_at": m.created_at, "edited": m.updated_at > m.created_at })).collect();
-            v["attachments"] = files.iter().filter(|f| f.card_id == Some(c.id)).map(|f| json!({ "filename": f.filename, "size": f.size, "content_type": f.content_type, "inline": f.inline, "path": f.path })).collect();
+            v["attachments"] = files.iter().filter(|f| f.card_id == Some(c.id)).map(|f| json!({ "id": f.id, "filename": f.filename, "size": f.size, "content_type": f.content_type, "inline": f.inline, "path": f.path })).collect();
+            // which column by position (names may repeat); import uses it
+            v["column_index"] = lists.iter().position(|l| l.4 == c.list_id).into();
             v.as_object_mut().map(|o| o.remove("id"));
             v
         }).collect::<Vec<_>>(),

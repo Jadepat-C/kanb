@@ -18,6 +18,7 @@ import { Boards } from './pages/Boards'
 import { Login } from './pages/Login'
 import { Profile } from './pages/Profile'
 import { PublicBoard } from './pages/PublicBoard'
+import { ConfirmEmail, Register } from './pages/Register'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,6 +47,8 @@ const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
   { path: '/forgot-password', element: <ForgotPassword /> },
   { path: '/reset-password', element: <ResetPassword /> },
+  { path: '/register', element: <Register /> },
+  { path: '/confirm-email', element: <ConfirmEmail /> },
   // a board's public link: no account, outside the app's sign-in and layout
   { path: '/p/:token', element: <PublicBoard /> },
   {

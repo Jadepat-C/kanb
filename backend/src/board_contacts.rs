@@ -391,7 +391,7 @@ pub async fn due_pass(state: &AppState) {
         return;
     }
     let soon = crate::notify::due_soon_sql();
-    for (kind, window) in [("due_soon", soon.as_str()), ("overdue", "c.due_at <= now() AND c.due_at > now() - interval '7 days'")] {
+    for (kind, window) in [("due_soon", soon.as_str()), ("overdue", crate::notify::OVERDUE_SQL)] {
         let rows: Vec<(Uuid, Uuid, String, i32, String, DateTime<Utc>)> = match sqlx::query_as(sqlf!(
             "INSERT INTO board_due_posts (card_id, kind, due_at)
              SELECT c.id, '{kind}', c.due_at FROM cards c

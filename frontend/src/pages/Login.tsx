@@ -25,7 +25,7 @@ export function Login() {
   const [ticket, setTicket] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [useRecovery, setUseRecovery] = useState(false)
-  const options = useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ email_enabled: boolean; needs_setup?: boolean }>('/auth/options') })
+  const options = useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ email_enabled: boolean; needs_setup?: boolean; signup?: boolean }>('/auth/options') })
 
   if (me) return <Navigate to="/" replace />
   const from = (loc.state as { from?: string } | null)?.from ?? '/'
@@ -155,7 +155,16 @@ export function Login() {
               {t('auth.forgot')}
             </Link>
           )}
-          <p className="text-center text-xs text-muted">{t('auth.noSignup')}</p>
+          {options.data?.signup ? (
+            <p className="text-center text-sm text-muted">
+              {t('signup.noAccount')}{' '}
+              <Link to="/register" className="text-accent hover:underline">
+                {t('signup.create')}
+              </Link>
+            </p>
+          ) : (
+            <p className="text-center text-xs text-muted">{t('auth.noSignup')}</p>
+          )}
         </form>
       )}
     </div>

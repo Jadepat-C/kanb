@@ -140,7 +140,9 @@ function describe(t: TFunction, e: AuditEntry, names: Map<string, string>) {
     if (d.area === 'security' && typeof d.public_links === 'boolean') extra.push(t(d.public_links ? 'audit.publicLinksOn' : 'audit.publicLinksOff'))
     if (Array.isArray(d.fields) && d.fields.length) extra.push(d.fields.join(', '))
     if (d.area === 'announcement') extra.push(d.removed ? t('audit.removed') : `“${String(d.text ?? '')}”`)
+    if (d.area === 'signup' && (d.approval === 'review' || d.approval === 'auto')) extra.push(`${t('signup.approval')} ${t(`signup.${d.approval}`)}`)
   }
+  if ((e.kind === 'signup_rejected' || e.kind === 'signed_up') && d.username) extra.push(`@${d.username}`)
   if (e.kind === 'board_owner_added' && typeof d.user_id === 'string') extra.push(t('audit.newOwner', { name: names.get(d.user_id) ?? '?' }))
   if (e.kind === 'user_deleted' && d.username) extra.push(`@${d.username}`)
   if (e.kind === 'sessions_revoked' && typeof d.count === 'number') extra.push(t('audit.devices', { count: d.count }))
@@ -833,5 +835,135 @@ export function AnnouncementBanner() {
         }
       }}
     />
+  )
+}
+
+// ---------------------------------------------------------------- self sign-up (ALLOW_SIGNUP)
+
+interface SignupState {
+  /** ALLOW_SIGNUP in the server's configuration */
+  enabled: boolean
+  approval: 'review' | 'auto'
+  can_create_boards: boolean
+  can_email: boolean
+  waiting: { id: string; username: string; display_name: string; email: string | null; signed_up_at: string | null }[]
+  unconfirmed: number
+}
+
+export function useSignups(enabled = true) {
+  return useQuery({ queryKey: ['admin-signups'], queryFn: () => api.get<SignupState>('/admin/signups'), enabled })
+}
+
+/** Admin → Users, on top: sign-up settings and the people waiting for approval. */
+export function SignupPanel() {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const { data: s } = useSignups()
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['admin-signups'] })
+    qc.invalidateQueries({ queryKey: ['admin-users'] })
+    qc.invalidateQueries({ queryKey: ['notifications'] })
+  }
+  const save = useMutation({
+    mutationFn: (change: Partial<Pick<SignupState, 'approval' | 'can_create_boards'>>) =>
+      api.put<SignupState>('/admin/signups', { approval: s!.approval, can_create_boards: s!.can_create_boards, ...change }),
+    onSuccess: (r) => (qc.setQueryData(['admin-signups'], r), toastSuccess(t('common.saved'))),
+    onError: toastError,
+  })
+  const decide = useMutation({
+    mutationFn: ({ ids, approve }: { ids: string[]; approve: boolean }) =>
+      api.post<{ approved?: number; rejected?: number }>(`/admin/signups/${approve ? 'approve' : 'reject'}`, { ids }),
+    onSuccess: (r) => {
+      refresh()
+      toastSuccess(r.approved !== undefined ? t('signup.approved', { count: r.approved }) : t('signup.rejected', { count: r.rejected ?? 0 }))
+    },
+    onError: toastError,
+  })
+  if (!s) return null
+  if (!s.enabled) return null
+  const all = s.waiting.map((w) => w.id)
+  const reject = async (ids: string[], name?: string) => {
+    const ok = await ask({
+      title: name ? t('signup.rejectOneTitle', { name }) : t('signup.rejectAllTitle', { count: ids.length }),
+      message: t('signup.rejectMsg'),
+      confirmLabel: t('signup.reject'),
+      danger: true,
+    })
+    if (ok) decide.mutate({ ids, approve: false })
+  }
+  return (
+    <section className="mb-5 space-y-3 rounded-lg border border-line bg-surface p-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h2 className="flex items-center gap-1.5 font-semibold">
+          <UserPlus size={16} /> {t('signup.adminTitle')}
+        </h2>
+        <label className="flex items-center gap-2 text-sm">
+          {t('signup.approval')}
+          <select
+            value={s.approval}
+            disabled={save.isPending}
+            onChange={(e) => save.mutate({ approval: e.target.value as SignupState['approval'] })}
+            className="h-8 rounded-md border border-line bg-surface px-2 text-sm"
+          >
+            <option value="review">{t('signup.review')}</option>
+            <option value="auto">{t('signup.auto')}</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={s.can_create_boards}
+            disabled={save.isPending}
+            onChange={(e) => save.mutate({ can_create_boards: e.target.checked })}
+            className="accent-[var(--color-accent)]"
+          />
+          {t('signup.canCreateBoards')}
+        </label>
+      </div>
+      <p className="text-xs text-muted">
+        {s.can_email ? t('signup.emailOn') : t('signup.emailOff')}
+        {s.unconfirmed > 0 && ` ${t('signup.unconfirmed', { count: s.unconfirmed })}`}
+        {s.approval === 'auto' && s.waiting.length > 0 && ` ${t('signup.autoKeepsWaiting')}`}
+      </p>
+      {s.waiting.length === 0 ? (
+        s.approval === 'review' && <p className="text-sm text-muted">{t('signup.noneWaiting')}</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">{t('signup.waitingCount', { count: s.waiting.length })}</span>
+            {s.waiting.length > 1 && (
+              <>
+                <Button size="sm" variant="primary" disabled={decide.isPending} onClick={() => decide.mutate({ ids: all, approve: true })}>
+                  <CheckCircle2 size={13} /> {t('signup.approveAll')}
+                </Button>
+                <Button size="sm" disabled={decide.isPending} onClick={() => reject(all)}>
+                  <XCircle size={13} /> {t('signup.rejectAll')}
+                </Button>
+              </>
+            )}
+          </div>
+          <ul className="max-h-80 divide-y divide-[var(--border)] overflow-y-auto rounded-lg border border-line">
+            {s.waiting.map((w) => (
+              <li key={w.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">
+                    {w.display_name} <span className="font-normal text-muted">@{w.username}</span>
+                  </div>
+                  <div className="truncate text-xs text-muted">
+                    {w.email} {w.signed_up_at && `· ${fmtRelative(w.signed_up_at)}`}
+                  </div>
+                </div>
+                <Button size="sm" variant="primary" disabled={decide.isPending} onClick={() => decide.mutate({ ids: [w.id], approve: true })}>
+                  {t('signup.approve')}
+                </Button>
+                <Button size="sm" disabled={decide.isPending} onClick={() => reject([w.id], w.display_name)}>
+                  {t('signup.reject')}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
   )
 }

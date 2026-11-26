@@ -45,7 +45,7 @@ pub fn build_store(c: &Config) -> anyhow::Result<Arc<dyn ObjectStore>> {
     Ok(Arc::new(s3))
 }
 
-fn clean_filename(name: &str) -> String {
+pub(crate) fn clean_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let s: String = base.chars().filter(|c| !c.is_control() && *c != '"').take(200).collect();
     let s = s.trim().to_string();

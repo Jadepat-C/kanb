@@ -388,6 +388,7 @@ pub async fn update_card(
     Path(id): Path<Uuid>,
     Json(r): Json<UpdateCard>,
 ) -> AppResult<Json<CardSummary>> {
+    crate::boards::check_color(r.color.as_ref().and_then(|c| c.as_deref()))?;
     let (board_id, creator) = perms::card_owner(&state.db, id).await?;
     // each kind of change has its own permission
     let access = board_access(&state.db, &u, board_id).await?;
@@ -691,6 +692,8 @@ pub enum TimelineItem {
         author_name: Option<String>,
         author_color: Option<String>,
         author_avatar: Option<Uuid>,
+        /// brought in by a board import: `author_name` is the name from the other app, not an account here
+        imported: bool,
         body: String,
         created_at: DateTime<Utc>,
         edited: bool,
@@ -722,9 +725,10 @@ pub async fn timeline(
 ) -> AppResult<Json<Vec<TimelineItem>>> {
     let board_id = board_of_card(&state.db, id).await?;
     board_access(&state.db, &u, board_id).await?;
-    type C = (Uuid, Option<Uuid>, String, DateTime<Utc>, DateTime<Utc>, Option<String>, Option<String>, Option<Uuid>);
+    type C = (Uuid, Option<Uuid>, String, DateTime<Utc>, DateTime<Utc>, Option<String>, Option<String>, Option<Uuid>, bool);
     let comments: Vec<C> = sqlx::query_as(sqlf!(
-        "SELECT cm.id, cm.author_id, cm.body, cm.created_at, cm.updated_at, {DN}, u.avatar_color, u.avatar_id
+        "SELECT cm.id, cm.author_id, cm.body, cm.created_at, cm.updated_at, COALESCE({DN}, cm.imported_author), u.avatar_color, u.avatar_id,
+                cm.imported_author IS NOT NULL
          FROM comments cm LEFT JOIN users u ON u.id = cm.author_id WHERE cm.card_id = $1 AND cm.deleted_at IS NULL"
     ))
     .bind(id)
@@ -741,12 +745,13 @@ pub async fn timeline(
             .await?;
     let mut items: Vec<TimelineItem> = comments
         .into_iter()
-        .map(|(id, author_id, body, created_at, updated_at, author_name, author_color, author_avatar)| TimelineItem::Comment {
+        .map(|(id, author_id, body, created_at, updated_at, author_name, author_color, author_avatar, imported)| TimelineItem::Comment {
             id,
             author_id,
             author_name,
             author_color,
             author_avatar,
+            imported,
             body,
             created_at,
             edited: updated_at > created_at + chrono::Duration::seconds(1),

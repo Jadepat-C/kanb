@@ -272,7 +272,7 @@ pub async fn card(State(state): State<AppState>, Path((token, id)): Path<(String
     };
     let comments: Vec<PublicComment> = if b.public_comments {
         sqlx::query_as(
-            "SELECT c.id, u.display_name AS author_name, u.avatar_color AS author_color, c.body, c.created_at,
+            "SELECT c.id, COALESCE(u.display_name, c.imported_author) AS author_name, u.avatar_color AS author_color, c.body, c.created_at,
                     c.updated_at > c.created_at + interval '1 second' AS edited
              FROM comments c LEFT JOIN users u ON u.id = c.author_id
              WHERE c.card_id = $1 AND c.deleted_at IS NULL ORDER BY c.created_at",

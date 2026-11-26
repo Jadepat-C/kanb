@@ -5,6 +5,7 @@ macro_rules! sqlf {
 
 mod admin;
 mod admin_tools;
+mod analytics;
 mod audit;
 mod auth;
 mod avatars;
@@ -14,6 +15,8 @@ mod config;
 mod error;
 mod metrics;
 mod files;
+mod import;
+mod import_formats;
 mod mail;
 mod notify;
 mod perms;
@@ -30,6 +33,7 @@ mod crypto;
 mod export;
 mod ical;
 mod setup;
+mod signup;
 mod templates;
 mod throttle;
 mod twofa;
@@ -166,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.cmd.unwrap_or(Cmd::Serve) {
         Cmd::CreateAdmin { username, display_name, locale } => {
             let pw = read_password()?;
-            let u = admin::insert_user(&db, &username, &display_name, None, &pw, true, true, &locale, false)
+            let u = admin::insert_user(&db, &username, &display_name, None, &pw, true, true, &locale, false, None)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("created super admin {} ({})", u.username, u.id);
@@ -281,6 +285,8 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
     }
     notify::spawn_due_job(state.clone());
     notify::spawn_activity(state.clone());
+    signup::spawn_pruner(state.clone());
+    analytics::spawn_snapshots(state.clone());
     board_contacts::spawn_dispatch(state.clone());
     recurring::spawn_job(state.clone());
     audit::spawn_pruner(state.clone());
@@ -297,6 +303,11 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/auth/forgot", post(auth::forgot))
         .route("/auth/reset/check", post(auth::check_token))
         .route("/auth/reset", post(auth::reset))
+        .route("/auth/register", post(signup::register))
+        .route("/auth/confirm", post(signup::confirm))
+        .route("/admin/signups", get(signup::admin_get).put(signup::admin_save))
+        .route("/admin/signups/approve", post(signup::approve))
+        .route("/admin/signups/reject", post(signup::reject))
         .route("/admin/email", get(mail::get_settings).put(mail::save_settings))
         .route("/admin/email/test", post(mail::test))
         .route("/me", get(auth::me).patch(auth::update_me))
@@ -338,6 +349,8 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/admin/announcement", get(admin_tools::admin_announcement).put(admin_tools::save_announcement))
         .route("/announcement", get(admin_tools::announcement))
         .route("/boards", get(boards::list_boards).post(boards::create_board))
+        .route("/import/preview", post(import::preview).layer(DefaultBodyLimit::max(upload_limit)))
+        .route("/import", post(import::import).layer(DefaultBodyLimit::max(upload_limit)))
         .route("/boards/{id}", get(boards::get_board).patch(boards::update_board).delete(boards::delete_board))
         .route("/boards/{id}/ws", get(realtime::board_ws))
         .route("/boards/{id}/restore", post(boards::restore_board))
@@ -362,6 +375,7 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/board-templates/{id}", patch(board_templates::update).delete(board_templates::delete))
         .route("/boards/{id}/save-as-template", post(board_templates::from_board))
         .route("/boards/{id}/export", get(export::export_board))
+        .route("/boards/{id}/analytics", get(analytics::board))
         .route("/boards/{id}/share", get(public::get_share).put(public::save_share))
         .route("/public/{token}", get(public::board))
         .route("/public/{token}/cards/{id}", get(public::card))
