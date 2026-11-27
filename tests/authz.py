@@ -256,6 +256,10 @@ def fresh(w: World, kind: str) -> dict:
         return {"time": w.people["editor"].ok("POST", f"/cards/{f['card']}/time", {"minutes": 5})["id"]}
     if kind == "token":  # someone else's API token
         return {"token": w.extra.ok("POST", "/me/tokens", {"name": "authz", "scope": "read", "expires_days": 1})["info"]["id"]}
+    if kind == "provider":  # a switched-off single sign-on provider
+        before = {p["id"] for p in w.admin.ok("GET", "/admin/sso")["providers"]}
+        v = w.admin.ok("POST", "/admin/sso/providers", {"enabled": False, "issuer": "", "client_id": "", "label": "authz matrix"})
+        return {"provider": next(p["id"] for p in v["providers"] if p["id"] not in before)}
     if kind == "archived_board":
         bid = fresh(w, "board")["board"]
         o.ok("DELETE", f"/boards/{bid}")
@@ -382,7 +386,10 @@ CASES = [
     Case("PUT", "/admin/security", "admin", {"require_2fa": False}),
     Case("GET", "/admin/sso", "admin"),
     Case("POST", "/admin/sso/test", "admin", {"enabled": False, "issuer": "http://127.0.0.1:9", "client_id": "x"}),
-    Case("PUT", "/admin/sso", "admin", {"enabled": False, "issuer": "", "client_id": ""}),
+    Case("PUT", "/admin/sso", "admin", {"require_sso": False}),
+    Case("POST", "/admin/sso/providers", "admin", {"enabled": False, "issuer": "", "client_id": "", "label": "authz matrix"}),
+    Case("PUT", "/admin/sso/providers/{provider}", "admin", {"enabled": False, "issuer": "", "client_id": "", "label": "authz matrix"}, fresh="provider"),
+    Case("DELETE", "/admin/sso/providers/{provider}", "admin", fresh="provider"),
     Case("GET", "/me/sso", "outsider"),
     Case("PUT", "/cards/{card}/watch", "viewer", {"watching": True}),
     Case("GET", "/departments", "outsider"),
@@ -1317,10 +1324,13 @@ def bulk_flow(w: World, f: dict):
 class FakeIdp:
     """A tiny OpenID Connect provider on 127.0.0.1: discovery, authorize (no login form: it signs in whoever
     `next` says), token (checks the client secret, the redirect URI and PKCE) and userinfo. `tamper` changes the
-    next ID token, to check that the server refuses it."""
+    next ID token, to check that the server refuses it. `multi=True` behaves like Microsoft's "common" endpoint:
+    its issuer is `{url}/{tenantid}/v2.0`, and each token's iss is filled in from its `tid`."""
 
-    def __init__(self, client_id: str, secret: str):
-        self.client_id, self.secret = client_id, secret
+    TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad"
+
+    def __init__(self, client_id: str, secret: str, multi: bool = False):
+        self.client_id, self.secret, self.multi = client_id, secret, multi
         self.next: dict = {}
         self.tamper: dict = {}
         self.codes: dict = {}
@@ -1344,8 +1354,9 @@ class FakeIdp:
             def do_GET(self):
                 u = urllib.parse.urlparse(self.path)
                 q = dict(urllib.parse.parse_qsl(u.query))
-                if u.path == "/.well-known/openid-configuration":
-                    return self.send(200, {"issuer": idp.url, "authorization_endpoint": idp.url + "/authorize", "token_endpoint": idp.url + "/token",
+                if u.path.endswith("/.well-known/openid-configuration"):
+                    issuer = idp.url + "/{tenantid}/v2.0" if idp.multi else idp.url
+                    return self.send(200, {"issuer": issuer, "authorization_endpoint": idp.url + "/authorize", "token_endpoint": idp.url + "/token",
                                            "userinfo_endpoint": idp.url + "/userinfo", "token_endpoint_auth_methods_supported": ["client_secret_basic"]})
                 if u.path == "/authorize":
                     if q.get("client_id") != idp.client_id or q.get("response_type") != "code" or q.get("code_challenge_method") != "S256":
@@ -1374,7 +1385,11 @@ class FakeIdp:
                 if verifier_hash != challenge or form.get("redirect_uri") != redirect:
                     return self.send(400, {"error": "invalid_grant"})
                 now = int(time.time())
-                token = dict({"iss": idp.url, "aud": idp.client_id, "exp": now + 300, "iat": now, "nonce": nonce}, **claims)
+                base = {"iss": idp.url, "aud": idp.client_id, "exp": now + 300, "iat": now, "nonce": nonce}
+                if idp.multi:
+                    tid = claims.get("tid", FakeIdp.TENANT)
+                    base.update(iss=f"{idp.url}/{tid}/v2.0", tid=tid)
+                token = dict(base, **claims)
                 token.update(idp.tamper)
                 token = {k: v for k, v in token.items() if v is not None}
                 b64 = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
@@ -1391,16 +1406,17 @@ class FakeIdp:
         self.server.shutdown()
 
 
-def sso_signin(c: Client, idp: FakeIdp, claims: dict, tamper: Optional[dict] = None, start: str = "/auth/sso/start", mangle=None):
-    """The browser's trip: Kanb → provider → Kanb's callback. Returns (status, Location) of the callback."""
+def sso_signin(c: Client, idp: FakeIdp, claims: dict, tamper: Optional[dict] = None, pid: Optional[str] = None, link: bool = False, mangle=None):
+    """The browser's trip: Kanb → provider → Kanb's callback. Returns (status, Location) of the callback.
+    `pid`: which provider (the only one when left out); `link`: connecting from Profile instead of signing in."""
     idp.next, idp.tamper = claims, tamper or {}
-    if start.startswith("POST "):
-        st, r = c.call("POST", start[5:])
+    if link:
+        st, r = c.call("POST", "/me/sso/link", {"provider": pid} if pid else {})
         if st != 200:
             return st, None
         to_idp = r["url"]
     else:
-        st, to_idp = c.hop(start)
+        st, to_idp = c.hop("/auth/sso/start" + (f"?provider={pid}" if pid else ""))
         if st not in (302, 303, 307) or not to_idp or not to_idp.startswith(idp.url):
             return st, to_idp
     st, back = Client("browser at the provider").hop(to_idp)
@@ -1424,43 +1440,63 @@ def sso_flow(w: World):
     secret = "idp-secret-" + RUN
     PASSWORDS.append(secret)
     idp = FakeIdp("kanb-" + RUN, secret)
-    prev = w.admin.ok("GET", "/admin/sso")
-    prev_signup = w.admin.ok("GET", "/admin/signups")
-    signup_on = bool(prev.get("signup"))
-    conf = {"enabled": True, "issuer": idp.url, "client_id": idp.client_id, "client_secret": secret, "label": "TestIdP",
-            "allowed_domains": ["allowed.example"], "trust_email": False, "require_sso": False}
+    idp_b = FakeIdp("kanb-b-" + RUN, secret + "-b")
+    PASSWORDS.append(secret + "-b")
+    idp_ms = FakeIdp("kanb-ms-" + RUN, secret + "-ms", multi=True)
+    PASSWORDS.append(secret + "-ms")
+    a = w.admin
+    prev_signup = a.ok("GET", "/admin/signups")
+    signup_on = bool(a.ok("GET", "/admin/sso").get("signup"))
+    conf = {"enabled": True, "issuer": idp.url, "client_id": idp.client_id, "client_secret": secret, "label": "authz TestIdP",
+            "allowed_domains": ["allowed.example"], "trust_email": False}
+    created: list = []
+
+    def add(body: dict) -> str:
+        before = {p["id"] for p in a.ok("GET", "/admin/sso")["providers"]}
+        v = a.ok("POST", "/admin/sso/providers", body)
+        pid = next(p["id"] for p in v["providers"] if p["id"] not in before)
+        created.append(pid)
+        return pid
+
     try:
-        st, e = w.admin.call("PUT", "/admin/sso", dict(conf, issuer="http://idp.example.com"))
+        st, e = a.call("POST", "/admin/sso/providers", dict(conf, issuer="http://idp.example.com"))
         expect(f"a plain-http provider (not this machine) is refused ({st} {e})", st == 400 and (e or {}).get("error") == "sso_issuer_https")
-        st, e = w.admin.call("PUT", "/admin/sso", dict(conf, client_secret=None, client_id=""))
+        st, e = a.call("POST", "/admin/sso/providers", dict(conf, client_secret=None, client_id=""))
         expect("can't be switched on half filled in", st == 400)
-        view = w.admin.ok("PUT", "/admin/sso", conf)
-        expect("saved", view.get("enabled") is True and view.get("has_secret") is True)
-        expect("the secret is never sent back", secret not in json.dumps(w.admin.ok("GET", "/admin/sso")))
-        expect("the check finds the provider", w.admin.ok("POST", "/admin/sso/test", conf).get("ok") is True)
-        expect("the sign-in page shows the button", Client("anon").ok("GET", "/auth/options").get("sso", {}).get("label") == "TestIdP")
-        st, e = w.people["owner"].call("PUT", "/admin/sso", dict(conf, enabled=False))
+        pid = add(conf)
+        view = a.ok("GET", "/admin/sso")
+        mine_view = next(p for p in view["providers"] if p["id"] == pid)
+        expect("saved", mine_view["enabled"] is True and mine_view["has_secret"] is True)
+        expect("the secret is never sent back", secret not in json.dumps(view))
+        expect("the check finds the provider", a.ok("POST", "/admin/sso/test", conf).get("ok") is True)
+        opts = Client("anon").ok("GET", "/auth/options").get("sso") or {}
+        expect("the sign-in page shows its button", any(p["id"] == pid and p["label"] == "authz TestIdP" for p in opts.get("providers", [])))
+        st, e = w.people["owner"].call("PUT", f"/admin/sso/providers/{pid}", dict(conf, enabled=False))
         expect("only a super admin can change it", st == 403)
+        only_one = len(opts.get("providers", [])) == 1
 
         # an existing account, matched by its verified email address
         uname = f"authz_{RUN}_sso1"
         email = f"{uname}@example.com"
-        w.admin.ok("POST", "/admin/users", {"username": uname, "display_name": "authz sso1", "email": email, "password": "Sso1-" + RUN + "-pw",
-                                            "is_super_admin": False, "can_create_boards": True, "locale": "en", "send_invite": False})
+        a.ok("POST", "/admin/users", {"username": uname, "display_name": "authz sso1", "email": email, "password": "Sso1-" + RUN + "-pw",
+                                      "is_super_admin": False, "can_create_boards": True, "locale": "en", "send_invite": False})
         PASSWORDS.append("Sso1-" + RUN + "-pw")
         sub1 = "sub-" + secrets.token_hex(4)
         c = Client("sso1")
-        st, loc = sso_signin(c, idp, {"sub": sub1, "email": email, "email_verified": True, "name": "Somchai"})
+        st, loc = sso_signin(c, idp, {"sub": sub1, "email": email, "email_verified": True, "name": "Somchai"}, pid=pid)
         expect(f"signs in an existing account by verified email ({st} {loc})", st == 303 and loc == "/")
         me = c.call("GET", "/me")[1] or {}
         expect("as the right person", me.get("username") == uname)
         expect("an admin-set password doesn't block an SSO session", c.call("GET", "/boards")[0] == 200)
+        if only_one:
+            st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True})
+            expect(f"with one provider, a start link without ?provider still works ({loc})", loc == "/")
         c2 = Client("sso1 again")
-        st, loc = sso_signin(c2, idp, {"sub": sub1, "email": "changed-" + email, "email_verified": True})
+        st, loc = sso_signin(c2, idp, {"sub": sub1, "email": "changed-" + email, "email_verified": True}, pid=pid)
         expect("the provider account stays connected when its email changes", st == 303 and (c2.call("GET", "/me")[1] or {}).get("username") == uname)
-        st, loc = sso_signin(Client("x"), idp, {"sub": "sub-" + secrets.token_hex(4), "email": email, "email_verified": False})
-        expect(f"an unverified email never signs in as that account ({loc})", loc == "/login?sso_error=" + ("email_unverified" if signup_on else "no_account"))
-        sign_ins = w.admin.ok("GET", "/admin/audit?topic=signin")
+        st, loc = sso_signin(Client("x"), idp, {"sub": "sub-" + secrets.token_hex(4), "email": email, "email_verified": False}, pid=pid)
+        expect(f"an unverified email never signs in as that account ({loc})", loc == f"/login?sso_error={'email_unverified' if signup_on else 'no_account'}&provider={pid}")
+        sign_ins = a.ok("GET", "/admin/audit?topic=signin")
         expect("the sign-in is in the activity log as SSO", any(x.get("kind") == "sign_in" and (x.get("data") or {}).get("method") == "sso" for x in (sign_ins or {}).get("entries", [])))
 
         # forged or broken answers
@@ -1468,14 +1504,14 @@ def sso_flow(w: World):
                                     ("a token from another provider", {"iss": "https://evil.example.com"}, "wrong_issuer"),
                                     ("an expired token", {"exp": int(time.time()) - 3600}, "expired_token"),
                                     ("a token for another sign-in", {"nonce": "replayed"}, "bad_nonce")]:
-            st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True}, tamper)
-            expect(f"refuses {label} ({loc})", st == 303 and loc == f"/login?sso_error={code}")
-        st, loc = sso_signin(Client("x"), idp, {"sub": sub1}, mangle=lambda q: re.sub(r"state=[^&]+", "state=forged", q))
-        expect(f"refuses a forged state ({loc})", loc == "/login?sso_error=invalid_state")
+            st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True}, tamper, pid=pid)
+            expect(f"refuses {label} ({loc})", st == 303 and loc == f"/login?sso_error={code}&provider={pid}")
+        st, loc = sso_signin(Client("x"), idp, {"sub": sub1}, pid=pid, mangle=lambda q: re.sub(r"state=[^&]+", "state=forged", q))
+        expect(f"refuses a forged state ({loc})", loc == f"/login?sso_error=invalid_state&provider={pid}")
         # the callback only works once, and only in the browser that started it
         c3 = Client("x")
         idp.next, idp.tamper = {"sub": sub1, "email": email, "email_verified": True}, {}
-        _, to_idp = c3.hop("/auth/sso/start")
+        _, to_idp = c3.hop(f"/auth/sso/start?provider={pid}")
         _, back = Client("p").hop(to_idp)
         cb = urllib.parse.urlparse(back)
         cb_path = cb.path.removeprefix("/api") + "?" + cb.query
@@ -1486,31 +1522,84 @@ def sso_flow(w: World):
         st, loc = c3.hop(cb_path)
         expect(f"but only once ({loc})", loc == "/login?sso_error=expired")
         # a wrong client secret: the provider refuses the code
-        w.admin.ok("PUT", "/admin/sso", dict(conf, client_secret="wrong-" + RUN))
-        st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True})
-        expect(f"a wrong client secret fails cleanly ({loc})", loc == "/login?sso_error=token_failed")
-        w.admin.ok("PUT", "/admin/sso", conf)
+        a.ok("PUT", f"/admin/sso/providers/{pid}", dict(conf, client_secret="wrong-" + RUN))
+        st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True}, pid=pid)
+        expect(f"a wrong client secret fails cleanly ({loc})", loc == f"/login?sso_error=token_failed&provider={pid}")
+        a.ok("PUT", f"/admin/sso/providers/{pid}", conf)
 
         # a deactivated account
         uid1 = me.get("id")
-        w.admin.ok("PATCH", f"/admin/users/{uid1}", {"is_active": False})
-        st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True})
-        expect(f"a deactivated account can't sign in ({loc})", loc == "/login?sso_error=account_disabled")
-        w.admin.ok("PATCH", f"/admin/users/{uid1}", {"is_active": True})
+        a.ok("PATCH", f"/admin/users/{uid1}", {"is_active": False})
+        st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True}, pid=pid)
+        expect(f"a deactivated account can't sign in ({loc})", loc == f"/login?sso_error=account_disabled&provider={pid}")
+        a.ok("PATCH", f"/admin/users/{uid1}", {"is_active": True})
         c = Client("sso1 after reactivation")  # deactivating signed it out everywhere
-        sso_signin(c, idp, {"sub": sub1, "email": email, "email_verified": True})
+        sso_signin(c, idp, {"sub": sub1, "email": email, "email_verified": True}, pid=pid)
+
+        # a second provider, side by side
+        pid_b = add({"enabled": True, "issuer": idp_b.url, "client_id": idp_b.client_id, "client_secret": secret + "-b", "label": "authz Second", "trust_email": False})
+        labels = {p["id"]: p["label"] for p in (Client("anon").ok("GET", "/auth/options").get("sso") or {}).get("providers", [])}
+        expect("both buttons are on the sign-in page", labels.get(pid) == "authz TestIdP" and labels.get(pid_b) == "authz Second")
+        st, loc = sso_signin(Client("x"), idp_b, {"sub": sub1, "email": email, "email_verified": True})
+        expect(f"with several providers, a start link must say which ({loc})", loc == "/login?sso_error=sso_off")
+        cb2 = Client("sso1 via B")
+        st, loc = sso_signin(cb2, idp_b, {"sub": "b-" + sub1, "email": email, "email_verified": True}, pid=pid_b)
+        expect(f"the second provider signs in the same person by verified email ({loc})", loc == "/" and (cb2.call("GET", "/me")[1] or {}).get("id") == uid1)
+        conns = c.ok("GET", "/me/sso")
+        expect("Profile lists both connections by name", sorted(i["label"] for i in conns["identities"]) == ["authz Second", "authz TestIdP"])
+        expect("…and nothing left to connect", all(p["connected"] for p in conns["providers"] if p["id"] in (pid, pid_b)))
+        # a sign-in started with A can't be finished with a code from B
+        cx = Client("mix")
+        idp.next, idp.tamper = {"sub": sub1, "email": email, "email_verified": True}, {}
+        _, to_a = cx.hop(f"/auth/sso/start?provider={pid}")
+        state_a = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(to_a).query))["state"]
+        idp_b.next, idp_b.tamper = {"sub": "b-" + sub1, "email": email, "email_verified": True}, {}
+        _, to_b = Client("other").hop(f"/auth/sso/start?provider={pid_b}")
+        _, back_b = Client("p").hop(to_b)
+        code_b = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(back_b).query))["code"]
+        st, loc = cx.hop(f"/auth/sso/callback?code={code_b}&state={urllib.parse.quote(state_a)}")
+        expect(f"a code from another provider is refused ({loc})", loc == f"/login?sso_error=token_failed&provider={pid}")
+
+        # Microsoft-style "any organisation" provider: issuer …/{tenantid}/v2.0
+        ms_issuer = idp_ms.url + "/common/v2.0"
+        ms_body = {"enabled": True, "issuer": ms_issuer, "client_id": idp_ms.client_id, "client_secret": secret + "-ms", "label": "authz Microsoft", "trust_email": True}
+        st, e = a.call("POST", "/admin/sso/providers", ms_body)
+        expect(f"trusting email addresses is refused for a multi-tenant provider ({st} {e})", st == 400 and (e or {}).get("error") == "sso_trust_multitenant")
+        expect("the check says it's multi-tenant", a.ok("POST", "/admin/sso/test", ms_body).get("multi_tenant") is True)
+        pid_ms = add(dict(ms_body, trust_email=False))
+        st, loc = sso_signin(Client("x"), idp_ms, {"sub": "ms-" + sub1, "email": email}, pid=pid_ms)
+        expect(f"no email_verified (like Microsoft): no match by email ({loc})", loc == f"/login?sso_error={'email_unverified' if signup_on else 'no_account'}&provider={pid_ms}")
+        st, loc = sso_signin(c, idp_ms, {"sub": "ms-" + sub1, "email": email}, pid=pid_ms, link=True)
+        expect(f"…but people can connect it themselves in Profile ({loc})", loc == f"/profile?tab=security&sso=linked&provider={pid_ms}")
+        cm = Client("ms")
+        st, loc = sso_signin(cm, idp_ms, {"sub": "ms-" + sub1, "email": email}, pid=pid_ms)
+        expect(f"and then it signs them in ({loc})", loc == "/" and (cm.call("GET", "/me")[1] or {}).get("id") == uid1)
+        st, loc = sso_signin(Client("x"), idp_ms, {"sub": "ms-" + sub1, "tid": "72f988bf-86f1-41af-91ab-2d7cd011db47"},
+                             {"iss": f"{idp_ms.url}/{FakeIdp.TENANT}/v2.0"}, pid=pid_ms)
+        expect(f"a token whose tenant doesn't match its issuer is refused ({loc})", loc == f"/login?sso_error=wrong_issuer&provider={pid_ms}")
+        st, loc = sso_signin(Client("x"), idp_ms, {"sub": "ms-" + sub1, "tid": "../evil"}, pid=pid_ms)
+        expect(f"so is a tenant id that isn't one ({loc})", loc == f"/login?sso_error=wrong_issuer&provider={pid_ms}")
+
+        # removing a provider: its button goes, the links stay (and work again if it comes back)
+        a.ok("DELETE", f"/admin/sso/providers/{pid_b}")
+        created.remove(pid_b)
+        ids = [p["id"] for p in (Client("anon").ok("GET", "/auth/options").get("sso") or {}).get("providers", [])]
+        expect("a removed provider's button is gone", pid_b not in ids and pid in ids)
+        expect("its connection is still listed (by host)", len(c.ok("GET", "/me/sso")["identities"]) == 3)
+        st, loc = Client("x").hop(f"/auth/sso/start?provider={pid_b}")
+        expect(f"and it can't be used ({loc})", loc == "/login?sso_error=sso_off")
 
         # connecting from Profile
         p = w.people["commenter"]
         sub2 = "sub-" + secrets.token_hex(4)
-        st, loc = sso_signin(p, idp, {"sub": sub1}, start="POST /me/sso/link")
-        expect(f"can't take over a provider account connected to someone else ({loc})", loc == "/profile?tab=security&sso_error=linked_elsewhere")
-        st, loc = sso_signin(p, idp, {"sub": sub2, "email": "commenter@elsewhere.example"}, start="POST /me/sso/link")
-        expect(f"connects ({loc})", loc == "/profile?tab=security&sso=linked")
+        st, loc = sso_signin(p, idp, {"sub": sub1}, pid=pid, link=True)
+        expect(f"can't take over a provider account connected to someone else ({loc})", loc == f"/profile?tab=security&sso_error=linked_elsewhere&provider={pid}")
+        st, loc = sso_signin(p, idp, {"sub": sub2, "email": "commenter@elsewhere.example"}, pid=pid, link=True)
+        expect(f"connects ({loc})", loc == f"/profile?tab=security&sso=linked&provider={pid}")
         mine = p.ok("GET", "/me/sso")
         expect("Profile lists the connection", len(mine.get("identities", [])) == 1)
         other = Client("sso2")
-        st, loc = sso_signin(other, idp, {"sub": sub2})
+        st, loc = sso_signin(other, idp, {"sub": sub2}, pid=pid)
         expect("now signs in as that person", loc == "/" and (other.call("GET", "/me")[1] or {}).get("id") == p.id)
         if mine.get("identities"):
             ident = mine["identities"][0]["id"]
@@ -1519,20 +1608,20 @@ def sso_flow(w: World):
 
         # new people
         if signup_on:
-            w.admin.ok("PUT", "/admin/signups", {"approval": "review", "can_create_boards": True})
-            st, loc = sso_signin(Client("x"), idp, {"sub": "sub-" + secrets.token_hex(4), "email": f"authz_{RUN}_far@other.example", "email_verified": True})
-            expect(f"new accounts only from allowed domains ({loc})", loc == "/login?sso_error=domain_not_allowed")
+            a.ok("PUT", "/admin/signups", {"approval": "review", "can_create_boards": True})
+            st, loc = sso_signin(Client("x"), idp, {"sub": "sub-" + secrets.token_hex(4), "email": f"authz_{RUN}_far@other.example", "email_verified": True}, pid=pid)
+            expect(f"new accounts only from allowed domains ({loc})", loc == f"/login?sso_error=domain_not_allowed&provider={pid}")
             new_email = f"authz_{RUN}_new@allowed.example"
             sub3 = "sub-" + secrets.token_hex(4)
-            st, loc = sso_signin(Client("x"), idp, {"sub": sub3, "email": new_email, "email_verified": True, "preferred_username": f"authz_{RUN}_new"})
-            expect(f"a new account waits for approval ({loc})", loc == "/login?sso_error=pending_approval")
-            waiting = {x["username"]: x["id"] for x in w.admin.ok("GET", "/admin/signups")["waiting"]}
+            st, loc = sso_signin(Client("x"), idp, {"sub": sub3, "email": new_email, "email_verified": True, "preferred_username": f"authz_{RUN}_new"}, pid=pid)
+            expect(f"a new account waits for approval ({loc})", loc == f"/login?sso_error=pending_approval&provider={pid}")
+            waiting = {x["username"]: x["id"] for x in a.ok("GET", "/admin/signups")["waiting"]}
             nid = waiting.get(f"authz_{RUN}_new")
             expect("the admin sees it waiting", nid is not None)
             if nid:
-                w.admin.ok("POST", "/admin/signups/approve", {"ids": [nid]})
+                a.ok("POST", "/admin/signups/approve", {"ids": [nid]})
                 n = Client("new")
-                st, loc = sso_signin(n, idp, {"sub": sub3, "email": new_email, "email_verified": True})
+                st, loc = sso_signin(n, idp, {"sub": sub3, "email": new_email, "email_verified": True}, pid=pid)
                 expect(f"after approval it signs in ({loc})", loc == "/")
                 expect("it has no password", (n.call("GET", "/me")[1] or {}).get("has_password") is False)
                 st, _ = n.call("POST", "/me/password", {"new_password": "First-" + RUN + "-pw"})
@@ -1542,29 +1631,39 @@ def sso_flow(w: World):
                 st, _ = n.call("POST", "/me/password", {"new_password": "Second-" + RUN + "-pw"})
                 expect("but changing it needs the current one", st == 400)
         else:
-            st, loc = sso_signin(Client("x"), idp, {"sub": "sub-" + secrets.token_hex(4), "email": f"authz_{RUN}_nobody@allowed.example", "email_verified": True})
-            expect(f"without ALLOW_SIGNUP, unknown people are refused ({loc})", loc == "/login?sso_error=no_account")
+            st, loc = sso_signin(Client("x"), idp, {"sub": "sub-" + secrets.token_hex(4), "email": f"authz_{RUN}_nobody@allowed.example", "email_verified": True}, pid=pid)
+            expect(f"without ALLOW_SIGNUP, unknown people are refused ({loc})", loc == f"/login?sso_error=no_account&provider={pid}")
 
         # requiring single sign-on
         viewer = w.people["viewer"]
-        w.admin.ok("PUT", "/admin/sso", dict(conf, require_sso=True))
+        a.ok("PUT", "/admin/sso", {"require_sso": True})
         expect("password sessions of normal accounts end", viewer.call("GET", "/me")[0] == 401)
         st, e = Client("x").call("POST", "/auth/login", {"username": uname, "password": "Sso1-" + RUN + "-pw"})
         expect(f"password sign-in is refused for normal accounts ({st} {e})", st == 403 and (e or {}).get("error") == "sso_required")
         expect("super admins keep their password", Client("admin").call("POST", "/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASSWORD})[0] == 200)
-        expect("the admin's own session survives", w.admin.call("GET", "/admin/sso")[0] == 200)
+        expect("the admin's own session survives", a.call("GET", "/admin/sso")[0] == 200)
         expect("SSO sessions survive", c.call("GET", "/boards")[0] == 200)
         expect("can't change a password", c.call("POST", "/me/password", {"current_password": "x", "new_password": "Nope-12345678"})[0] == 403)
         if signup_on:
             st, e = Client("x").call("POST", "/auth/register", {"username": f"authz_{RUN}_form", "display_name": "", "email": f"authz_{RUN}_form@allowed.example", "password": "Form-12345678", "locale": "en"})
             expect(f"the sign-up form is closed ({st})", st == 403 and (e or {}).get("error") == "sso_required")
-        expect("the sign-in page says so", Client("anon").ok("GET", "/auth/options")["sso"].get("required") is True)
+        expect("the sign-in page says so", (Client("anon").ok("GET", "/auth/options")["sso"] or {}).get("required") is True)
+        # removing every provider can't leave "require" on (nobody but super admins could sign in)
+        others = [x["id"] for x in a.ok("GET", "/admin/sso")["providers"] if x["id"] not in created and x["enabled"]]
+        if not others:
+            for x in list(created):
+                a.ok("DELETE", f"/admin/sso/providers/{x}")
+                created.remove(x)
+            expect("with no provider left, require switches off", a.ok("GET", "/admin/sso")["require_sso"] is False)
+            expect("…and password sign-in works again", Client("x").call("POST", "/auth/login", {"username": uname, "password": "Sso1-" + RUN + "-pw"})[0] == 200)
+            expect("require can't be turned on without a provider", a.call("PUT", "/admin/sso", {"require_sso": True})[0] == 400)
     finally:
-        w.admin.call("PUT", "/admin/sso", {"enabled": False, "issuer": prev.get("issuer", ""), "client_id": prev.get("client_id", ""),
-                                          "label": prev.get("label", ""), "allowed_domains": prev.get("allowed_domains", []),
-                                          "trust_email": prev.get("trust_email", False), "require_sso": False})
-        w.admin.call("PUT", "/admin/signups", {"approval": prev_signup.get("approval", "review"), "can_create_boards": prev_signup.get("can_create_boards", True)})
-        idp.close()
+        a.call("PUT", "/admin/sso", {"require_sso": False})
+        for x in created:
+            a.call("DELETE", f"/admin/sso/providers/{x}")
+        a.call("PUT", "/admin/signups", {"approval": prev_signup.get("approval", "review"), "can_create_boards": prev_signup.get("can_create_boards", True)})
+        for i in (idp, idp_b, idp_ms):
+            i.close()
     return checked, problems
 
 
@@ -1582,6 +1681,10 @@ def cleanup(w: World, prefix: str = ""):
     waiting = [x["id"] for x in (su or {}).get("waiting", []) if str(x.get("username", "")).startswith(prefix)] if isinstance(su, dict) else []
     if waiting:
         w.admin.call("POST", "/admin/signups/reject", {"ids": waiting})
+    _, ssov = w.admin.call("GET", "/admin/sso")
+    for p in (ssov or {}).get("providers", []) if isinstance(ssov, dict) else []:
+        if str(p.get("label", "")).startswith("authz"):
+            w.admin.call("DELETE", f"/admin/sso/providers/{p['id']}")
     _, deps = w.admin.call("GET", "/departments")
     for d in deps if isinstance(deps, list) else []:
         if isinstance(d, dict) and str(d.get("name", "")).startswith("authz dept") and (prefix == "authz_" or RUN in str(d.get("name"))):

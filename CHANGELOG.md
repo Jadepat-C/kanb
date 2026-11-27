@@ -9,6 +9,23 @@ need configuration changes or break your data, and the image tag `:1` follows th
 
 ## Unreleased
 
+## 0.4.2 (2026-11-27)
+
+### New
+- **Several single sign-on providers side by side**, e.g. Google and Microsoft: the sign-in page shows a button for
+  each. Admin → Single sign-on lists them, with ready-made starting points for Google, Microsoft personal accounts,
+  one Microsoft organisation, or any Microsoft account, and Microsoft-specific hints. People connect each provider in
+  Profile → Security.
+- Microsoft's multi-organisation endpoints (`common`, `organizations`) work: each token's tenant is checked against
+  its issuer. Trusting email addresses is refused for them (any organisation's admin could claim any address).
+  Microsoft doesn't mark addresses as verified, so people connect Microsoft once from Profile → Security, unless you
+  trust a single organisation's or personal accounts' addresses.
+
+### Upgrading
+Migration 0033. Your single sign-on provider from 0.4 carries over as the first one, unchanged. The admin API
+changed: providers are added, changed and removed with `/admin/sso/providers`, and `PUT /admin/sso` now only takes
+`{require_sso}`.
+
 ## 0.4.1 (2026-11-27)
 
 ### Fixes

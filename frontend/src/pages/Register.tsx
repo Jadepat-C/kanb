@@ -9,7 +9,7 @@ import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { errorText } from '../lib/i18n'
 import { AuthCard } from './AuthPages'
-import { SsoButton, type SsoInfo } from './Sso'
+import { SsoButtons, type SsoInfo } from './Sso'
 
 type Outcome = 'confirm_email' | 'review' | 'active'
 
@@ -87,7 +87,7 @@ export function Register() {
     <AuthCard title={t('signup.title')} subtitle={t('signup.subtitle')}>
       {sso && (
         <div className="mb-4 space-y-4">
-          <SsoButton info={sso} signUp />
+          <SsoButtons info={sso} signUp />
           {!sso.required && (
             <div className="flex items-center gap-3 text-xs text-muted">
               <span className="h-px flex-1 bg-[var(--border)]" />

@@ -9,7 +9,7 @@ import { useMe } from '../lib/auth'
 import { errorText, setLocale } from '../lib/i18n'
 import { isDark, setTheme } from '../lib/prefs'
 import type { User } from '../lib/types'
-import { SsoButton, useSsoError, type SsoInfo } from './Sso'
+import { SsoButtons, ssoLabels, useSsoError, type SsoInfo } from './Sso'
 
 export function Login() {
   const { t, i18n } = useTranslation()
@@ -31,7 +31,7 @@ export function Login() {
     queryFn: () => api.get<{ email_enabled: boolean; needs_setup?: boolean; signup?: boolean; sso?: SsoInfo }>('/auth/options'),
   })
   const sso = options.data?.sso ?? null
-  const ssoErr = useSsoError(sso?.label)
+  const ssoErr = useSsoError(sso)
   // single sign-on required: the password form is only for super admins, behind a link
   const [passwordOpen, setPasswordOpen] = useState(false)
   const showPassword = !sso?.required || passwordOpen
@@ -150,7 +150,7 @@ export function Login() {
               {ssoErr && <p className="rounded-md bg-red-500/10 p-2.5 text-sm text-red-700 dark:text-red-400">{ssoErr}</p>}
               {sso && (
                 <>
-                  <SsoButton info={sso} />
+                  <SsoButtons info={sso} />
                   {sso.required ? (
                     <>
                       <p className="text-center text-xs text-muted">{t('sso.requiredHint')}</p>
@@ -191,7 +191,7 @@ export function Login() {
             </Link>
           )}
           {options.data?.signup && sso?.required ? (
-            <p className="text-center text-xs text-muted">{t('sso.signupHint', { label: sso.label })}</p>
+            <p className="text-center text-xs text-muted">{t('sso.signupHint', { label: ssoLabels(sso) })}</p>
           ) : options.data?.signup ? (
             <p className="text-center text-sm text-muted">
               {t('signup.noAccount')}{' '}

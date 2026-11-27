@@ -1,23 +1,30 @@
-//! Single sign-on with OpenID Connect: Google, Microsoft Entra ID, Authentik, Keycloak, Authelia, Zitadel and any
-//! other provider that publishes `/.well-known/openid-configuration`. Set up in Admin → Single sign-on.
+//! Single sign-on with OpenID Connect: Google, Microsoft, Authentik, Keycloak, Authelia, Zitadel and any other
+//! provider that publishes `/.well-known/openid-configuration`. Several providers can be set up side by side
+//! (Admin → Single sign-on); the sign-in page shows a button for each.
 //!
 //! Authorization code flow with PKCE, `state` and `nonce`. The flow is bound to the browser by a short-lived cookie
-//! (its hash keys the `sso_flows` row), so a callback can't be replayed or completed in another browser. The ID token
-//! comes straight from the provider's token endpoint over TLS, which OpenID Connect Core 3.1.3.7 (6) allows in
-//! place of checking its signature; its issuer, audience, expiry and nonce are checked. That's also why the provider
-//! must be reached over https (plain http only on this machine, for development and tests).
+//! (its hash keys the `sso_flows` row, which also records the provider), so a callback can't be replayed, completed
+//! in another browser, or finished with a different provider's settings. The ID token comes straight from the
+//! provider's token endpoint over TLS, which OpenID Connect Core 3.1.3.7 (6) allows in place of checking its
+//! signature; its issuer, audience, expiry and nonce are checked. That's also why providers must be reached over https
+//! (plain http only on this machine, for development and tests).
 //!
 //! Who an SSO sign-in is:
 //! 1. the account already connected to this provider account (issuer + subject, which never change), else
-//! 2. the account with the same email address, when the provider says it's verified (or the admin trusts the
+//! 2. the account with the same email address, when the provider says it's verified (or the admin trusts that
 //!    provider's addresses); it's connected from then on, else
 //! 3. with ALLOW_SIGNUP on, a new account under the sign-up rules (admin approval or not; allowed email domains),
-//! 4. otherwise nobody: "no account".
+//! 4. otherwise nobody: "no account". People can still connect a provider themselves (Profile → Security).
+//!
+//! Microsoft: the "common" and "organizations" endpoints serve every Entra tenant, so their issuer is a template
+//! (`…/{tenantid}/v2.0`) filled in from each token's `tid`. On those, "trust email addresses" is refused: any tenant's
+//! admin can put any address on their users. Microsoft never says an address is verified.
 //!
 //! SSO sessions skip Kanb's own two-factor sign-in (the provider handles that). "Require single sign-on" turns off
 //! password sign-in for everyone except super admins, who keep it so a broken provider can't lock everyone out.
 
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     sync::Mutex,
     time::{Duration, Instant},
@@ -48,13 +55,17 @@ const KEY: &str = "sso";
 const FLOW_COOKIE: &str = "kanb_sso";
 const FLOW_PATH: &str = "/api/auth/sso";
 const FLOW_MINUTES: i64 = 10;
+/// at most this many providers
+const MAX_PROVIDERS: usize = 10;
 /// sign-ins started per address (each one stores a row until it finishes or expires); generous, because a whole
 /// office signing in at 9 am shares one address
 const START_IP: throttle::Rule = throttle::Rule { limit: 300, window: Duration::from_secs(15 * 60) };
 
-#[derive(Serialize, Deserialize, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
 #[serde(default)]
-pub struct Settings {
+pub struct Provider {
+    /// stable id (in sign-in links and on connected accounts)
+    pub id: String,
     pub enabled: bool,
     /// the provider's issuer URL, e.g. https://accounts.google.com or https://auth.example.com/application/o/kanb/
     pub issuer: String,
@@ -65,54 +76,113 @@ pub struct Settings {
     pub label: String,
     /// new accounts only from these email domains (empty = any); existing accounts aren't affected
     pub allowed_domains: Vec<String>,
-    /// treat every email address from the provider as verified (a provider your organisation controls, like
-    /// Microsoft Entra ID, which doesn't send "email_verified")
+    /// treat every email address from this provider as verified (a provider your organisation controls that doesn't
+    /// send "email_verified", like a single Microsoft Entra tenant)
     pub trust_email: bool,
-    /// password sign-in only for super admins
-    pub require_sso: bool,
 }
 
-impl Settings {
+impl Provider {
     fn ready(&self) -> bool {
         self.enabled && !self.issuer.trim().is_empty() && !self.client_id.trim().is_empty() && !self.client_secret.is_empty()
     }
+    fn label(&self) -> String {
+        if self.label.trim().is_empty() { "SSO".into() } else { self.label.trim().into() }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq)]
+#[serde(default)]
+pub struct Settings {
+    pub providers: Vec<Provider>,
+    /// password sign-in only for super admins (while at least one provider is ready)
+    pub require_sso: bool,
+}
+
+/// What 0.4.x stored: one provider at the top level.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct OldSettings {
+    enabled: bool,
+    issuer: String,
+    client_id: String,
+    client_secret: String,
+    label: String,
+    allowed_domains: Vec<String>,
+    trust_email: bool,
+    require_sso: bool,
+}
+
+/// Settings as stored (secrets still sealed); the 0.4.x shape becomes a list of one.
+fn parse(v: Value) -> Settings {
+    if v.get("issuer").is_some() && v.get("providers").is_none() {
+        let o: OldSettings = serde_json::from_value(v).unwrap_or_default();
+        let providers = if o.issuer.trim().is_empty() && o.client_id.trim().is_empty() {
+            vec![]
+        } else {
+            vec![Provider {
+                id: "default".into(),
+                enabled: o.enabled,
+                issuer: o.issuer,
+                client_id: o.client_id,
+                client_secret: o.client_secret,
+                label: o.label,
+                allowed_domains: o.allowed_domains,
+                trust_email: o.trust_email,
+            }]
+        };
+        return Settings { providers, require_sso: o.require_sso };
+    }
+    serde_json::from_value(v).unwrap_or_default()
 }
 
 pub async fn load(state: &AppState) -> AppResult<Settings> {
     let row: Option<(Value,)> = sqlx::query_as("SELECT value FROM app_settings WHERE key = $1").bind(KEY).fetch_optional(&state.db).await?;
-    let mut s: Settings = row.and_then(|(v,)| serde_json::from_value(v).ok()).unwrap_or_default();
-    s.client_secret = crate::crypto::open(&s.client_secret).map_err(AppError::Internal)?;
+    let mut s = row.map(|(v,)| parse(v)).unwrap_or_default();
+    for p in &mut s.providers {
+        p.client_secret = crate::crypto::open(&p.client_secret).map_err(AppError::Internal)?;
+    }
     Ok(s)
 }
 
-/// The settings, when single sign-on is switched on and complete.
-pub async fn active(state: &AppState) -> Option<Settings> {
-    load(state).await.ok().filter(Settings::ready)
+async fn store(state: &AppState, s: &Settings) -> AppResult<()> {
+    let mut sealed = s.clone();
+    for p in &mut sealed.providers {
+        p.client_secret = crate::crypto::seal(&p.client_secret);
+    }
+    sqlx::query("INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()")
+        .bind(KEY)
+        .bind(serde_json::to_value(&sealed).map_err(|e| anyhow::anyhow!(e))?)
+        .execute(&state.db)
+        .await?;
+    Ok(())
+}
+
+/// The providers people can sign in with right now.
+pub async fn active(state: &AppState) -> Vec<Provider> {
+    load(state).await.map(|s| s.providers.into_iter().filter(Provider::ready).collect()).unwrap_or_default()
 }
 
 /// Password sign-in is only for super admins.
 pub async fn required(state: &AppState) -> bool {
-    active(state).await.is_some_and(|s| s.require_sso)
+    load(state).await.is_ok_and(|s| s.require_sso && s.providers.iter().any(Provider::ready))
 }
 
-/// For the sign-in page (`/auth/options`): the button, or null.
+/// For the sign-in page (`/auth/options`): { providers: [{id, label}], required }, or null when SSO is off.
 pub async fn public_info(state: &AppState) -> Value {
-    match active(state).await {
-        Some(s) => json!({ "label": label(&s), "required": s.require_sso }),
-        None => Value::Null,
+    let Ok(s) = load(state).await else { return Value::Null };
+    let ready: Vec<Value> = s.providers.iter().filter(|p| p.ready()).map(|p| json!({ "id": p.id, "label": p.label() })).collect();
+    if ready.is_empty() {
+        return Value::Null;
     }
+    json!({ "providers": ready, "required": s.require_sso })
 }
 
-fn label(s: &Settings) -> String {
-    if s.label.trim().is_empty() { "SSO".into() } else { s.label.trim().into() }
-}
-
-/// Where the provider sends people back to; entered in the provider's settings.
+/// Where providers send people back to; entered in each provider's settings (the same for all of them).
 pub fn redirect_uri(state: &AppState) -> String {
     format!("{}{FLOW_PATH}/callback", state.origins.first().map(|o| o.trim_end_matches('/')).unwrap_or(""))
 }
 
-// ---------- talking to the provider ----------
+// ---------- talking to a provider ----------
 
 #[derive(Deserialize, Clone)]
 struct Discovery {
@@ -124,7 +194,21 @@ struct Discovery {
     token_endpoint_auth_methods_supported: Vec<String>,
 }
 
-static DISCOVERY: Mutex<Option<(String, Instant, Discovery)>> = Mutex::new(None);
+impl Discovery {
+    /// One issuer for many tenants (Microsoft "common" / "organizations"): `…/{tenantid}/…`.
+    fn multi_tenant(&self) -> bool {
+        self.issuer.contains("{tenantid}")
+    }
+}
+
+/// by the configured issuer URL
+static DISCOVERY: Mutex<Option<HashMap<String, (Instant, Discovery)>>> = Mutex::new(None);
+
+fn forget(issuer: &str) {
+    if let Some(m) = DISCOVERY.lock().unwrap().as_mut() {
+        m.remove(issuer.trim());
+    }
+}
 
 /// https, or plain http to this machine only (development and tests): the ID token's trust rests on TLS.
 fn check_url(u: &str) -> Result<reqwest::Url, String> {
@@ -134,6 +218,19 @@ fn check_url(u: &str) -> Result<reqwest::Url, String> {
         "https" => Ok(url),
         "http" if local => Ok(url),
         _ => Err(format!("{u} must start with https://")),
+    }
+}
+
+/// The issuer a provider reports is the one we typed, or another one on the same host (Microsoft turns
+/// `…/consumers/v2.0` or `…/contoso.onmicrosoft.com/v2.0` into the tenant's id).
+fn same_issuer(configured: &str, reported: &str) -> bool {
+    let (a, b) = (configured.trim().trim_end_matches('/'), reported.trim().trim_end_matches('/'));
+    if a == b {
+        return true;
+    }
+    match (reqwest::Url::parse(a), reqwest::Url::parse(b)) {
+        (Ok(x), Ok(y)) => x.scheme() == y.scheme() && x.host_str() == y.host_str() && x.port_or_known_default() == y.port_or_known_default(),
+        _ => false,
     }
 }
 
@@ -159,8 +256,7 @@ async fn get_json(req: reqwest::RequestBuilder) -> Result<Value, String> {
 
 async fn discover(issuer: &str) -> Result<Discovery, String> {
     let issuer = issuer.trim();
-    if let Some((i, at, d)) = DISCOVERY.lock().unwrap().as_ref()
-        && i == issuer
+    if let Some((at, d)) = DISCOVERY.lock().unwrap().as_ref().and_then(|m| m.get(issuer))
         && at.elapsed() < Duration::from_secs(3600)
     {
         return Ok(d.clone());
@@ -169,7 +265,7 @@ async fn discover(issuer: &str) -> Result<Discovery, String> {
     let url = format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'));
     let v = get_json(http().get(&url)).await?;
     let d: Discovery = serde_json::from_value(v).map_err(|e| format!("{url} is missing something: {e}"))?;
-    if d.issuer.trim_end_matches('/') != issuer.trim_end_matches('/') {
+    if !same_issuer(issuer, &d.issuer) {
         return Err(format!("the provider calls itself {}, not {issuer}", d.issuer));
     }
     check_url(&d.authorization_endpoint)?;
@@ -177,7 +273,7 @@ async fn discover(issuer: &str) -> Result<Discovery, String> {
     if let Some(u) = &d.userinfo_endpoint {
         check_url(u)?;
     }
-    *DISCOVERY.lock().unwrap() = Some((issuer.to_string(), Instant::now(), d.clone()));
+    DISCOVERY.lock().unwrap().get_or_insert_with(HashMap::new).insert(issuer.to_string(), (Instant::now(), d.clone()));
     Ok(d)
 }
 
@@ -197,6 +293,8 @@ fn enc(s: &str) -> String {
 /// What the provider says about the person.
 #[derive(Debug, Default)]
 struct Claims {
+    /// the token's issuer (with a multi-tenant provider: the person's tenant)
+    issuer: String,
     subject: String,
     email: Option<String>,
     email_verified: bool,
@@ -209,6 +307,19 @@ fn str_claim(v: &Value, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
+fn is_guid(s: &str) -> bool {
+    s.len() == 36 && s.chars().enumerate().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() })
+}
+
+/// The token's `iss` is the provider's issuer (for a multi-tenant one: the template with the token's own tenant).
+fn issuer_ok(expected: &str, v: &Value) -> bool {
+    let Some(iss) = v.get("iss").and_then(Value::as_str) else { return false };
+    if expected.contains("{tenantid}") {
+        return v.get("tid").and_then(Value::as_str).is_some_and(|tid| is_guid(tid) && iss == expected.replace("{tenantid}", tid));
+    }
+    iss == expected
+}
+
 /// Checks the ID token (from the token endpoint over TLS: no signature check needed, see the module comment).
 fn id_token_claims(token: &str, d: &Discovery, client_id: &str, nonce: &str, now: i64) -> Result<Value, &'static str> {
     let mut parts = token.split('.');
@@ -217,7 +328,7 @@ fn id_token_claims(token: &str, d: &Discovery, client_id: &str, nonce: &str, now
     };
     let bytes = Base64UrlUnpadded::decode_vec(payload.trim_end_matches('=')).map_err(|_| "bad_token")?;
     let v: Value = serde_json::from_slice(&bytes).map_err(|_| "bad_token")?;
-    if v.get("iss").and_then(Value::as_str) != Some(d.issuer.as_str()) {
+    if !issuer_ok(&d.issuer, &v) {
         return Err("wrong_issuer");
     }
     let aud_ok = match v.get("aud") {
@@ -254,7 +365,7 @@ fn verified(v: &Value) -> bool {
 }
 
 /// The code from the callback → who signed in. Err: a short code for the sign-in page (details are logged).
-async fn exchange(s: &Settings, d: &Discovery, redirect_uri: &str, code: &str, verifier: &str, nonce: &str) -> Result<Claims, &'static str> {
+async fn exchange(p: &Provider, d: &Discovery, redirect_uri: &str, code: &str, verifier: &str, nonce: &str) -> Result<Claims, &'static str> {
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
         ("code", code.to_string()),
@@ -266,21 +377,22 @@ async fn exchange(s: &Settings, d: &Discovery, redirect_uri: &str, code: &str, v
     let basic = methods.is_empty() || methods.iter().any(|m| m == "client_secret_basic");
     let mut req = http().post(&d.token_endpoint).header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded");
     if basic {
-        req = req.basic_auth(enc(&s.client_id), Some(enc(&s.client_secret)));
+        req = req.basic_auth(enc(&p.client_id), Some(enc(&p.client_secret)));
     } else {
-        form.push(("client_id", s.client_id.clone()));
-        form.push(("client_secret", s.client_secret.clone()));
+        form.push(("client_id", p.client_id.clone()));
+        form.push(("client_secret", p.client_secret.clone()));
     }
     let body = form.iter().map(|(k, v)| format!("{k}={}", enc(v))).collect::<Vec<_>>().join("&");
     let tokens = get_json(req.body(body)).await.map_err(|e| {
-        tracing::warn!(error = %e, "single sign-on: token request failed");
+        tracing::warn!(error = %e, provider = %p.label(), "single sign-on: token request failed");
         "token_failed"
     })?;
     let id_token = tokens.get("id_token").and_then(Value::as_str).ok_or("token_failed")?;
-    let v = id_token_claims(id_token, d, &s.client_id, nonce, chrono::Utc::now().timestamp()).inspect_err(|e| {
-        tracing::warn!(problem = e, "single sign-on: ID token refused");
+    let v = id_token_claims(id_token, d, &p.client_id, nonce, chrono::Utc::now().timestamp()).inspect_err(|e| {
+        tracing::warn!(problem = e, provider = %p.label(), "single sign-on: ID token refused");
     })?;
     let mut c = Claims {
+        issuer: str_claim(&v, "iss").unwrap_or_default(),
         subject: str_claim(&v, "sub").unwrap_or_default(),
         email: str_claim(&v, "email"),
         email_verified: verified(&v),
@@ -306,7 +418,8 @@ async fn exchange(s: &Settings, d: &Discovery, redirect_uri: &str, code: &str, v
             Err(e) => tracing::warn!(error = %e, "single sign-on: userinfo request failed"),
         }
     }
-    if s.trust_email && c.email.is_some() {
+    // never on a multi-tenant issuer: any tenant could claim any address
+    if p.trust_email && !d.multi_tenant() && c.email.is_some() {
         c.email_verified = true;
     }
     c.email = c.email.and_then(|e| crate::auth::normalize_email(Some(e)).ok().flatten().flatten());
@@ -316,22 +429,23 @@ async fn exchange(s: &Settings, d: &Discovery, redirect_uri: &str, code: &str, v
 // ---------- signing in ----------
 
 /// A new flow: the row, the cookie that binds it to this browser, and the provider's sign-in URL.
-async fn begin(state: &AppState, s: &Settings, jar: CookieJar, link_user: Option<Uuid>) -> AppResult<(CookieJar, String)> {
-    let d = discover(&s.issuer).await.map_err(|e| {
-        tracing::warn!(error = %e, "single sign-on: provider unreachable");
+async fn begin(state: &AppState, p: &Provider, jar: CookieJar, link_user: Option<Uuid>) -> AppResult<(CookieJar, String)> {
+    let d = discover(&p.issuer).await.map_err(|e| {
+        tracing::warn!(error = %e, provider = %p.label(), "single sign-on: provider unreachable");
         AppError::BadRequest("sso_unreachable")
     })?;
     let (cookie, st, nonce, verifier) = (new_token(), new_token(), new_token(), new_token());
     sqlx::query("DELETE FROM sso_flows WHERE expires_at < now()").execute(&state.db).await?;
     sqlx::query(
-        "INSERT INTO sso_flows (token_hash, state, nonce, verifier, link_user, expires_at)
-         VALUES ($1, $2, $3, $4, $5, now() + make_interval(mins => $6))",
+        "INSERT INTO sso_flows (token_hash, state, nonce, verifier, link_user, provider, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(mins => $7))",
     )
     .bind(token_hash(&cookie))
     .bind(&st)
     .bind(&nonce)
     .bind(&verifier)
     .bind(link_user)
+    .bind(&p.id)
     .bind(FLOW_MINUTES as i32)
     .execute(&state.db)
     .await?;
@@ -339,7 +453,7 @@ async fn begin(state: &AppState, s: &Settings, jar: CookieJar, link_user: Option
     let mut url = reqwest::Url::parse(&d.authorization_endpoint).map_err(|e| anyhow::anyhow!(e))?;
     url.query_pairs_mut()
         .append_pair("response_type", "code")
-        .append_pair("client_id", &s.client_id)
+        .append_pair("client_id", &p.client_id)
         .append_pair("redirect_uri", &redirect_uri(state))
         .append_pair("scope", "openid email profile")
         .append_pair("state", &st)
@@ -357,32 +471,59 @@ async fn begin(state: &AppState, s: &Settings, jar: CookieJar, link_user: Option
     Ok((jar.add(c), url.to_string()))
 }
 
-fn to_login(code: &str) -> Response {
-    Redirect::to(&format!("/login?sso_error={code}")).into_response()
+/// The provider asked for: by id, or the only one there is.
+fn pick(ready: Vec<Provider>, id: Option<&str>) -> Option<Provider> {
+    match id.filter(|i| !i.is_empty()) {
+        Some(id) => ready.into_iter().find(|p| p.id == id),
+        None if ready.len() == 1 => ready.into_iter().next(),
+        None => None,
+    }
 }
 
-/// GET /auth/sso/start: the "Sign in with …" button.
-pub async fn start(State(state): State<AppState>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, jar: CookieJar) -> Response {
-    let Some(s) = active(&state).await else { return to_login("sso_off") };
+fn to_login(code: &str, provider: Option<&str>) -> Response {
+    let p = provider.map(|p| format!("&provider={}", enc(p))).unwrap_or_default();
+    Redirect::to(&format!("/login?sso_error={code}{p}")).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct StartQuery {
+    provider: Option<String>,
+}
+
+/// GET /auth/sso/start?provider=…: a "Sign in with …" button.
+pub async fn start(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Query(q): Query<StartQuery>,
+) -> Response {
+    let Some(p) = pick(active(&state).await, q.provider.as_deref()) else { return to_login("sso_off", None) };
     let ip = throttle::ip_key("sso", throttle::client_ip(peer, &headers, state.config.trust_proxy));
     if state.throttle.check(&ip, START_IP).is_err() {
-        return to_login("too_many");
+        return to_login("too_many", Some(&p.id));
     }
     state.throttle.hit(&ip, START_IP);
-    match begin(&state, &s, jar, None).await {
+    match begin(&state, &p, jar, None).await {
         Ok((jar, url)) => (jar, Redirect::to(&url)).into_response(),
-        Err(AppError::BadRequest(code)) => to_login(code),
+        Err(AppError::BadRequest(code)) => to_login(code, Some(&p.id)),
         Err(e) => {
             tracing::warn!(error = %e, "single sign-on: could not start");
-            to_login("sso_failed")
+            to_login("sso_failed", Some(&p.id))
         }
     }
 }
 
-/// POST /me/sso/link: connect the provider to the signed-in account (Profile). Answers the URL to open.
-pub async fn link(State(state): State<AppState>, CurrentUser(u): CurrentUser, jar: CookieJar) -> AppResult<(CookieJar, Json<Value>)> {
-    let s = active(&state).await.ok_or(AppError::BadRequest("sso_off"))?;
-    let (jar, url) = begin(&state, &s, jar, Some(u.id)).await?;
+#[derive(Deserialize, Default)]
+pub struct LinkReq {
+    provider: Option<String>,
+}
+
+/// POST /me/sso/link {provider}: connect a provider to the signed-in account (Profile). Answers the URL to open.
+pub async fn link(State(state): State<AppState>, CurrentUser(u): CurrentUser, jar: CookieJar, body: Option<Json<LinkReq>>) -> AppResult<(CookieJar, Json<Value>)> {
+    let r = body.map(|b| b.0).unwrap_or_default();
+    let p = pick(active(&state).await, r.provider.as_deref()).ok_or(AppError::BadRequest("sso_off"))?;
+    let (jar, url) = begin(&state, &p, jar, Some(u.id)).await?;
     Ok((jar, Json(json!({ "url": url }))))
 }
 
@@ -404,15 +545,15 @@ pub async fn callback(
     let ip_addr = throttle::client_ip(peer, &headers, state.config.trust_proxy);
     let ip = throttle::ip_key("login", ip_addr);
     if state.throttle.check(&ip, throttle::LOGIN_IP).is_err() {
-        return to_login("too_many");
+        return to_login("too_many", None);
     }
     let client = ip_addr.to_string();
     let cookie = jar.get(FLOW_COOKIE).map(|c| c.value().to_string());
     let jar = jar.remove(Cookie::build(FLOW_COOKIE).path(FLOW_PATH));
     // one use only, and only in the browser that started it
-    let flow: Option<(String, String, String, Option<Uuid>)> = match cookie {
+    let flow: Option<(String, String, String, Option<Uuid>, Option<String>)> = match cookie {
         Some(c) => sqlx::query_as(
-            "DELETE FROM sso_flows WHERE token_hash = $1 AND expires_at > now() RETURNING state, nonce, verifier, link_user",
+            "DELETE FROM sso_flows WHERE token_hash = $1 AND expires_at > now() RETURNING state, nonce, verifier, link_user, provider",
         )
         .bind(token_hash(&c))
         .fetch_optional(&state.db)
@@ -421,58 +562,63 @@ pub async fn callback(
         .flatten(),
         None => None,
     };
-    let fail = |jar: CookieJar, code: &'static str, linking: bool| -> Response {
+    let fail = |jar: CookieJar, code: &'static str, linking: bool, provider: Option<&str>| -> Response {
         state.throttle.hit(&ip, throttle::LOGIN_IP);
-        let to = if linking { format!("/profile?tab=security&sso_error={code}") } else { format!("/login?sso_error={code}") };
+        let p = provider.map(|p| format!("&provider={}", enc(p))).unwrap_or_default();
+        let to = if linking { format!("/profile?tab=security&sso_error={code}{p}") } else { format!("/login?sso_error={code}{p}") };
         (jar, Redirect::to(&to)).into_response()
     };
-    let Some((want_state, nonce, verifier, link_user)) = flow else { return fail(jar, "expired", false) };
+    let Some((want_state, nonce, verifier, link_user, provider_id)) = flow else { return fail(jar, "expired", false, None) };
     let linking = link_user.is_some();
+    // the provider this flow was started with, and only that one (a flow from before 0.5 has none: the only provider)
+    let Some(p) = pick(active(&state).await, provider_id.as_deref()).filter(|p| provider_id.is_none() || provider_id.as_deref() == Some(p.id.as_str())) else {
+        return fail(jar, "sso_off", linking, None);
+    };
+    let pid = Some(p.id.as_str());
     if let Some(e) = &q.error {
         tracing::info!(error = %e.chars().take(100).collect::<String>(), "single sign-on: the provider refused or was cancelled");
-        return fail(jar, "cancelled", linking);
+        return fail(jar, "cancelled", linking, pid);
     }
     if q.state.as_deref() != Some(want_state.as_str()) {
-        return fail(jar, "invalid_state", linking);
+        return fail(jar, "invalid_state", linking, pid);
     }
-    let Some(code) = q.code.filter(|c| !c.is_empty()) else { return fail(jar, "invalid_state", linking) };
-    let Some(s) = active(&state).await else { return fail(jar, "sso_off", linking) };
-    let d = match discover(&s.issuer).await {
+    let Some(code) = q.code.filter(|c| !c.is_empty()) else { return fail(jar, "invalid_state", linking, pid) };
+    let d = match discover(&p.issuer).await {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!(error = %e, "single sign-on: provider unreachable");
-            return fail(jar, "sso_unreachable", linking);
+            return fail(jar, "sso_unreachable", linking, pid);
         }
     };
-    let claims = match exchange(&s, &d, &redirect_uri(&state), &code, &verifier, &nonce).await {
+    let claims = match exchange(&p, &d, &redirect_uri(&state), &code, &verifier, &nonce).await {
         Ok(c) => c,
         Err(code) => {
-            crate::audit::log(&state, None, "sso_failed", link_user, Some(&client), json!({ "reason": code })).await;
-            return fail(jar, code, linking);
+            crate::audit::log(&state, None, "sso_failed", link_user, Some(&client), json!({ "reason": code, "provider": p.label() })).await;
+            return fail(jar, code, linking, pid);
         }
     };
 
     if let Some(uid) = link_user {
-        return match connect(&state, uid, &d.issuer, &claims).await {
+        return match connect(&state, uid, &p, &claims).await {
             Ok(()) => {
-                crate::audit::log(&state, Some(uid), "sso_linked", Some(uid), Some(&client), json!({ "email": claims.email })).await;
-                (jar, Redirect::to("/profile?tab=security&sso=linked")).into_response()
+                crate::audit::log(&state, Some(uid), "sso_linked", Some(uid), Some(&client), json!({ "email": claims.email, "provider": p.label() })).await;
+                (jar, Redirect::to(&format!("/profile?tab=security&sso=linked&provider={}", enc(&p.id)))).into_response()
             }
-            Err(AppError::Conflict(code)) => fail(jar, code, true),
+            Err(AppError::Conflict(code)) => fail(jar, code, true, pid),
             Err(e) => {
                 tracing::warn!(error = %e, "single sign-on: could not connect");
-                fail(jar, "sso_failed", true)
+                fail(jar, "sso_failed", true, pid)
             }
         };
     }
 
-    let uid = match who(&state, &s, &d.issuer, &claims, &client).await {
+    let uid = match who(&state, &p, &claims, &client).await {
         Ok(uid) => uid,
         Err(code) => {
             if !matches!(code, "pending_approval" | "email_not_confirmed") {
-                crate::audit::log(&state, None, "sso_failed", None, Some(&client), json!({ "reason": code, "email": claims.email })).await;
+                crate::audit::log(&state, None, "sso_failed", None, Some(&client), json!({ "reason": code, "email": claims.email, "provider": p.label() })).await;
             }
-            return fail(jar, code, false);
+            return fail(jar, code, false, pid);
         }
     };
     state.throttle.clear(&format!("login-account:{uid}"));
@@ -480,67 +626,63 @@ pub async fn callback(
         Ok((jar, _)) => (jar, Redirect::to("/")).into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "single sign-on: could not start the session");
-            to_login("sso_failed")
+            to_login("sso_failed", pid)
         }
     }
 }
 
 /// Connects a provider account to `uid` (Profile → Connect). Conflict when it already belongs to someone else.
-async fn connect(state: &AppState, uid: Uuid, issuer: &str, c: &Claims) -> AppResult<()> {
+async fn connect(state: &AppState, uid: Uuid, p: &Provider, c: &Claims) -> AppResult<()> {
     let owner: Option<(Uuid,)> = sqlx::query_as("SELECT user_id FROM user_identities WHERE issuer = $1 AND subject = $2")
-        .bind(issuer)
+        .bind(&c.issuer)
         .bind(&c.subject)
         .fetch_optional(&state.db)
         .await?;
     match owner {
         Some((o,)) if o != uid => Err(AppError::Conflict("linked_elsewhere")),
-        Some(_) => {
-            touch(state, issuer, c).await?;
-            Ok(())
-        }
-        None => {
-            insert_identity(state, uid, issuer, c).await?;
-            Ok(())
-        }
+        Some(_) => touch(state, p, c).await,
+        None => insert_identity(state, uid, p, c).await,
     }
 }
 
-async fn insert_identity(state: &AppState, uid: Uuid, issuer: &str, c: &Claims) -> AppResult<()> {
-    sqlx::query("INSERT INTO user_identities (id, user_id, issuer, subject, email, last_used_at) VALUES ($1, $2, $3, $4, $5, now())")
+async fn insert_identity(state: &AppState, uid: Uuid, p: &Provider, c: &Claims) -> AppResult<()> {
+    sqlx::query("INSERT INTO user_identities (id, user_id, issuer, subject, email, provider, last_used_at) VALUES ($1, $2, $3, $4, $5, $6, now())")
         .bind(Uuid::now_v7())
         .bind(uid)
-        .bind(issuer)
+        .bind(&c.issuer)
         .bind(&c.subject)
         .bind(&c.email)
+        .bind(&p.id)
         .execute(&state.db)
         .await?;
     Ok(())
 }
 
-async fn touch(state: &AppState, issuer: &str, c: &Claims) -> AppResult<()> {
-    sqlx::query("UPDATE user_identities SET email = COALESCE($3, email), last_used_at = now() WHERE issuer = $1 AND subject = $2")
-        .bind(issuer)
+async fn touch(state: &AppState, p: &Provider, c: &Claims) -> AppResult<()> {
+    sqlx::query("UPDATE user_identities SET email = COALESCE($3, email), provider = $4, last_used_at = now() WHERE issuer = $1 AND subject = $2")
+        .bind(&c.issuer)
         .bind(&c.subject)
         .bind(&c.email)
+        .bind(&p.id)
         .execute(&state.db)
         .await?;
     Ok(())
 }
 
 /// Which account this sign-in is (see the module comment). Err: a code for the sign-in page.
-async fn who(state: &AppState, s: &Settings, issuer: &str, c: &Claims, client: &str) -> Result<Uuid, &'static str> {
+async fn who(state: &AppState, p: &Provider, c: &Claims, client: &str) -> Result<Uuid, &'static str> {
     let db_err = |e: AppError| {
         tracing::warn!(error = %e, "single sign-on: database error");
         "sso_failed"
     };
     let known: Option<(Uuid,)> = sqlx::query_as("SELECT user_id FROM user_identities WHERE issuer = $1 AND subject = $2")
-        .bind(issuer)
+        .bind(&c.issuer)
         .bind(&c.subject)
         .fetch_optional(&state.db)
         .await
         .map_err(|e| db_err(e.into()))?;
     if let Some((uid,)) = known {
-        touch(state, issuer, c).await.map_err(db_err)?;
+        touch(state, p, c).await.map_err(db_err)?;
         return usable(state, uid).await;
     }
     // an existing account with this (verified) address: connect it
@@ -551,12 +693,12 @@ async fn who(state: &AppState, s: &Settings, issuer: &str, c: &Claims, client: &
             .await
             .map_err(|e| db_err(e.into()))?;
         if let Some((uid,)) = found {
-            insert_identity(state, uid, issuer, c).await.map_err(db_err)?;
-            crate::audit::log(state, Some(uid), "sso_linked", Some(uid), Some(client), json!({ "email": email, "by": "email" })).await;
+            insert_identity(state, uid, p, c).await.map_err(db_err)?;
+            crate::audit::log(state, Some(uid), "sso_linked", Some(uid), Some(client), json!({ "email": email, "by": "email", "provider": p.label() })).await;
             return usable(state, uid).await;
         }
     }
-    create(state, s, issuer, c, client).await
+    create(state, p, c, client).await
 }
 
 /// Can this account sign in now? Err: why not.
@@ -574,13 +716,13 @@ async fn usable(state: &AppState, uid: Uuid) -> Result<Uuid, &'static str> {
 
 /// A new account for someone the provider knows and Kanb doesn't: only with sign-up on (ALLOW_SIGNUP), under its
 /// rules, with a verified email address from an allowed domain.
-async fn create(state: &AppState, s: &Settings, issuer: &str, c: &Claims, client: &str) -> Result<Uuid, &'static str> {
+async fn create(state: &AppState, p: &Provider, c: &Claims, client: &str) -> Result<Uuid, &'static str> {
     if !state.config.allow_signup || crate::setup::needs_setup(&state.db).await.unwrap_or(true) {
         return Err("no_account");
     }
     let Some(email) = c.email.clone().filter(|_| c.email_verified) else { return Err("email_unverified") };
     let domain = email.rsplit_once('@').map(|(_, d)| d.to_lowercase()).unwrap_or_default();
-    if !s.allowed_domains.is_empty() && !s.allowed_domains.iter().any(|d| *d == domain) {
+    if !p.allowed_domains.is_empty() && !p.allowed_domains.iter().any(|d| *d == domain) {
         return Err("domain_not_allowed");
     }
     let (waiting,): (i64,) = sqlx::query_as("SELECT count(*) FROM users WHERE signup IS NOT NULL AND deleted_at IS NULL")
@@ -617,8 +759,8 @@ async fn create(state: &AppState, s: &Settings, issuer: &str, c: &Claims, client
         }
     }
     let user = user.ok_or("sso_failed")?;
-    let _ = insert_identity(state, user.id, issuer, c).await;
-    crate::audit::log(state, None, "signed_up", Some(user.id), Some(client), json!({ "username": user.username, "via": "sso" })).await;
+    let _ = insert_identity(state, user.id, p, c).await;
+    crate::audit::log(state, None, "signed_up", Some(user.id), Some(client), json!({ "username": user.username, "via": "sso", "provider": p.label() })).await;
     if first.is_some() {
         crate::notify::signups_changed(state, true).await;
         return Err("pending_approval");
@@ -634,26 +776,49 @@ fn username_base(raw: &str) -> String {
 
 // ---------- Profile ----------
 
-#[derive(Serialize, sqlx::FromRow)]
-struct Identity {
+#[derive(sqlx::FromRow)]
+struct IdentityRow {
     id: Uuid,
     email: Option<String>,
+    issuer: String,
+    provider: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     last_used_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// The provider an identity came from, for its label: by id, else by issuer; None once that provider was removed.
+fn provider_of<'a>(all: &'a [Provider], row: &IdentityRow) -> Option<&'a Provider> {
+    row.provider
+        .as_deref()
+        .and_then(|id| all.iter().find(|p| p.id == id))
+        .or_else(|| all.iter().find(|p| same_issuer(&p.issuer, &row.issuer) && !p.issuer.contains("{tenantid}")))
+}
+
 /// GET /me/sso
 pub async fn mine(State(state): State<AppState>, CurrentUser(u): CurrentUser) -> AppResult<Json<Value>> {
-    let ids: Vec<Identity> = sqlx::query_as("SELECT id, email, created_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY created_at")
-        .bind(u.id)
-        .fetch_all(&state.db)
-        .await?;
-    let s = active(&state).await;
+    let rows: Vec<IdentityRow> =
+        sqlx::query_as("SELECT id, email, issuer, provider, created_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY created_at")
+            .bind(u.id)
+            .fetch_all(&state.db)
+            .await?;
+    let s = load(&state).await?;
+    let ready: Vec<&Provider> = s.providers.iter().filter(|p| p.ready()).collect();
+    let identities: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let p = provider_of(&s.providers, r);
+            // a provider that was removed: its host, so people still know what it was
+            let label = p.map(Provider::label).unwrap_or_else(|| reqwest::Url::parse(&r.issuer).ok().and_then(|x| x.host_str().map(str::to_string)).unwrap_or_default());
+            json!({ "id": r.id, "email": r.email, "provider": p.map(|p| p.id.clone()), "label": label, "created_at": r.created_at, "last_used_at": r.last_used_at })
+        })
+        .collect();
+    let connected: Vec<String> = rows.iter().filter_map(|r| provider_of(&s.providers, r).map(|p| p.id.clone())).collect();
     Ok(Json(json!({
-        "available": s.is_some(),
-        "label": s.as_ref().map(label),
-        "required": s.as_ref().is_some_and(|s| s.require_sso),
-        "identities": ids,
+        "available": !ready.is_empty(),
+        "required": s.require_sso && !ready.is_empty(),
+        // providers that can be connected: every ready one, and whether this account already is
+        "providers": ready.iter().map(|p| json!({ "id": p.id, "label": p.label(), "connected": connected.contains(&p.id) })).collect::<Vec<_>>(),
+        "identities": identities,
     })))
 }
 
@@ -675,14 +840,24 @@ pub async fn unlink(State(state): State<AppState>, CurrentUser(u): CurrentUser, 
 // ---------- Admin → Single sign-on ----------
 
 #[derive(Serialize)]
-pub struct View {
+pub struct ProviderView {
     #[serde(flatten)]
-    settings: Settings,
+    provider: Provider,
     has_secret: bool,
+    /// accounts connected through it
+    connected: i64,
+    /// serves every organisation (Microsoft "common"), as far as its last discovery showed
+    multi_tenant: bool,
+}
+
+#[derive(Serialize)]
+pub struct View {
+    providers: Vec<ProviderView>,
+    require_sso: bool,
     redirect_uri: String,
-    /// ALLOW_SIGNUP: whether people the provider knows can get a new account
+    /// ALLOW_SIGNUP: whether people a provider knows can get a new account
     signup: bool,
-    /// accounts connected to a provider account
+    /// accounts connected to any provider
     connected: i64,
     /// active accounts (not super admins) that couldn't sign in if single sign-on were required: no email address
     /// to match and no connected provider account
@@ -690,9 +865,19 @@ pub struct View {
 }
 
 pub async fn admin_get(State(state): State<AppState>, _a: SuperAdmin) -> AppResult<Json<View>> {
-    let mut s = load(&state).await?;
-    let has_secret = !s.client_secret.is_empty();
-    s.client_secret = String::new(); // never sent back to the browser
+    let s = load(&state).await?;
+    let rows: Vec<IdentityRow> =
+        sqlx::query_as("SELECT id, email, issuer, provider, created_at, last_used_at FROM user_identities").fetch_all(&state.db).await?;
+    let providers = s
+        .providers
+        .iter()
+        .map(|p| ProviderView {
+            has_secret: !p.client_secret.is_empty(),
+            multi_tenant: DISCOVERY.lock().unwrap().as_ref().and_then(|m| m.get(p.issuer.trim())).is_some_and(|(_, d)| d.multi_tenant()),
+            connected: rows.iter().filter(|r| provider_of(&s.providers, r).is_some_and(|x| x.id == p.id)).count() as i64,
+            provider: Provider { client_secret: String::new(), ..p.clone() }, // never sent back to the browser
+        })
+        .collect();
     let (connected,): (i64,) = sqlx::query_as("SELECT count(DISTINCT user_id) FROM user_identities").fetch_one(&state.db).await?;
     let (stranded,): (i64,) = sqlx::query_as(
         "SELECT count(*) FROM users u WHERE u.is_active AND u.deleted_at IS NULL AND u.signup IS NULL AND NOT u.is_super_admin
@@ -700,11 +885,19 @@ pub async fn admin_get(State(state): State<AppState>, _a: SuperAdmin) -> AppResu
     )
     .fetch_one(&state.db)
     .await?;
-    Ok(Json(View { settings: s, has_secret, redirect_uri: redirect_uri(&state), signup: state.config.allow_signup, connected, stranded }))
+    Ok(Json(View {
+        providers,
+        require_sso: s.require_sso && s.providers.iter().any(Provider::ready),
+        redirect_uri: redirect_uri(&state),
+        signup: state.config.allow_signup,
+        connected,
+        stranded,
+    }))
 }
 
 #[derive(Deserialize)]
-pub struct SaveReq {
+pub struct ProviderReq {
+    #[serde(default = "yes")]
     enabled: bool,
     issuer: String,
     client_id: String,
@@ -716,8 +909,9 @@ pub struct SaveReq {
     allowed_domains: Vec<String>,
     #[serde(default)]
     trust_email: bool,
-    #[serde(default)]
-    require_sso: bool,
+}
+fn yes() -> bool {
+    true
 }
 
 fn domains(list: &[String]) -> AppResult<Vec<String>> {
@@ -737,10 +931,12 @@ fn domains(list: &[String]) -> AppResult<Vec<String>> {
     Ok(out)
 }
 
-async fn settings_from(state: &AppState, r: SaveReq) -> AppResult<Settings> {
-    let old = load(state).await?;
-    let secret = r.client_secret.filter(|x| !x.is_empty()).unwrap_or(old.client_secret);
-    let s = Settings {
+/// A provider from the form (`old`: its saved version, for the secret), checked: complete when switched on, the
+/// provider reachable, and "trust email" refused where any tenant could claim any address.
+async fn provider_from(r: ProviderReq, id: String, old: Option<&Provider>) -> AppResult<Provider> {
+    let secret = r.client_secret.filter(|x| !x.is_empty()).or_else(|| old.map(|o| o.client_secret.clone())).unwrap_or_default();
+    let p = Provider {
+        id,
         enabled: r.enabled,
         issuer: r.issuer.trim().into(),
         client_id: r.client_id.trim().into(),
@@ -748,69 +944,131 @@ async fn settings_from(state: &AppState, r: SaveReq) -> AppResult<Settings> {
         label: r.label.trim().chars().take(40).collect(),
         allowed_domains: domains(&r.allowed_domains)?,
         trust_email: r.trust_email,
-        require_sso: r.require_sso && r.enabled,
     };
-    if !s.issuer.is_empty() {
-        check_url(&s.issuer).map_err(|_| AppError::BadRequest("sso_issuer_https"))?;
+    if !p.issuer.is_empty() {
+        check_url(&p.issuer).map_err(|_| AppError::BadRequest("sso_issuer_https"))?;
     }
-    Ok(s)
-}
-
-/// POST /admin/sso/test: can the provider be reached with these (unsaved) settings? Answers the problem in words.
-pub async fn admin_test(State(state): State<AppState>, _a: SuperAdmin, Json(r): Json<SaveReq>) -> AppResult<Json<Value>> {
-    let s = settings_from(&state, r).await?;
-    if s.issuer.is_empty() {
-        return Err(AppError::BadRequest("sso_incomplete"));
-    }
-    *DISCOVERY.lock().unwrap() = None;
-    Ok(Json(match discover(&s.issuer).await {
-        Ok(d) => json!({ "ok": true, "issuer": d.issuer, "authorization_endpoint": d.authorization_endpoint }),
-        Err(e) => json!({ "ok": false, "error": e }),
-    }))
-}
-
-pub async fn admin_save(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, ClientIp(ip): ClientIp, Json(r): Json<SaveReq>) -> AppResult<Json<View>> {
-    let old = load(&state).await?;
-    let s = settings_from(&state, r).await?;
-    if s.enabled {
-        if !s.ready() {
+    if p.enabled {
+        if !p.ready() {
             return Err(AppError::BadRequest("sso_incomplete"));
         }
-        *DISCOVERY.lock().unwrap() = None;
-        if let Err(e) = discover(&s.issuer).await {
+        forget(&p.issuer);
+        let d = discover(&p.issuer).await.map_err(|e| {
             tracing::warn!(error = %e, "single sign-on: provider check failed");
-            return Err(AppError::BadRequest("sso_unreachable"));
+            AppError::BadRequest("sso_unreachable")
+        })?;
+        if p.trust_email && d.multi_tenant() {
+            return Err(AppError::BadRequest("sso_trust_multitenant"));
         }
     }
-    sqlx::query("INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()")
-        .bind(KEY)
-        .bind(serde_json::to_value(Settings { client_secret: crate::crypto::seal(&s.client_secret), ..s.clone() }).map_err(|e| anyhow::anyhow!(e))?)
-        .execute(&state.db)
-        .await?;
-    // which fields changed, never their values (the secret is compared in plain text here and not stored)
-    let fields = crate::audit::changed_fields(&serde_json::to_value(&old).unwrap_or_default(), &serde_json::to_value(&s).unwrap_or_default());
-    crate::audit::log(&state, Some(me.id), "settings_changed", None, ip.as_deref(), json!({ "area": "sso", "fields": fields })).await;
-    // "require single sign-on" just turned on: password sessions end, except super admins'
-    if s.require_sso && !(old.ready() && old.require_sso) {
-        let r = sqlx::query(
-            "DELETE FROM sessions WHERE method <> 'sso' AND user_id IN (SELECT id FROM users WHERE NOT is_super_admin)",
-        )
-        .execute(&state.db)
-        .await?;
-        // and API tokens: someone removed at the provider mustn't keep script access
+    Ok(p)
+}
+
+async fn saved(state: &AppState, me: Uuid, ip: Option<&str>, old: &Settings, new: &Settings, what: Value) -> AppResult<()> {
+    store(state, new).await?;
+    crate::audit::log(state, Some(me), "settings_changed", None, ip, json!({ "area": "sso", "fields": [what] })).await;
+    // "require single sign-on" just took effect: password sessions and API tokens end, except super admins'
+    let was = old.require_sso && old.providers.iter().any(Provider::ready);
+    let is = new.require_sso && new.providers.iter().any(Provider::ready);
+    if is && !was {
+        let r = sqlx::query("DELETE FROM sessions WHERE method <> 'sso' AND user_id IN (SELECT id FROM users WHERE NOT is_super_admin)").execute(&state.db).await?;
+        // and API tokens: someone removed at a provider mustn't keep script access
         let t = sqlx::query("DELETE FROM api_tokens WHERE user_id IN (SELECT id FROM users WHERE NOT is_super_admin)").execute(&state.db).await?;
         tracing::info!(ended = r.rows_affected(), tokens = t.rows_affected(), "single sign-on required: password sessions and API tokens ended");
     }
+    Ok(())
+}
+
+/// No provider left to sign in with: "require" can't stay on (it would lock out everyone but super admins).
+fn keep_require_sane(s: &mut Settings) {
+    if !s.providers.iter().any(Provider::ready) {
+        s.require_sso = false;
+    }
+}
+
+/// POST /admin/sso/providers
+pub async fn admin_create(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, ClientIp(ip): ClientIp, Json(r): Json<ProviderReq>) -> AppResult<Json<View>> {
+    let old = load(&state).await?;
+    if old.providers.len() >= MAX_PROVIDERS {
+        return Err(AppError::BadRequest("too_many_providers"));
+    }
+    let p = provider_from(r, Uuid::now_v7().simple().to_string()[..12].to_string(), None).await?;
+    let mut s = old.clone();
+    let label = p.label();
+    s.providers.push(p);
+    saved(&state, me.id, ip.as_deref(), &old, &s, json!({ "added": label })).await?;
     admin_get(State(state), SuperAdmin(me)).await
+}
+
+/// PUT /admin/sso/providers/{id}
+pub async fn admin_update(
+    State(state): State<AppState>,
+    SuperAdmin(me): SuperAdmin,
+    ClientIp(ip): ClientIp,
+    Path(id): Path<String>,
+    Json(r): Json<ProviderReq>,
+) -> AppResult<Json<View>> {
+    let old = load(&state).await?;
+    let i = old.providers.iter().position(|p| p.id == id).ok_or(AppError::NotFound)?;
+    let p = provider_from(r, id, Some(&old.providers[i])).await?;
+    let fields = crate::audit::changed_fields(&serde_json::to_value(&old.providers[i]).unwrap_or_default(), &serde_json::to_value(&p).unwrap_or_default());
+    let mut s = old.clone();
+    let label = p.label();
+    s.providers[i] = p;
+    keep_require_sane(&mut s);
+    saved(&state, me.id, ip.as_deref(), &old, &s, json!({ "changed": label, "fields": fields })).await?;
+    admin_get(State(state), SuperAdmin(me)).await
+}
+
+/// DELETE /admin/sso/providers/{id}: its button goes; accounts connected through it keep the (unused) link, which
+/// works again if the same provider is added back.
+pub async fn admin_delete(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, ClientIp(ip): ClientIp, Path(id): Path<String>) -> AppResult<Json<View>> {
+    let old = load(&state).await?;
+    let mut s = old.clone();
+    let p = s.providers.iter().position(|p| p.id == id).map(|i| s.providers.remove(i)).ok_or(AppError::NotFound)?;
+    keep_require_sane(&mut s);
+    saved(&state, me.id, ip.as_deref(), &old, &s, json!({ "removed": p.label() })).await?;
+    admin_get(State(state), SuperAdmin(me)).await
+}
+
+#[derive(Deserialize)]
+pub struct RequireReq {
+    require_sso: bool,
+}
+
+/// PUT /admin/sso {require_sso}
+pub async fn admin_save(State(state): State<AppState>, SuperAdmin(me): SuperAdmin, ClientIp(ip): ClientIp, Json(r): Json<RequireReq>) -> AppResult<Json<View>> {
+    let old = load(&state).await?;
+    if r.require_sso && !old.providers.iter().any(Provider::ready) {
+        return Err(AppError::BadRequest("sso_no_provider"));
+    }
+    let s = Settings { require_sso: r.require_sso, ..old.clone() };
+    saved(&state, me.id, ip.as_deref(), &old, &s, json!({ "require_sso": r.require_sso })).await?;
+    admin_get(State(state), SuperAdmin(me)).await
+}
+
+/// POST /admin/sso/test: can this provider be reached (unsaved settings)? Answers the problem in words.
+pub async fn admin_test(State(state): State<AppState>, _a: SuperAdmin, Json(r): Json<ProviderReq>) -> AppResult<Json<Value>> {
+    let _ = &state;
+    let issuer = r.issuer.trim().to_string();
+    if issuer.is_empty() {
+        return Err(AppError::BadRequest("sso_incomplete"));
+    }
+    check_url(&issuer).map_err(|_| AppError::BadRequest("sso_issuer_https"))?;
+    forget(&issuer);
+    Ok(Json(match discover(&issuer).await {
+        Ok(d) => json!({ "ok": true, "issuer": d.issuer, "authorization_endpoint": d.authorization_endpoint, "multi_tenant": d.multi_tenant() }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn disc() -> Discovery {
+    fn disc(issuer: &str) -> Discovery {
         Discovery {
-            issuer: "https://idp.example.com".into(),
+            issuer: issuer.into(),
             authorization_endpoint: "https://idp.example.com/auth".into(),
             token_endpoint: "https://idp.example.com/token".into(),
             userinfo_endpoint: None,
@@ -824,12 +1082,13 @@ mod tests {
 
     #[test]
     fn checks_the_id_token() {
+        let d = disc("https://idp.example.com");
         let ok = json!({ "iss": "https://idp.example.com", "aud": "kanb", "exp": 2000, "nonce": "n1", "sub": "123" });
-        assert!(id_token_claims(&token(ok.clone()), &disc(), "kanb", "n1", 1000).is_ok());
+        assert!(id_token_claims(&token(ok.clone()), &d, "kanb", "n1", 1000).is_ok());
         let with = |k: &str, v: Value| {
             let mut t = ok.clone();
             t[k] = v;
-            id_token_claims(&token(t), &disc(), "kanb", "n1", 1000)
+            id_token_claims(&token(t), &d, "kanb", "n1", 1000)
         };
         assert_eq!(with("iss", json!("https://evil.example.com")).unwrap_err(), "wrong_issuer");
         assert_eq!(with("aud", json!("other")).unwrap_err(), "wrong_audience");
@@ -839,11 +1098,56 @@ mod tests {
         let mut multi = ok.clone();
         multi["aud"] = json!(["kanb", "other"]);
         multi["azp"] = json!("kanb");
-        assert!(id_token_claims(&token(multi), &disc(), "kanb", "n1", 1000).is_ok());
+        assert!(id_token_claims(&token(multi), &d, "kanb", "n1", 1000).is_ok());
         assert_eq!(with("exp", json!(900)).unwrap_err(), "expired_token");
         assert_eq!(with("nonce", json!("n2")).unwrap_err(), "bad_nonce");
         assert_eq!(with("sub", json!("")).unwrap_err(), "bad_token");
-        assert_eq!(id_token_claims("not-a-token", &disc(), "kanb", "n1", 1000).unwrap_err(), "bad_token");
+        assert_eq!(id_token_claims("not-a-token", &d, "kanb", "n1", 1000).unwrap_err(), "bad_token");
+    }
+
+    /// Microsoft's "common" endpoint: issuer https://login.microsoftonline.com/{tenantid}/v2.0, filled in from `tid`.
+    #[test]
+    fn multi_tenant_issuers() {
+        let d = disc("https://login.microsoftonline.com/{tenantid}/v2.0");
+        assert!(d.multi_tenant());
+        let tid = "9188040d-6c67-4c5b-b112-36a304b66dad";
+        let t = |iss: &str, tid: Value| {
+            token(json!({ "iss": iss, "tid": tid, "aud": "kanb", "exp": 2000, "nonce": "n", "sub": "s" }))
+        };
+        let good = format!("https://login.microsoftonline.com/{tid}/v2.0");
+        assert!(id_token_claims(&t(&good, json!(tid)), &d, "kanb", "n", 1000).is_ok());
+        // the tenant in iss must be the token's own tid
+        let other = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+        assert_eq!(id_token_claims(&t(&good, json!(other)), &d, "kanb", "n", 1000).unwrap_err(), "wrong_issuer");
+        // no tid, a tid that isn't a GUID, the template itself, another host
+        assert_eq!(id_token_claims(&t(&good, Value::Null), &d, "kanb", "n", 1000).unwrap_err(), "wrong_issuer");
+        let evil = "x/../evil";
+        assert_eq!(id_token_claims(&t(&format!("https://login.microsoftonline.com/{evil}/v2.0"), json!(evil)), &d, "kanb", "n", 1000).unwrap_err(), "wrong_issuer");
+        assert_eq!(id_token_claims(&t("https://login.microsoftonline.com/{tenantid}/v2.0", json!(tid)), &d, "kanb", "n", 1000).unwrap_err(), "wrong_issuer");
+        assert_eq!(id_token_claims(&t(&format!("https://evil.example.com/{tid}/v2.0"), json!(tid)), &d, "kanb", "n", 1000).unwrap_err(), "wrong_issuer");
+    }
+
+    #[test]
+    fn issuer_aliases_on_the_same_host() {
+        // Microsoft reports the tenant id for "consumers" or a domain name
+        assert!(same_issuer("https://login.microsoftonline.com/consumers/v2.0", "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0"));
+        assert!(same_issuer("https://accounts.google.com/", "https://accounts.google.com"));
+        assert!(!same_issuer("https://login.microsoftonline.com/common/v2.0", "https://evil.example.com/common/v2.0"));
+        assert!(!same_issuer("https://idp.example.com", "http://idp.example.com"));
+    }
+
+    #[test]
+    fn old_settings_become_a_list_of_one() {
+        let s = parse(json!({ "enabled": true, "issuer": "https://accounts.google.com", "client_id": "c", "client_secret": "enc:v1:abc",
+                               "label": "Google", "allowed_domains": [], "trust_email": false, "require_sso": true }));
+        assert_eq!(s.providers.len(), 1);
+        assert_eq!(s.providers[0].id, "default");
+        assert_eq!(s.providers[0].client_secret, "enc:v1:abc", "the sealed secret is kept as it is");
+        assert!(s.require_sso);
+        let empty = parse(json!({ "enabled": false, "issuer": "", "client_id": "", "client_secret": "", "require_sso": false }));
+        assert!(empty.providers.is_empty());
+        let new = parse(json!({ "providers": [{ "id": "a", "enabled": true, "issuer": "https://x.example.com" }], "require_sso": false }));
+        assert_eq!(new.providers[0].id, "a");
     }
 
     #[test]

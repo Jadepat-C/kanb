@@ -65,8 +65,8 @@ It works in English and Thai, in light and dark, and on phones, tablets and desk
   may add cards to (pick one column to send every new card there).
 - Sign in with username or email, two-factor sign-in with an authenticator app (optional, or required for everyone
   under Admin → Security), password reset by email.
-- Single sign-on with Google, Microsoft Entra ID, Authentik, Keycloak, Authelia or any OpenID Connect provider
-  (Admin → Single sign-on). Existing accounts are matched by verified email address; with `ALLOW_SIGNUP` on, new people
+- Single sign-on with Google, Microsoft (personal or work accounts), Authentik, Keycloak, Authelia or any OpenID
+  Connect provider, several side by side (Admin → Single sign-on; a button for each on the sign-in page). Existing accounts are matched by verified email address; with `ALLOW_SIGNUP` on, new people
   get an account under the sign-up rules (optionally only from your email domains). Passwords keep working unless
   you require single sign-on, and super admins always keep theirs, so a broken provider can't lock you out.
 - Personal API tokens (Profile → API) for scripts, read-only or read-write, with an expiry; the API reference is in

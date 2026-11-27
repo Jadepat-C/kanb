@@ -247,7 +247,7 @@ is `{done, failed: [{id, error}]}`.
 | GET, DELETE | `/me/sessions` | session only | your signed-in devices; sign out the others |
 | DELETE | `/me/sessions/{id}` | session only | sign out one device |
 | GET | `/me/sso` | session only | your single sign-on connections |
-| POST | `/me/sso/link` | session only | connect your provider account (answers the URL to open) |
+| POST | `/me/sso/link` | session only | connect a provider account: `{provider}` (answers the URL to open) |
 | DELETE | `/me/sso/{id}` | session only | disconnect |
 
 ### Signing in (browser only)
@@ -263,7 +263,7 @@ is `{done, failed: [{id, error}]}`.
 | POST | `/auth/forgot` | email a password-reset link: `{login}` |
 | POST | `/auth/reset/check`, `/auth/reset` | check a reset link; set the new password |
 | POST | `/auth/register`, `/auth/confirm` | self sign-up (with `ALLOW_SIGNUP=true`) and its email confirmation |
-| GET | `/auth/sso/start`, `/auth/sso/callback` | single sign-on with the configured provider |
+| GET | `/auth/sso/start`, `/auth/sso/callback` | single sign-on: `/auth/sso/start?provider=<id>` (the ids are in `/auth/options`) |
 
 ### Public board links (no sign-in)
 
@@ -290,8 +290,10 @@ is `{done, failed: [{id, error}]}`.
 | PUT | `/admin/departments/{id}/members` | `{add: [user ids], remove: [user ids]}` |
 | GET, PUT | `/admin/signups` | sign-up settings and who's waiting |
 | POST | `/admin/signups/approve`, `/admin/signups/reject` | `{ids}` |
-| GET, PUT | `/admin/sso` | single sign-on settings (the client secret is never sent back) |
-| POST | `/admin/sso/test` | check the provider with unsaved settings |
+| GET, PUT | `/admin/sso` | single sign-on: the providers (client secrets are never sent back); change `{require_sso}` |
+| POST | `/admin/sso/providers` | add a provider: `{enabled, issuer, client_id, client_secret, label, allowed_domains, trust_email}` |
+| PUT, DELETE | `/admin/sso/providers/{id}` | change (leave `client_secret` out to keep it), remove |
+| POST | `/admin/sso/test` | check a provider with unsaved settings |
 | GET, PUT | `/admin/email` | email (SMTP) settings |
 | POST | `/admin/email/test` | send a test email: `{to}` |
 | GET, PUT | `/admin/notifications` | which notification channels are on for everyone |

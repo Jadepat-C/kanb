@@ -50,6 +50,7 @@ export function Profile() {
   const deptName = useDepartmentName()
   // single sign-on required: only super admins keep a password
   const passwordOff = !!sso.data?.required && !me?.is_super_admin
+  const ssoName = sso.data?.providers.map((p) => p.label).join(' / ') || 'SSO'
   // old links pointed at #calendar-feed on the single long page
   const tab: Tab = TABS.find((k) => k === sp.get('tab')) ?? (location.hash === '#calendar-feed' ? 'calendar' : 'account')
   if (!me) return null
@@ -138,7 +139,7 @@ export function Profile() {
             {passwordOff ? (
               <section className="rounded-xl border border-line bg-surface p-5">
                 <h2 className="font-semibold">{t('profile.changePassword')}</h2>
-                <p className="mt-1 text-sm text-muted">{t('sso.passwordManaged', { label: sso.data?.label ?? 'SSO' })}</p>
+                <p className="mt-1 text-sm text-muted">{t('sso.passwordManaged', { label: ssoName })}</p>
               </section>
             ) : (
             <form
@@ -154,7 +155,7 @@ export function Profile() {
                   <PasswordInput value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
                 </Field>
               ) : (
-                <p className="text-sm text-muted">{t('sso.noPassword', { label: sso.data?.label ?? 'SSO' })}</p>
+                <p className="text-sm text-muted">{t('sso.noPassword', { label: ssoName })}</p>
               )}
               <Field label={t('profile.newPassword')} hint={t('errors.password_too_short')}>
                 <PasswordInput value={next} onChange={(e) => setNext(e.target.value)} required minLength={8} autoComplete="new-password" />

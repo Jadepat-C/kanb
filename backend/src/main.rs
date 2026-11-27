@@ -311,6 +311,8 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/me/sso/{id}", axum::routing::delete(sso::unlink))
         .route("/admin/sso", get(sso::admin_get).put(sso::admin_save))
         .route("/admin/sso/test", post(sso::admin_test))
+        .route("/admin/sso/providers", post(sso::admin_create))
+        .route("/admin/sso/providers/{id}", put(sso::admin_update).delete(sso::admin_delete))
         .route("/auth/forgot", post(auth::forgot))
         .route("/auth/reset/check", post(auth::check_token))
         .route("/auth/reset", post(auth::reset))

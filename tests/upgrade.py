@@ -58,6 +58,12 @@ def seed(path: str) -> None:
                                      "username": "kanb", "password": s["smtp_password"], "from_email": "kanb@example.com",
                                      "from_name": "Kanb", "public_url": ""})
 
+    # single sign-on as 0.4 stored it (one provider; versions before 0.4 have none)
+    if admin.call("GET", "/admin/sso")[0] == 200:
+        s["sso_secret"] = "sso-" + secrets.token_hex(8)
+        admin.ok("PUT", "/admin/sso", {"enabled": False, "issuer": "https://accounts.google.com", "client_id": "upgrade-client",
+                                       "client_secret": s["sso_secret"], "label": "Google", "allowed_domains": [], "trust_email": False, "require_sso": False})
+
     # a second person with two-factor sign-in (its secret is stored encrypted too)
     s["user"], s["password"] = "upgrade_" + secrets.token_hex(3), "Upgrade-" + secrets.token_hex(8)
     first = "Temp-" + secrets.token_hex(8)
@@ -103,6 +109,12 @@ def check(path: str) -> int:
         expect("attached file downloads unchanged", False, e)
     st, mail = admin.call("GET", "/admin/email")
     expect("encrypted SMTP password still readable", st == 200 and isinstance(mail, dict) and mail.get("has_password") is True, (st, mail))
+
+    if s.get("sso_secret"):
+        st, sso = admin.call("GET", "/admin/sso")
+        ps = (sso or {}).get("providers", []) if isinstance(sso, dict) else []
+        expect("single sign-on settings carried over (secret kept)", st == 200 and len(ps) == 1 and ps[0].get("client_id") == "upgrade-client"
+               and ps[0].get("has_secret") is True and ps[0].get("label") == "Google", (st, sso))
 
     # a fresh code: the one used to turn 2FA on can't be used again
     while int(time.time()) // 30 <= s["totp_step"]:
