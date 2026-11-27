@@ -9,6 +9,14 @@ need configuration changes or break your data, and the image tag `:1` follows th
 
 ## Unreleased
 
+## 0.4.1 (2026-11-27)
+
+### Fixes
+- The admin page's tabs no longer get cut off: arrows appear when they don't fit, and the mouse wheel scrolls them
+  sideways. Opening a tab further along scrolls it into view.
+- The in-app API reference shows the administration endpoints only to super admins (the server refuses them to
+  everyone else anyway; `docs/api.md` keeps the full reference).
+
 ## 0.4.0 (2026-11-27)
 
 ### New

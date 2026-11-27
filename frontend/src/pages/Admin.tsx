@@ -17,6 +17,7 @@ import type { User } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
 import { copyText } from '../lib/clipboard'
 import { SsoAdminTab } from './Sso'
+import { TabStrip } from '../components/TabStrip'
 import { DepartmentsTab } from './Departments'
 import { useDepartments } from '../lib/departments'
 
@@ -35,12 +36,12 @@ export function Admin() {
   if (!me?.is_super_admin) return <Navigate to="/" replace />
   return (
     <div className="mx-auto max-w-5xl p-4 sm:p-6">
-      {/* scrolls sideways on narrow screens, without a scrollbar; the bottom line is a shadow (not a border the tabs
-          overlap by 1px), so nothing overflows downwards and no vertical scrollbar appears either */}
-      <div className="mb-5 flex items-center gap-1 overflow-x-auto overflow-y-hidden shadow-[inset_0_-1px_0_var(--border)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <TabStrip selected={tab} className="mb-5">
         {tabs.map((k) => (
           <button
             key={k}
+            role="tab"
+            aria-selected={tab === k}
             onClick={() => setSp(k === 'users' ? {} : { tab: k })}
             className={clsx(
               'flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium cursor-pointer',
@@ -82,7 +83,7 @@ export function Admin() {
             )}
           </button>
         ))}
-      </div>
+      </TabStrip>
       {tab === 'users' ? (
         <UsersTab me={me} />
       ) : tab === 'email' ? (

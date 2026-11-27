@@ -8,7 +8,7 @@ const en = {
     save: 'Save', cancel: 'Cancel', delete: 'Delete', edit: 'Edit', close: 'Close', add: 'Add', create: 'Create',
     loading: 'Loading…', search: 'Search', name: 'Name', description: 'Description', color: 'Color', none: 'None',
     confirmDelete: 'Delete this? This cannot be undone.', yes: 'Yes', no: 'No', saved: 'Saved', rename: 'Rename',
-    back: 'Back', clear: 'Clear', remove: 'Remove', done: 'Done', next: 'Next', up: 'Move up', down: 'Move down', copy: 'Copy', copied: 'Copied', download: 'Download', settings: 'Settings', showPassword: 'Show password', hidePassword: 'Hide password',
+    back: 'Back', clear: 'Clear', remove: 'Remove', done: 'Done', next: 'Next', up: 'Move up', down: 'Move down', copy: 'Copy', copied: 'Copied', scrollLeft: 'Scroll left', scrollRight: 'Scroll right', download: 'Download', settings: 'Settings', showPassword: 'Show password', hidePassword: 'Hide password',
   },
   setup: {
     title: 'Set up Kanb', hint: 'Create the first admin account. You can add everyone else from Admin → Users afterwards.',
@@ -632,7 +632,7 @@ const th: Dict = {
     save: 'บันทึก', cancel: 'ยกเลิก', delete: 'ลบ', edit: 'แก้ไข', close: 'ปิด', add: 'เพิ่ม', create: 'สร้าง',
     loading: 'กำลังโหลด…', search: 'ค้นหา', name: 'ชื่อ', description: 'รายละเอียด', color: 'สี', none: 'ไม่มี',
     confirmDelete: 'ต้องการลบใช่หรือไม่? ไม่สามารถย้อนกลับได้', yes: 'ใช่', no: 'ไม่', saved: 'บันทึกแล้ว', rename: 'เปลี่ยนชื่อ',
-    back: 'กลับ', clear: 'ล้าง', remove: 'นำออก', done: 'เสร็จ', next: 'ถัดไป', up: 'เลื่อนขึ้น', down: 'เลื่อนลง', copy: 'คัดลอก', copied: 'คัดลอกแล้ว', download: 'ดาวน์โหลด', settings: 'ตั้งค่า', showPassword: 'แสดงรหัสผ่าน', hidePassword: 'ซ่อนรหัสผ่าน',
+    back: 'กลับ', clear: 'ล้าง', remove: 'นำออก', done: 'เสร็จ', next: 'ถัดไป', up: 'เลื่อนขึ้น', down: 'เลื่อนลง', copy: 'คัดลอก', copied: 'คัดลอกแล้ว', scrollLeft: 'เลื่อนไปทางซ้าย', scrollRight: 'เลื่อนไปทางขวา', download: 'ดาวน์โหลด', settings: 'ตั้งค่า', showPassword: 'แสดงรหัสผ่าน', hidePassword: 'ซ่อนรหัสผ่าน',
   },
   setup: {
     title: 'ตั้งค่า Kanb', hint: 'สร้างบัญชีผู้ดูแลระบบคนแรก จากนั้นเพิ่มผู้ใช้คนอื่นได้ที่ ผู้ดูแลระบบ → ผู้ใช้',
