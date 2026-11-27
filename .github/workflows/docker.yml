@@ -88,6 +88,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            # ":1" follows every 1.x release (never for 0.x, where a minor release could need changes)
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
             type=raw,value=edge,enable={{is_default_branch}}
             type=sha
       - name: Join both architectures under the tags

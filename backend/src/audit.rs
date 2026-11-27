@@ -74,10 +74,10 @@ pub fn spawn_pruner(state: AppState) {
 /// Kinds by topic, for the filter on the Activity page.
 const TOPICS: &[(&str, &[&str])] = &[
     ("signin", &["sign_in", "sign_out"]),
-    ("failed", &["sign_in_failed", "totp_failed"]),
-    ("account", &["password_changed", "password_reset", "twofa_enabled", "twofa_disabled", "recovery_code_used"]),
+    ("failed", &["sign_in_failed", "totp_failed", "sso_failed"]),
+    ("account", &["password_changed", "password_reset", "twofa_enabled", "twofa_disabled", "recovery_code_used", "sso_linked", "sso_unlinked", "token_created", "token_revoked"]),
     ("signups", &["signed_up", "email_confirmed", "signup_approved", "signup_rejected"]),
-    ("users", &["user_created", "user_updated", "user_deleted", "user_password_reset", "user_reset_link_sent", "user_twofa_reset", "sessions_revoked"]),
+    ("users", &["user_created", "user_updated", "user_deleted", "user_password_reset", "user_reset_link_sent", "user_twofa_reset", "sessions_revoked", "department_created", "department_renamed", "department_deleted", "department_members"]),
     ("settings", &["settings_changed"]),
     ("boards", &["board_owner_added", "board_deleted", "board_imported", "board_shared", "board_unshared", "board_share_reset", "board_share_changed"]),
 ];

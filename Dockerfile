@@ -6,6 +6,8 @@ WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+# the API reference shown in the app (imported as ../../../docs/api.md from /web/src/pages)
+COPY docs/api.md /docs/api.md
 RUN npm run build
 
 FROM rust:1-alpine AS api

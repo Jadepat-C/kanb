@@ -32,7 +32,7 @@ const SETTINGS_KEY: &str = "signup";
 /// sign-ups per address per hour (counted whether they succeed or not)
 const SIGNUP_IP: throttle::Rule = throttle::Rule { limit: 5, window: std::time::Duration::from_secs(3600) };
 /// accounts that may wait at once (confirmation + review), so a flood can't fill the database
-const MAX_WAITING: i64 = 500;
+pub(crate) const MAX_WAITING: i64 = 500;
 /// how long a confirmation link (and the unconfirmed account) lasts
 const CONFIRM_HOURS: i32 = 24;
 
@@ -41,7 +41,7 @@ pub struct Settings {
     /// "review": an admin approves each account; "auto": accounts can be used right away
     approval: String,
     /// people who signed up may create their own boards
-    can_create_boards: bool,
+    pub(crate) can_create_boards: bool,
 }
 
 impl Default for Settings {
@@ -50,7 +50,7 @@ impl Default for Settings {
     }
 }
 
-async fn settings(state: &AppState) -> Settings {
+pub(crate) async fn settings(state: &AppState) -> Settings {
     let v: Option<(Value,)> = sqlx::query_as("SELECT value FROM app_settings WHERE key = $1").bind(SETTINGS_KEY).fetch_optional(&state.db).await.ok().flatten();
     v.and_then(|(v,)| serde_json::from_value(v).ok()).unwrap_or_default()
 }
@@ -92,6 +92,10 @@ pub async fn register(
     Json(r): Json<RegisterReq>,
 ) -> AppResult<(CookieJar, Json<Value>)> {
     open(&state).await?;
+    // with single sign-on required, accounts come from the provider ("Sign up with …"), not this form
+    if crate::sso::required(&state).await {
+        return Err(AppError::Denied("sso_required"));
+    }
     let key = throttle::ip_key("signup", throttle::client_ip(peer, &headers, state.config.trust_proxy));
     state.throttle.check(&key, SIGNUP_IP)?;
     state.throttle.hit(&key, SIGNUP_IP);
@@ -111,7 +115,7 @@ pub async fn register(
     let locale = if r.locale.as_deref() == Some("th") { "th" } else { "en" };
     let set = settings(&state).await;
     let first = if can_mail { Some("email") } else { next_state(&set) };
-    let user = crate::admin::insert_user(&state.db, &r.username, &r.display_name, Some(email), &r.password, false, set.can_create_boards, locale, false, first)
+    let user = crate::admin::insert_user(&state.db, &r.username, &r.display_name, Some(email), Some(&r.password), false, set.can_create_boards, locale, false, first)
         .await
         .map_err(|e| match e {
             AppError::Conflict("already_exists") => AppError::Conflict("username_taken"),
@@ -131,7 +135,7 @@ pub async fn register(
 }
 
 /// "review" or None (= active right away), by the admin's choice.
-fn next_state(s: &Settings) -> Option<&'static str> {
+pub(crate) fn next_state(s: &Settings) -> Option<&'static str> {
     if s.approval == "auto" { None } else { Some("review") }
 }
 

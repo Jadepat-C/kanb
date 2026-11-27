@@ -115,7 +115,9 @@ pub async fn revoke_all(
     Path(user_id): Path<Uuid>,
 ) -> AppResult<Json<Value>> {
     let r = sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2").bind(user_id).bind(my_hash(&jar)).execute(&state.db).await?;
-    crate::audit::log(&state, Some(me.id), "sessions_revoked", Some(user_id), ip.as_deref(), json!({ "count": r.rows_affected() })).await;
+    // "everywhere" includes their API tokens
+    let tokens = if user_id == me.id { 0 } else { crate::tokens::revoke_all(&state.db, user_id).await? };
+    crate::audit::log(&state, Some(me.id), "sessions_revoked", Some(user_id), ip.as_deref(), json!({ "count": r.rows_affected(), "tokens": tokens })).await;
     Ok(Json(json!({ "signed_out": r.rows_affected() })))
 }
 

@@ -49,6 +49,10 @@ pub struct User {
     pub last_seen_at: Option<DateTime<Utc>>,
     /// an admin requires two-factor sign-in for everyone (see admin::SECURITY_KEY)
     pub require_2fa: bool,
+    /// false for accounts made by single sign-on that never set a password
+    pub has_password: bool,
+    /// Admin → Departments
+    pub department_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -56,7 +60,7 @@ pub const USER_COLUMNS: &str = "id, username, display_name, email, is_super_admi
      is_active, locale, theme, avatar_color, must_change_password, avatar_id, notify_email, notify_events, \
      (totp_enabled_at IS NOT NULL) AS totp_enabled, last_seen_at, \
      COALESCE((SELECT (value->>'require_2fa')::boolean FROM app_settings WHERE key = 'security'), false) AS require_2fa, \
-     created_at";
+     (password_hash IS NOT NULL) AS has_password, department_id, created_at";
 
 /// How a user's name is shown in history: "Name · @username"; deleted accounts read "[Deleted User] Name (username)".
 /// Use with the users table aliased as `u`.
@@ -151,15 +155,33 @@ impl FromRequestParts<AppState> for CurrentUser {
         if let Some(u) = parts.extensions.get::<CurrentUser>() {
             return Ok(u.clone());
         }
+        let path = parts
+            .extensions
+            .get::<axum::extract::OriginalUri>()
+            .map(|u| u.path().to_string())
+            .unwrap_or_else(|| parts.uri.path().to_string());
+        let path = path.strip_prefix("/api").unwrap_or(&path).to_string();
+        // an API token: only the token counts (never a cookie sent along with it). Other Authorization headers (a
+        // reverse proxy's Basic auth in front of Kanb, say) are none of our business: the session cookie decides.
+        if let Some(token) = bearer(&parts.headers) {
+            let user = crate::tokens::authenticate(state, &token, &parts.method, &path).await?;
+            gate(&user, &path, false)?;
+            let cu = CurrentUser(user);
+            parts.extensions.insert(cu.clone());
+            return Ok(cu);
+        }
         let jar = CookieJar::from_headers(&parts.headers);
         let token = jar.get(COOKIE_NAME).ok_or(AppError::Unauthorized)?.value().to_string();
         let hash = token_hash(&token);
-        let row: Option<(DateTime<Utc>,)> =
-            sqlx::query_as("SELECT last_seen_at FROM sessions WHERE token_hash = $1 AND expires_at > now()")
+        let row: Option<(DateTime<Utc>, String)> =
+            sqlx::query_as("SELECT last_seen_at, method FROM sessions WHERE token_hash = $1 AND expires_at > now()")
                 .bind(&hash)
                 .fetch_optional(&state.db)
                 .await?;
-        let (last_seen,) = row.ok_or(AppError::Unauthorized)?;
+        let (last_seen, method) = row.ok_or(AppError::Unauthorized)?;
+        // signed in through the provider: it checked who this is (and its own two-factor), so neither an
+        // admin-set password nor Kanb's "require two-factor" stands in the way
+        let sso = method == "sso";
         let user: User = sqlx::query_as(sqlf!(
             "SELECT {USER_COLUMNS} FROM users u WHERE id = (SELECT user_id FROM sessions WHERE token_hash = $1) AND is_active"
         ))
@@ -176,33 +198,35 @@ impl FromRequestParts<AppState> for CurrentUser {
                 .await?;
             sqlx::query("UPDATE users SET last_seen_at = now() WHERE id = $1").bind(user.id).execute(&state.db).await?;
         }
-        // Until an admin-set password has been replaced, only "change my password" (and reading /me) works.
-        if user.must_change_password {
-            let path = parts
-                .extensions
-                .get::<axum::extract::OriginalUri>()
-                .map(|u| u.path().to_string())
-                .unwrap_or_else(|| parts.uri.path().to_string());
-            let allowed = ["/api/me", "/api/me/password", "/api/auth/logout", "/me", "/me/password", "/auth/logout"];
-            if !allowed.contains(&path.as_str()) {
-                return Err(AppError::Forbidden);
-            }
-        } else if user.require_2fa && !user.totp_enabled {
-            // two-factor sign-in is required: until it's set up, only setting it up (and reading /me) works
-            let path = parts
-                .extensions
-                .get::<axum::extract::OriginalUri>()
-                .map(|u| u.path().to_string())
-                .unwrap_or_else(|| parts.uri.path().to_string());
-            let path = path.strip_prefix("/api").unwrap_or(&path);
-            if !["/me", "/me/2fa/setup", "/me/2fa/enable", "/auth/logout"].contains(&path) {
-                return Err(AppError::TwoFactorRequired);
-            }
-        }
+        gate(&user, &path, sso)?;
         let cu = CurrentUser(user);
         parts.extensions.insert(cu.clone());
         Ok(cu)
     }
+}
+
+/// The API token in `Authorization: Bearer …`, if any.
+pub fn bearer(headers: &HeaderMap) -> Option<String> {
+    let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let t = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer "))?.trim();
+    Some(t.to_string())
+}
+
+/// What a signed-in account may still not do. Until an admin-set password has been replaced, only "change my
+/// password" (and reading /me) works; while two-factor sign-in is required and not set up, only setting it up does.
+/// Neither applies to a single sign-on session (the provider checked who this is, and its own two-factor).
+fn gate(user: &User, path: &str, sso: bool) -> AppResult<()> {
+    if sso {
+        return Ok(());
+    }
+    if user.must_change_password {
+        if !["/me", "/me/password", "/auth/logout"].contains(&path) {
+            return Err(AppError::Forbidden);
+        }
+    } else if user.require_2fa && !user.totp_enabled && !["/me", "/me/2fa/setup", "/me/2fa/enable", "/auth/logout"].contains(&path) {
+        return Err(AppError::TwoFactorRequired);
+    }
+    Ok(())
 }
 
 /// Super-admin-only extractor.
@@ -260,10 +284,10 @@ pub async fn login(
     // rate limits come before the (deliberately slow) password check
     let ip = throttle::ip_key("login", throttle::client_ip(peer, &headers, state.config.trust_proxy));
     state.throttle.check(&ip, throttle::LOGIN_IP)?;
-    let row: Option<(Uuid, Option<String>, bool, bool, Option<String>)> =
+    let row: Option<(Uuid, Option<String>, bool, bool, Option<String>, bool)> =
         // usernames can't contain '@', so anything with '@' is looked up as an email
         sqlx::query_as(
-            "SELECT id, password_hash, is_active, totp_enabled_at IS NOT NULL, signup FROM users
+            "SELECT id, password_hash, is_active, totp_enabled_at IS NOT NULL, signup, is_super_admin FROM users
              WHERE deleted_at IS NULL
                AND CASE WHEN strpos($1, '@') > 0 THEN lower(email) = lower($1) ELSE lower(username) = lower($1) END",
         )
@@ -279,7 +303,7 @@ pub async fn login(
     let password = req.password.clone();
     let ok = match &row {
         // a self sign-up still waiting is checked too, to tell its owner why they can't sign in yet
-        Some((_, Some(hash), true, _, _)) | Some((_, Some(hash), _, _, Some(_))) => {
+        Some((_, Some(hash), true, _, _, _)) | Some((_, Some(hash), _, _, Some(_), _)) => {
             let hash = hash.clone();
             verify_password_bounded(password, hash).await?
         }
@@ -304,11 +328,15 @@ pub async fn login(
         return Err(AppError::SignInFailed("invalid_credentials"));
     }
     state.throttle.clear(&account);
-    let (user_id, _, _, totp_on, signup) = row.unwrap();
+    let (user_id, _, _, totp_on, signup, super_admin) = row.unwrap();
     match signup.as_deref() {
         Some("email") => return Err(AppError::Denied("email_not_confirmed")),
         Some(_) => return Err(AppError::Denied("pending_approval")),
         None => {}
+    }
+    // single sign-on required: passwords only for super admins (so a broken provider can't lock everyone out)
+    if !super_admin && crate::sso::required(&state).await {
+        return Err(AppError::Denied("sso_required"));
     }
     if totp_on {
         // step 2: the authenticator code (POST /auth/login/code with this ticket)
@@ -320,7 +348,7 @@ pub async fn login(
 }
 
 /// Signs the user in: new session row + cookie, "last active", and a sign-in entry in the activity log.
-/// `method`: password | totp | recovery | setup.
+/// `method`: password | totp | recovery | setup | signup | sso.
 pub async fn start_session(
     state: &AppState,
     user_id: Uuid,
@@ -333,13 +361,14 @@ pub async fn start_session(
     let token = new_token();
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).map(|s| s.chars().take(300).collect::<String>());
     sqlx::query(
-        "INSERT INTO sessions (token_hash, user_id, user_agent, ip, expires_at) VALUES ($1, $2, $3, $4, now() + make_interval(days => $5))",
+        "INSERT INTO sessions (token_hash, user_id, user_agent, ip, expires_at, method) VALUES ($1, $2, $3, $4, now() + make_interval(days => $5), $6)",
     )
     .bind(token_hash(&token))
     .bind(user_id)
     .bind(&ua)
     .bind(ip)
     .bind(state.config.session_days as i32)
+    .bind(method)
     .execute(&state.db)
     .await?;
     sqlx::query("UPDATE users SET last_seen_at = now() WHERE id = $1").bind(user_id).execute(&state.db).await?;
@@ -397,8 +426,13 @@ pub struct UpdateMe {
 pub async fn update_me(
     State(state): State<AppState>,
     CurrentUser(u): CurrentUser,
+    headers: HeaderMap,
     Json(req): Json<UpdateMe>,
 ) -> AppResult<Json<User>> {
+    // an API token can't change where password-reset emails go
+    if req.email.is_some() && bearer(&headers).is_some() {
+        return Err(AppError::Denied("token_not_allowed"));
+    }
     if let Some(l) = &req.locale
         && !["en", "th"].contains(&l.as_str())
     {
@@ -452,17 +486,21 @@ pub async fn change_password(
     jar: CookieJar,
     Json(req): Json<ChangePassword>,
 ) -> AppResult<Json<serde_json::Value>> {
+    if !u.is_super_admin && crate::sso::required(&state).await {
+        return Err(AppError::Denied("sso_required"));
+    }
     validate_password(&req.new_password)?;
     let (hash,): (Option<String>,) = sqlx::query_as("SELECT password_hash FROM users WHERE id = $1")
         .bind(u.id)
         .fetch_one(&state.db)
         .await?;
     let cur = req.current_password.clone().unwrap_or_default();
-    // right after an admin-set password (forced change) the user just proved it by signing in
+    // right after an admin-set password (forced change) the user just proved it by signing in; an account made by
+    // single sign-on has no password yet and may set its first one
     let ok = u.must_change_password
         || match hash {
             Some(h) => verify_password_bounded(cur, h).await?,
-            None => false,
+            None => true,
         };
     if !ok {
         return Err(AppError::BadRequest("invalid_credentials"));
@@ -551,7 +589,13 @@ pub async fn send_approved_email(state: &AppState, user_id: Uuid) -> Result<(), 
 pub async fn options(State(state): State<AppState>) -> AppResult<Json<serde_json::Value>> {
     let s = crate::mail::load(&state).await?;
     let needs_setup = crate::setup::needs_setup(&state.db).await?;
-    Ok(Json(serde_json::json!({ "email_enabled": crate::mail::ready(&s), "needs_setup": needs_setup, "signup": state.config.allow_signup && !needs_setup })))
+    Ok(Json(serde_json::json!({
+        "email_enabled": crate::mail::ready(&s),
+        "needs_setup": needs_setup,
+        "signup": state.config.allow_signup && !needs_setup,
+        // the "Sign in with …" button: { label, required } or null
+        "sso": if needs_setup { serde_json::Value::Null } else { crate::sso::public_info(&state).await },
+    })))
 }
 
 #[derive(Deserialize)]
@@ -578,13 +622,16 @@ pub async fn forgot(
     if !crate::mail::ready(&s) {
         return Err(AppError::BadRequest("email_disabled"));
     }
+    // with single sign-on required, only super admins still have passwords to reset
+    let only_admins = crate::sso::required(&state).await;
     let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM users WHERE deleted_at IS NULL AND is_active AND email IS NOT NULL
+        "SELECT id FROM users WHERE deleted_at IS NULL AND is_active AND email IS NOT NULL AND (is_super_admin OR NOT $2)
            AND CASE WHEN strpos($1, '@') > 0 THEN lower(email) = lower($1) ELSE lower(username) = lower($1) END
            AND NOT EXISTS (SELECT 1 FROM password_tokens t WHERE t.user_id = users.id AND t.purpose = 'reset'
                            AND t.created_at > now() - interval '1 minute')",
     )
     .bind(r.login.trim())
+    .bind(only_admins)
     .fetch_optional(&state.db)
     .await?;
     if let Some((uid,)) = row {
@@ -669,6 +716,7 @@ pub async fn reset(
     // every other outstanding link and every session dies with the old password
     sqlx::query("UPDATE password_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL").bind(uid).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM sessions WHERE user_id = $1").bind(uid).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM api_tokens WHERE user_id = $1").bind(uid).execute(&mut *tx).await?;
     tx.commit().await?;
     let client = throttle::client_ip(peer, &headers, state.config.trust_proxy).to_string();
     crate::audit::log(&state, Some(uid), "password_reset", Some(uid), Some(&client), serde_json::json!({})).await;

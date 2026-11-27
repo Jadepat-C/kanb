@@ -23,6 +23,8 @@ jobs:
         with:
           workspaces: backend
       - run: cargo test --locked
+      - name: Every API route is in docs/api.md
+        run: python3 ../tests/api_docs.py
 
   frontend:
     runs-on: ubuntu-24.04
@@ -71,3 +73,33 @@ jobs:
         if: failure()
         run: cat backend/server.log
 
+
+  upgrade:
+    name: upgrade from ${{ matrix.from }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # the first release, and the newest one (whatever it is when this runs)
+        from: [first, latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Released migrations are never edited
+        # a migration that changed after release makes existing servers refuse to start
+        # ("migration N was previously applied but has been modified"): add a new one instead
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^)
+          changed=$(git diff --name-only --diff-filter=MDR "$prev" HEAD -- backend/migrations)
+          if [ -n "$changed" ]; then echo "migrations changed since $prev:"; echo "$changed"; exit 1; fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo build --locked
+        working-directory: backend
+      - name: Old release → this build, same data
+        run: |
+          if [ "${{ matrix.from }}" = first ]; then from=0.1.0; else from=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ | sed 's/^v//'); fi
+          dev/upgrade-test.sh "$from"

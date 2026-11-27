@@ -22,6 +22,9 @@ export interface User {
   /** what to notify about (see NOTIFY_KINDS) */
   notify_events: string[]
   totp_enabled: boolean
+  /** false for an account made by single sign-on that never set a password */
+  has_password: boolean
+  department_id: string | null
   created_at: string
 }
 
@@ -31,6 +34,7 @@ export interface UserBrief {
   display_name: string
   avatar_color: string
   avatar_id: string | null
+  department_id?: string | null
 }
 
 export interface BoardTemplateData {
@@ -120,6 +124,9 @@ export interface CardSummary {
   depends_on: string[]
   comment_count: number
   attachment_count: number
+  /** time tracking: estimate and time logged (minutes) */
+  estimate_minutes?: number | null
+  time_minutes?: number
   /** who made it (for roles limited to their own cards) */
   created_by: string | null
   excerpt: string
@@ -140,6 +147,7 @@ export interface Member {
   avatar_color: string
   avatar_id: string | null
   role_id: string
+  department_id?: string | null
 }
 
 export interface Role {
@@ -188,6 +196,8 @@ export interface BoardDetail {
   members: Member[]
   roles: Role[]
   templates: CardTemplate[]
+  /** cards I watch */
+  watching?: string[]
 }
 
 export interface Card {
@@ -226,6 +236,8 @@ export interface Attachment {
 export interface CardDetail {
   card: Card
   attachments: Attachment[]
+  /** I watch this card */
+  watching?: boolean
 }
 
 export type TimelineItem =

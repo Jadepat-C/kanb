@@ -1,12 +1,15 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Bell, CalendarDays, Camera, KeyRound, Trash2, UserRound } from 'lucide-react'
+import { Bell, CalendarDays, Camera, Code, KeyRound, Trash2, UserRound } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router'
 import { CalendarFeed } from '../components/CalendarFeed'
+import { ApiTokens } from '../components/ApiTokens'
 import { NotificationPrefs } from '../components/ContactPoints'
 import { TwoFactorSection } from '../components/TwoFactor'
+import { SsoProfileSection, useMySso } from './Sso'
+import { useDepartmentName } from '../lib/departments'
 import { SessionList } from '../components/Sessions'
 import { toast, toastError, toastSuccess } from '../components/toast'
 import { Avatar, Button, ColorPicker, Field, Input, PasswordInput } from '../components/ui'
@@ -38,11 +41,15 @@ export function Profile() {
     onError: toastError,
   })
   const pw = useMutation({
-    mutationFn: () => api.post('/me/password', { current_password: cur, new_password: next }),
-    onSuccess: () => (setCur(''), setNext(''), setNext2(''), toast(t('profile.passwordChanged'))),
+    mutationFn: () => api.post('/me/password', { current_password: me?.has_password ? cur : undefined, new_password: next }),
+    onSuccess: () => (setCur(''), setNext(''), setNext2(''), qc.invalidateQueries({ queryKey: ['me'] }), toast(t('profile.passwordChanged'))),
     onError: toastError,
   })
   const [sp, setSp] = useSearchParams()
+  const sso = useMySso()
+  const deptName = useDepartmentName()
+  // single sign-on required: only super admins keep a password
+  const passwordOff = !!sso.data?.required && !me?.is_super_admin
   // old links pointed at #calendar-feed on the single long page
   const tab: Tab = TABS.find((k) => k === sp.get('tab')) ?? (location.hash === '#calendar-feed' ? 'calendar' : 'account')
   if (!me) return null
@@ -56,6 +63,7 @@ export function Profile() {
             security: KeyRound,
             notifications: Bell,
             calendar: CalendarDays,
+            api: Code,
           }[k]
           return (
             <button
@@ -86,6 +94,11 @@ export function Profile() {
             <Field label={t('admin.email')}>
               <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
+            {deptName(me.department_id) && (
+              <Field label={t('departments.one')} hint={t('departments.setByAdmin')}>
+                <Input value={deptName(me.department_id)} readOnly disabled />
+              </Field>
+            )}
             <Field label={t('common.color')}>
               <ColorPicker value={color} onChange={setColor} />
             </Field>
@@ -121,6 +134,13 @@ export function Profile() {
         )}
         {tab === 'security' && (
           <>
+            <SsoProfileSection hasPassword={me.has_password} />
+            {passwordOff ? (
+              <section className="rounded-xl border border-line bg-surface p-5">
+                <h2 className="font-semibold">{t('profile.changePassword')}</h2>
+                <p className="mt-1 text-sm text-muted">{t('sso.passwordManaged', { label: sso.data?.label ?? 'SSO' })}</p>
+              </section>
+            ) : (
             <form
               onSubmit={(e) => {
                 e.preventDefault()
@@ -128,10 +148,14 @@ export function Profile() {
               }}
               className="space-y-4 rounded-xl border border-line bg-surface p-5"
             >
-              <h2 className="font-semibold">{t('profile.changePassword')}</h2>
-              <Field label={t('profile.currentPassword')}>
-                <PasswordInput value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
-              </Field>
+              <h2 className="font-semibold">{t(me.has_password ? 'profile.changePassword' : 'sso.setPassword')}</h2>
+              {me.has_password ? (
+                <Field label={t('profile.currentPassword')}>
+                  <PasswordInput value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
+                </Field>
+              ) : (
+                <p className="text-sm text-muted">{t('sso.noPassword', { label: sso.data?.label ?? 'SSO' })}</p>
+              )}
               <Field label={t('profile.newPassword')} hint={t('errors.password_too_short')}>
                 <PasswordInput value={next} onChange={(e) => setNext(e.target.value)} required minLength={8} autoComplete="new-password" />
               </Field>
@@ -143,6 +167,7 @@ export function Profile() {
                 {t('common.save')}
               </Button>
             </form>
+            )}
             <TwoFactorSection me={me} />
             <section className="space-y-3 rounded-xl border border-line bg-surface p-5">
               <h2 className="font-semibold">{t('devices.mine')}</h2>
@@ -153,12 +178,13 @@ export function Profile() {
         )}
         {tab === 'notifications' && <NotificationPrefs me={me} />}
         {tab === 'calendar' && <CalendarFeed />}
+        {tab === 'api' && <ApiTokens />}
       </div>
     </div>
   )
 }
 
-const TABS = ['account', 'security', 'notifications', 'calendar'] as const
+const TABS = ['account', 'security', 'notifications', 'calendar', 'api'] as const
 type Tab = (typeof TABS)[number]
 
 /** Profile picture: click or drop an image; the server crops it to a square and strips photo metadata. */

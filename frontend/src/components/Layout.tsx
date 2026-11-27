@@ -8,6 +8,7 @@ import { useMe, useUpdatePrefs } from '../lib/auth'
 import type { Locale, Theme } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
 import { NotificationBell } from './NotificationBell'
+import { TimerChip } from './TimeTracking'
 import { SearchPalette } from './SearchPalette'
 import { AnnouncementBanner } from '../pages/AdminTools'
 import { Avatar, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from './ui'
@@ -46,6 +47,7 @@ export function Layout() {
           <SearchPalette />
         </div>
         <div className="flex items-center justify-end gap-2">
+          <TimerChip />
           <NotificationBell />
           <Menu>
             <MenuTrigger className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent" title={label(me)}>

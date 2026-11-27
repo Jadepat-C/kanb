@@ -13,7 +13,7 @@ import { useDragSensors } from '../lib/dnd'
 import { arrayMove, horizontalListSortingStrategy, SortableContext, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { CalendarDays, ChartColumn, ChartGantt, Check, Columns3, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
+import { CalendarDays, ChartColumn, ChartGantt, Check, Columns3, Rows3, Filter, Plus, Search, Settings, SlidersHorizontal, Tag, User, Wifi, WifiOff, X } from 'lucide-react'
 import { Analytics } from '../components/Analytics'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
@@ -26,6 +26,10 @@ import { CardContextMenu } from '../components/CardMenu'
 import { ContextMenu, CTX, MItem } from '../components/menu'
 import { NewCardDialog, type NewCardPreset } from '../components/NewCardDialog'
 import { CardModal } from '../components/CardModal'
+import { SelectionBar } from '../components/SelectionBar'
+import { LANE_OPTIONS, loadLanes, saveLanes, Swimlanes, type LaneBy } from '../components/Swimlanes'
+import { useDepartments } from '../lib/departments'
+import { selection } from '../lib/selection'
 import { CardGhost, glimpseOf } from '../components/CardTile'
 import { Column } from '../components/Column'
 import { toast, toastActivity, toastError } from '../components/toast'
@@ -80,6 +84,18 @@ export function BoardPage() {
     [t],
   )
   const { online, viewers, report } = useBoardSocket(boardId, onChange)
+  // a selection belongs to one board and the board view; Esc clears it
+  useEffect(() => {
+    selection.clear()
+    return () => selection.clear()
+  }, [boardId, view])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selection.size() > 0 && !document.querySelector('[role=dialog],[role=menu]')) selection.clear()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const [editing, setEditing] = useState(false)
   useEffect(() => {
     report({ card_id: openCard, editing: !!openCard && editing })
@@ -118,6 +134,15 @@ export function BoardPage() {
     }
   }
   const [newCard, setNewCard] = useState<NewCardPreset | null>(null)
+
+  // lanes (swimlanes): this browser's choice for this board
+  const [lanes, setLanesState] = useState(() => loadLanes(boardId))
+  useEffect(() => setLanesState(loadLanes(boardId)), [boardId])
+  const setLanes = (v: { by: LaneBy | null; empty: boolean }) => {
+    setLanesState(v)
+    saveLanes(boardId, v)
+  }
+  const hasDepartments = (useDepartments().data ?? []).length > 0
 
   // filters
   const [text, setText] = useState('')
@@ -416,6 +441,36 @@ export function BoardPage() {
             </FilterGroup>
           </div>
         </Popover>
+        {view === 'board' && (
+          <Menu>
+            <MenuTrigger asChild>
+              <Button variant={lanes.by ? 'primary' : 'outline'} size="sm">
+                <Rows3 size={14} /> {lanes.by ? t(`lanes.by_${lanes.by}`) : t('lanes.title')}
+              </Button>
+            </MenuTrigger>
+            <MenuContent align="start">
+              <MenuItem onSelect={() => setLanes({ ...lanes, by: null })}>
+                {t('lanes.off')}
+                {!lanes.by && <Check size={14} className="ml-auto" />}
+              </MenuItem>
+              {LANE_OPTIONS.filter((o) => o !== 'department' || hasDepartments).map((o) => (
+                <MenuItem key={o} onSelect={() => setLanes({ ...lanes, by: o })}>
+                  {t(`lanes.by_${o}`)}
+                  {lanes.by === o && <Check size={14} className="ml-auto" />}
+                </MenuItem>
+              ))}
+              {(lanes.by === 'assignee' || lanes.by === 'label' || lanes.by === 'department') && (
+                <>
+                  <div className="my-1 h-px bg-[var(--border)]" />
+                  <MenuItem onSelect={() => setLanes({ ...lanes, empty: !lanes.empty })}>
+                    {t('lanes.showEmpty')}
+                    {lanes.empty && <Check size={14} className="ml-auto" />}
+                  </MenuItem>
+                </>
+              )}
+            </MenuContent>
+          </Menu>
+        )}
         {filtering && (
           <Button
             variant="ghost"
@@ -553,6 +608,19 @@ export function BoardPage() {
             }
           />
         </div>
+      ) : lanes.by ? (
+        <Swimlanes
+          b={b}
+          boardId={boardId}
+          by={lanes.by === 'department' && !hasDepartments ? 'assignee' : lanes.by}
+          showEmpty={lanes.empty}
+          visible={visible}
+          full={full}
+          filtering={filtering}
+          onOpen={openCardId}
+          dragDisabled={dragDisabled}
+          viewersByCard={viewersByCard}
+        />
       ) : (
       <DndContext
         sensors={sensors}
@@ -614,6 +682,7 @@ export function BoardPage() {
         />
       )}
       <BoardSettings open={settingsOpen} onOpenChange={setSettingsOpen} b={b} boardId={boardId} />
+      {view === 'board' && <SelectionBar b={b} boardId={boardId} />}
     </div>
   )
 }

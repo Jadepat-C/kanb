@@ -19,6 +19,7 @@ import { Login } from './pages/Login'
 import { Profile } from './pages/Profile'
 import { PublicBoard } from './pages/PublicBoard'
 import { ConfirmEmail, Register } from './pages/Register'
+import { ApiDocs } from './pages/ApiDocs'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -64,6 +65,7 @@ const router = createBrowserRouter([
       { path: '/templates', element: <TemplatesPage /> },
       { path: '/admin', element: <Admin /> },
       { path: '/profile', element: <Profile /> },
+      { path: '/help/api', element: <ApiDocs /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

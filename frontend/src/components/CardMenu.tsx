@@ -8,6 +8,9 @@ import {
   CircleDot,
   Copy,
   CopyPlus,
+  SquareCheck,
+  Eye,
+  EyeOff,
   LayoutTemplate,
   ExternalLink,
   Link2,
@@ -32,6 +35,7 @@ import { Button, Dialog, Input, PALETTE } from './ui'
 import { DropdownMenu as RD } from 'radix-ui'
 import { ContextMenu, contentCls, CTX, DROP, MItem, MLabel, MSep, MSub } from './menu'
 import { copyText } from '../lib/clipboard'
+import { selection } from '../lib/selection'
 
 /** What the menu needs to know about a card. Board-level details are optional (not known on the global calendar). */
 export interface MenuCard {
@@ -69,6 +73,7 @@ export function CardContextMenu({
   onNew,
   dropdown,
   onGone,
+  selectable,
   children,
 }: {
   card: MenuCard
@@ -80,6 +85,8 @@ export function CardContextMenu({
   dropdown?: boolean
   /** the card was archived or deleted */
   onGone?: () => void
+  /** offer "Select" (board tiles: several cards can be changed at once) */
+  selectable?: boolean
   children: ReactElement
 }) {
   const M = dropdown ? DROP : CTX
@@ -123,6 +130,11 @@ export function CardContextMenu({
       {!dropdown && (
         <MItem M={M} onSelect={onOpen} shortcut="Enter">
           <ExternalLink size={14} /> {t('menu.open')}
+        </MItem>
+      )}
+      {selectable && (
+        <MItem M={M} onSelect={() => selection.toggle(card.id)} shortcut="Ctrl+Click">
+          <SquareCheck size={14} /> {selection.has(card.id) ? t('bulk.deselect') : t('bulk.select')}
         </MItem>
       )}
       {can('cards.edit') && (
@@ -170,6 +182,11 @@ export function CardContextMenu({
       <MItem M={M} onSelect={() => calendar.toggle(card.id)}>
         <CalendarCheck size={14} /> {calendar.picked.has(card.id) ? t('feed.removeCard') : t('feed.addCard')}
       </MItem>
+      {b && (
+        <MItem M={M} onSelect={() => run.mutate(() => api.put(`/cards/${card.id}/watch`, { watching: !b.watching.has(card.id) }))}>
+          {b.watching.has(card.id) ? <EyeOff size={14} /> : <Eye size={14} />} {b.watching.has(card.id) ? t('watch.stop') : t('watch.start')}
+        </MItem>
+      )}
 
       {(can('cards.edit') || can('cards.due') || (data && (can('cards.move') || can('cards.status') || can('cards.labels') || can('cards.assign')))) && <MSep M={M} />}
       {data && card.list_id && can('cards.move') && (

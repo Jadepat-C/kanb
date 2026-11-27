@@ -44,6 +44,9 @@ pub struct CardSummary {
     pub attachment_count: i64,
     /// for "only cards they created" roles
     pub created_by: Option<Uuid>,
+    /// time tracking: the estimate, and the time logged so far (finished entries)
+    pub estimate_minutes: Option<i32>,
+    pub time_minutes: i64,
     #[sqlx(skip)]
     pub excerpt: String,
     #[sqlx(skip)]
@@ -64,7 +67,9 @@ SELECT c.id, c.list_id, c.number, c.title, c.position, c.priority, c.status_id, 
   COALESCE((SELECT array_agg(label_id) FROM card_labels WHERE card_id = c.id), '{}') AS label_ids,
   COALESCE((SELECT array_agg(user_id) FROM card_assignees WHERE card_id = c.id), '{}') AS assignee_ids,
   (SELECT count(*) FROM comments WHERE card_id = c.id AND deleted_at IS NULL) AS comment_count,
-  (SELECT count(*) FROM attachments WHERE card_id = c.id AND deleted_at IS NULL AND NOT is_inline) AS attachment_count
+  (SELECT count(*) FROM attachments WHERE card_id = c.id AND deleted_at IS NULL AND NOT is_inline) AS attachment_count,
+  c.estimate_minutes,
+  COALESCE((SELECT sum(minutes) FROM time_entries WHERE card_id = c.id AND ended_at IS NOT NULL), 0)::int8 AS time_minutes
 FROM cards c
 "#;
 
@@ -319,6 +324,8 @@ pub struct Attachment {
 pub struct CardDetail {
     card: Card,
     attachments: Vec<Attachment>,
+    /// I watch this card (notified about it as if it were mine)
+    watching: bool,
 }
 
 pub async fn get_card(
@@ -348,7 +355,36 @@ pub async fn get_card(
     .bind(id)
     .fetch_all(&state.db)
     .await?;
-    Ok(Json(CardDetail { card, attachments }))
+    let (watching,): (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM card_watchers WHERE card_id = $1 AND user_id = $2)")
+        .bind(id)
+        .bind(u.id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Json(CardDetail { card, attachments, watching }))
+}
+
+#[derive(Deserialize)]
+pub struct WatchReq {
+    watching: bool,
+}
+
+/// Watch a card (or stop): anyone who can see it. Watchers hear about it like its assignees do, for the kinds they
+/// chose in Profile → Notifications, while they're on the board.
+pub async fn watch(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(r): Json<WatchReq>,
+) -> AppResult<Json<serde_json::Value>> {
+    let board_id = board_of_card(&state.db, id).await?;
+    board_access(&state.db, &u, board_id).await?;
+    let q = if r.watching {
+        "INSERT INTO card_watchers (card_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
+    } else {
+        "DELETE FROM card_watchers WHERE card_id = $1 AND user_id = $2"
+    };
+    sqlx::query(q).bind(id).bind(u.id).execute(&state.db).await?;
+    Ok(Json(json!({ "watching": r.watching })))
 }
 
 // ---------- update ----------
@@ -369,6 +405,9 @@ pub struct UpdateCard {
     /// null = the default (1 day before), 0 = no reminder
     #[serde(default, deserialize_with = "double_option")]
     remind_minutes: Option<Option<i32>>,
+    /// time tracking: null = no estimate
+    #[serde(default, deserialize_with = "double_option")]
+    estimate_minutes: Option<Option<i32>>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -392,8 +431,11 @@ pub async fn update_card(
     let (board_id, creator) = perms::card_owner(&state.db, id).await?;
     // each kind of change has its own permission
     let access = board_access(&state.db, &u, board_id).await?;
-    if r.title.is_some() || r.description.is_some() || r.priority.is_some() || r.color.is_some() {
+    if r.title.is_some() || r.description.is_some() || r.priority.is_some() || r.color.is_some() || r.estimate_minutes.is_some() {
         access.require_on(perms::CARDS_EDIT, creator)?;
+    }
+    if r.estimate_minutes.flatten().is_some_and(|m| !(0..=1_000_000).contains(&m)) {
+        return Err(AppError::BadRequest("invalid_estimate"));
     }
     if r.status_id.is_some() {
         access.require_on(perms::CARDS_STATUS, creator)?;
@@ -496,6 +538,7 @@ pub async fn update_card(
             due_at = CASE WHEN $8 THEN $9 ELSE due_at END,
             start_at = CASE WHEN $11 THEN $12 ELSE start_at END,
             remind_minutes = CASE WHEN $13 THEN $14 ELSE remind_minutes END,
+            estimate_minutes = CASE WHEN $15 THEN $16 ELSE estimate_minutes END,
             done_at = CASE WHEN NOT $10 THEN done_at
                            WHEN EXISTS (SELECT 1 FROM board_statuses s WHERE s.id = $5 AND s.is_done) THEN COALESCE(done_at, now())
                            ELSE NULL END,
@@ -516,6 +559,8 @@ pub async fn update_card(
     .bind(r.start_at.flatten())
     .bind(r.remind_minutes.is_some())
     .bind(r.remind_minutes.flatten())
+    .bind(r.estimate_minutes.is_some())
+    .bind(r.estimate_minutes.flatten())
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -800,12 +845,18 @@ pub async fn create_comment(
     let data = json!({ "snippet": crate::notify::snippet(&r.body), "where": "comment" });
     crate::board_contacts::comment(&state, board_id, card_id, u.id, crate::notify::snippet(&r.body));
     crate::notify::send(&state, &mentioned, "mentioned", board_id, Some(card_id), Some(u.id), data.clone()).await;
-    // assignees + whoever created the card (people already @mentioned get just the mention)
+    // assignees, whoever created the card and its watchers, while they're on the board (people already @mentioned
+    // get just the mention)
     let watchers: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT user_id FROM card_assignees WHERE card_id = $1
-         UNION SELECT created_by FROM cards WHERE id = $1 AND created_by IS NOT NULL",
+        "SELECT x.uid FROM (
+             SELECT user_id AS uid FROM card_assignees WHERE card_id = $1
+             UNION SELECT created_by FROM cards WHERE id = $1 AND created_by IS NOT NULL
+             UNION SELECT user_id FROM card_watchers WHERE card_id = $1
+         ) x
+         WHERE x.uid IN (SELECT user_id FROM board_members WHERE board_id = $2) OR x.uid IN (SELECT id FROM users WHERE is_super_admin)",
     )
     .bind(card_id)
+    .bind(board_id)
     .fetch_all(&state.db)
     .await?;
     let watchers: Vec<Uuid> = watchers.into_iter().map(|w| w.0).filter(|w| !mentioned.contains(w)).collect();
@@ -1171,4 +1222,158 @@ pub async fn set_dependencies(
     touch_board(&state, board_id).await?;
     state.hub.notify(board_id, "card", Some(id), u.id);
     Ok(Json(json!({ "depends_on": wanted })))
+}
+
+// ---------- several cards at once ----------
+
+#[derive(Deserialize)]
+pub struct BulkReq {
+    card_ids: Vec<Uuid>,
+    /// move | update | labels | assignees | archive | watch
+    action: String,
+    /// move: the column
+    list_id: Option<Uuid>,
+    /// move: "top" or "bottom" (default); the cards keep their order
+    at: Option<String>,
+    /// update: what PATCH /cards/{id} takes, except the title and description
+    changes: Option<Value>,
+    /// labels / assignees: ids to add and to take off
+    #[serde(default)]
+    add: Vec<Uuid>,
+    #[serde(default)]
+    remove: Vec<Uuid>,
+    /// watch: on or off
+    watching: Option<bool>,
+}
+
+/// at most this many cards per request
+const BULK_MAX: usize = 500;
+
+fn code(e: &AppError) -> &'static str {
+    match e {
+        AppError::Forbidden => "forbidden",
+        AppError::NotFound => "not_found",
+        AppError::BadRequest(c) | AppError::Conflict(c) | AppError::Denied(c) => c,
+        _ => "error",
+    }
+}
+
+/// POST /boards/{id}/cards/bulk: one change to several cards of a board. Each card goes through the same handler
+/// (and so the same permission checks: own-cards-only roles, valid labels and members…) as a single change; cards
+/// that can't be changed are reported, the rest are changed. Answers { done, failed: [{ id, error }] }.
+pub async fn bulk(
+    State(state): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(board_id): Path<Uuid>,
+    Json(r): Json<BulkReq>,
+) -> AppResult<Json<Value>> {
+    board_access(&state.db, &u, board_id).await?;
+    let mut ids: Vec<Uuid> = Vec::new();
+    for id in r.card_ids {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.len() > BULK_MAX {
+        return Err(AppError::BadRequest("too_many_cards"));
+    }
+    // only this board's (unarchived) cards, in the order given
+    let here: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM cards WHERE id = ANY($1) AND board_id = $2 AND archived_at IS NULL")
+        .bind(&ids)
+        .bind(board_id)
+        .fetch_all(&state.db)
+        .await?;
+    let changes: Option<UpdateCard> = match (r.action.as_str(), r.changes) {
+        ("update", Some(Value::Object(mut m))) => {
+            // a bulk change never renames: those fields are dropped
+            m.remove("title");
+            m.remove("description");
+            if m.is_empty() {
+                return Err(AppError::BadRequest("nothing_to_change"));
+            }
+            Some(serde_json::from_value(Value::Object(m)).map_err(|_| AppError::BadRequest("invalid_changes"))?)
+        }
+        ("update", _) => return Err(AppError::BadRequest("nothing_to_change")),
+        _ => None,
+    };
+    if r.action == "move" && r.list_id.is_none() {
+        return Err(AppError::BadRequest("invalid_list"));
+    }
+    if !matches!(r.action.as_str(), "move" | "update" | "labels" | "assignees" | "archive" | "watch") {
+        return Err(AppError::BadRequest("invalid_action"));
+    }
+    let top = r.at.as_deref() == Some("top");
+    let (mut done, mut failed) = (0usize, Vec::<Value>::new());
+    for (i, id) in ids.iter().enumerate() {
+        if !here.contains(id) {
+            failed.push(json!({ "id": id, "error": "not_found" }));
+            continue;
+        }
+        let st = || State(state.clone());
+        let cu = || CurrentUser(u.clone());
+        let res: AppResult<()> = match r.action.as_str() {
+            "move" => {
+                let list_id = r.list_id.unwrap();
+                let index = if top {
+                    i
+                } else {
+                    let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM cards WHERE list_id = $1 AND archived_at IS NULL AND id <> $2")
+                        .bind(list_id)
+                        .bind(id)
+                        .fetch_one(&state.db)
+                        .await?;
+                    n as usize
+                };
+                move_card(st(), cu(), Path(*id), Json(MoveCard { list_id, index })).await.map(|_| ())
+            }
+            "update" => {
+                let c = changes.as_ref().unwrap();
+                let one = UpdateCard {
+                    title: None,
+                    description: None,
+                    priority: c.priority,
+                    status_id: c.status_id,
+                    color: c.color.clone(),
+                    due_at: c.due_at,
+                    start_at: c.start_at,
+                    remind_minutes: c.remind_minutes,
+                    estimate_minutes: c.estimate_minutes,
+                };
+                update_card(st(), cu(), Path(*id), Json(one)).await.map(|_| ())
+            }
+            "labels" | "assignees" => {
+                let q = if r.action == "labels" {
+                    "SELECT label_id FROM card_labels WHERE card_id = $1"
+                } else {
+                    "SELECT user_id FROM card_assignees WHERE card_id = $1"
+                };
+                let now: Vec<Uuid> = sqlx::query_scalar(q).bind(id).fetch_all(&state.db).await?;
+                let mut next: Vec<Uuid> = now.iter().copied().filter(|x| !r.remove.contains(x)).collect();
+                for a in &r.add {
+                    if !next.contains(a) {
+                        next.push(*a);
+                    }
+                }
+                if next.len() == now.len() && next.iter().all(|x| now.contains(x)) {
+                    Ok(()) // nothing to change on this card
+                } else if r.action == "labels" {
+                    set_labels(st(), cu(), Path(*id), Json(IdsReq { ids: next })).await.map(|_| ())
+                } else {
+                    set_assignees(st(), cu(), Path(*id), Json(IdsReq { ids: next })).await.map(|_| ())
+                }
+            }
+            "archive" => archive_card(st(), cu(), Path(*id)).await.map(|_| ()),
+            _ => watch(st(), cu(), Path(*id), Json(WatchReq { watching: r.watching.unwrap_or(true) })).await.map(|_| ()),
+        };
+        match res {
+            Ok(()) => done += 1,
+            Err(e) => {
+                if matches!(e, AppError::Internal(_)) {
+                    tracing::warn!(error = %e, card = %id, "bulk change failed");
+                }
+                failed.push(json!({ "id": id, "error": code(&e) }));
+            }
+        }
+    }
+    Ok(Json(json!({ "done": done, "failed": failed })))
 }

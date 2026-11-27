@@ -1,11 +1,13 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import clsx from 'clsx'
-import { CalendarCheck, CalendarClock, CheckSquare, CircleCheck, Link2, MessageSquare, Paperclip, Star } from 'lucide-react'
+import { CalendarCheck, CalendarClock, CheckSquare, CircleCheck, Eye, Link2, MessageSquare, Paperclip, Star, Timer } from 'lucide-react'
+import { fmtMinutes } from '../lib/time'
 import { HoverCard } from 'radix-ui'
 import { cloneElement, memo, useState, type ReactElement, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { BoardHelpers, Viewer } from '../lib/board'
+import { selection, useSelected } from '../lib/selection'
 import { fmtDate } from '../lib/prefs'
 import { avatarUrl, label } from '../lib/user'
 import type { CardSummary, Label, Member, Status } from '../lib/types'
@@ -76,6 +78,11 @@ function TileBody({ card, b }: { card: CardSummary; b: BoardHelpers }) {
             {fmtDate(card.due_at)}
           </span>
         )}
+        {b.watching.has(card.id) && (
+          <span className="inline-flex items-center text-accent" title={t('watch.watching')}>
+            <Eye size={11} />
+          </span>
+        )}
         {feedPicked.has(card.id) && (
           <span className="inline-flex items-center text-accent" title={t('feed.inFeed')}>
             <CalendarCheck size={11} />
@@ -102,6 +109,16 @@ function TileBody({ card, b }: { card: CardSummary; b: BoardHelpers }) {
           <span className="inline-flex items-center gap-0.5">
             <MessageSquare size={11} />
             {card.comment_count}
+          </span>
+        )}
+        {(!!card.time_minutes || !!card.estimate_minutes) && (
+          <span
+            className={clsx('inline-flex items-center gap-0.5', !!card.estimate_minutes && (card.time_minutes ?? 0) > card.estimate_minutes && 'text-red-600 dark:text-red-400')}
+            title={t('time.tileHint')}
+          >
+            <Timer size={11} />
+            {fmtMinutes(card.time_minutes ?? 0)}
+            {!!card.estimate_minutes && `/${fmtMinutes(card.estimate_minutes)}`}
           </span>
         )}
         {card.attachment_count > 0 && (
@@ -251,6 +268,7 @@ export const CardTile = memo(function CardTile({
   })
   // Controlled so the preview never opens on top of a dialog (e.g. the card you just clicked).
   const [preview, setPreview] = useState(false)
+  const selected = useSelected(card.id)
   return (
     <HoverCard.Root
       openDelay={650}
@@ -258,7 +276,7 @@ export const CardTile = memo(function CardTile({
       open={preview}
       onOpenChange={(o) => setPreview(o && !document.querySelector('[role=dialog]'))}
     >
-      <CardContextMenu card={{ ...card, board_id: b.data!.board.id }} b={b} onOpen={() => onOpen(card.id)} onNew={onNew}>
+      <CardContextMenu card={{ ...card, board_id: b.data!.board.id }} b={b} onOpen={() => onOpen(card.id)} onNew={onNew} selectable>
       <HoverCard.Trigger asChild>
         <div
           ref={setNodeRef}
@@ -266,8 +284,15 @@ export const CardTile = memo(function CardTile({
           {...attributes}
           aria-disabled={undefined /* not draggable ≠ not clickable: the card still opens */}
           {...listeners}
-          onClick={() => {
+          aria-selected={selected || undefined}
+          onClick={(e) => {
             setPreview(false)
+            // Ctrl/⌘/Shift-click selects; while anything is selected, a click (or tap) adds or removes cards
+            if (e.ctrlKey || e.metaKey || e.shiftKey || selection.size() > 0) {
+              e.preventDefault()
+              selection.toggle(card.id)
+              return
+            }
             onOpen(card.id)
           }}
           onContextMenu={() => setPreview(false)}
@@ -276,9 +301,10 @@ export const CardTile = memo(function CardTile({
             else listeners?.onKeyDown?.(e)
           }}
           className={clsx(
-            'relative cursor-pointer select-none rounded-md border border-line bg-surface px-3 py-2 shadow-sm outline-none transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-accent',
+            'relative cursor-pointer select-none rounded-md border border-line px-3 py-2 shadow-sm outline-none transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-accent',
             card.color && 'pl-3.5',
             isDragging && 'opacity-40',
+            selected ? 'bg-[color-mix(in_srgb,var(--surface)_88%,var(--accent))] ring-2 ring-accent' : 'bg-surface',
           )}
         >
           <TileBody card={card} b={b} />

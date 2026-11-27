@@ -37,6 +37,7 @@ pub struct CreateUser {
     /// email them a "set your password" link (needs an email address and email set up)
     #[serde(default)]
     send_invite: bool,
+    department_id: Option<Uuid>,
 }
 fn yes() -> bool {
     true
@@ -48,7 +49,8 @@ pub async fn insert_user(
     username: &str,
     display_name: &str,
     email: Option<String>,
-    password: &str,
+    // None: no password (an account created by single sign-on)
+    password: Option<&str>,
     is_super_admin: bool,
     can_create_boards: bool,
     locale: &str,
@@ -58,14 +60,18 @@ pub async fn insert_user(
 ) -> AppResult<User> {
     let locale = if locale == "th" { "th" } else { "en" };
     let username = validate_username(username)?;
-    validate_password(password)?;
+    if let Some(p) = password {
+        validate_password(p)?;
+    }
     let email = crate::auth::normalize_email(email)?.flatten();
     if let Some(e) = &email {
         crate::auth::ensure_email_free(db, e, None).await?;
     }
     let display_name = if display_name.trim().is_empty() { username.clone() } else { display_name.trim().to_string() };
-    let pw = password.to_string();
-    let hash = crate::auth::hash_password_bounded(pw).await?;
+    let hash = match password {
+        Some(p) => Some(crate::auth::hash_password_bounded(p.to_string()).await?),
+        None => None,
+    };
     let id = Uuid::now_v7();
     let color = AVATAR_COLORS[(id.as_u128() % AVATAR_COLORS.len() as u128) as usize];
     let user: User = sqlx::query_as(sqlf!(
@@ -111,13 +117,18 @@ pub async fn create_user(
     Json(r): Json<CreateUser>,
 ) -> AppResult<Json<serde_json::Value>> {
     let locale = r.locale.clone().unwrap_or_else(|| admin.locale.clone());
+    crate::departments::check(&state.db, r.department_id).await?;
     // the admin chose this password, so the user must replace it at first sign-in
-    let u = insert_user(&state.db, &r.username, &r.display_name, r.email, &r.password, r.is_super_admin, r.can_create_boards, &locale, true, None)
+    let u = insert_user(&state.db, &r.username, &r.display_name, r.email, Some(&r.password), r.is_super_admin, r.can_create_boards, &locale, true, None)
         .await
         .map_err(|e| match e {
             AppError::Conflict("already_exists") => AppError::Conflict("username_taken"),
             e => e,
         })?;
+    let u = match r.department_id {
+        Some(d) => sqlx::query_as(sqlf!("UPDATE users SET department_id = $2 WHERE id = $1 RETURNING {USER_COLUMNS}")).bind(u.id).bind(d).fetch_one(&state.db).await?,
+        None => u,
+    };
     let mut invite = serde_json::Value::Null;
     if r.send_invite && u.email.is_some() {
         invite = match crate::auth::send_link_email(&state, u.id, "invite").await {
@@ -159,6 +170,9 @@ pub struct UpdateUser {
     is_super_admin: Option<bool>,
     can_create_boards: Option<bool>,
     is_active: Option<bool>,
+    /// null = no department
+    #[serde(default, deserialize_with = "crate::boards::double_option")]
+    department_id: Option<Option<Uuid>>,
 }
 
 pub async fn update_user(
@@ -180,6 +194,7 @@ pub async fn update_user(
     if let Some(Some(e)) = &email {
         crate::auth::ensure_email_free(&state.db, e, Some(id)).await?;
     }
+    crate::departments::check(&state.db, r.department_id.flatten()).await?;
     let before: User = sqlx::query_as(sqlf!("SELECT {USER_COLUMNS} FROM users WHERE id = $1 AND deleted_at IS NULL"))
         .bind(id)
         .fetch_one(&state.db)
@@ -187,7 +202,8 @@ pub async fn update_user(
     let user: User = sqlx::query_as(sqlf!(
         "UPDATE users SET display_name = COALESCE($2, display_name), email = CASE WHEN $7 THEN $3 ELSE email END,
          is_super_admin = COALESCE($4, is_super_admin), can_create_boards = COALESCE($5, can_create_boards),
-         is_active = COALESCE($6, is_active), updated_at = now() WHERE id = $1 RETURNING {USER_COLUMNS}"
+         is_active = COALESCE($6, is_active), department_id = CASE WHEN $8 THEN $9 ELSE department_id END,
+         updated_at = now() WHERE id = $1 RETURNING {USER_COLUMNS}"
     ))
     .bind(id)
     .bind(r.display_name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
@@ -196,6 +212,8 @@ pub async fn update_user(
     .bind(r.can_create_boards)
     .bind(r.is_active)
     .bind(email.is_some())
+    .bind(r.department_id.is_some())
+    .bind(r.department_id.flatten())
     .fetch_one(&state.db)
     .await?;
     if !user.is_active {
@@ -208,6 +226,9 @@ pub async fn update_user(
     }
     if before.email != user.email {
         changes.insert("email".into(), serde_json::Value::Bool(true));
+    }
+    if before.department_id != user.department_id {
+        changes.insert("department".into(), serde_json::Value::Bool(true));
     }
     for (k, a, b) in [
         ("is_super_admin", before.is_super_admin, user.is_super_admin),
@@ -249,6 +270,7 @@ pub async fn reset_password(
         return Err(AppError::NotFound);
     }
     sqlx::query("DELETE FROM sessions WHERE user_id = $1").bind(id).execute(&state.db).await?;
+    crate::tokens::revoke_all(&state.db, id).await?;
     crate::audit::log(&state, Some(me.id), "user_password_reset", Some(id), ip.as_deref(), serde_json::json!({})).await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -261,11 +283,12 @@ pub struct UserBrief {
     display_name: String,
     avatar_color: String,
     avatar_id: Option<Uuid>,
+    department_id: Option<Uuid>,
 }
 
 pub async fn directory(State(state): State<AppState>, _u: CurrentUser) -> AppResult<Json<Vec<UserBrief>>> {
     let users: Vec<UserBrief> = sqlx::query_as(
-        "SELECT id, username, display_name, avatar_color, avatar_id FROM users WHERE is_active ORDER BY lower(display_name)",
+        "SELECT id, username, display_name, avatar_color, avatar_id, department_id FROM users WHERE is_active ORDER BY lower(display_name)",
     )
     .fetch_all(&state.db)
     .await?;
@@ -360,6 +383,9 @@ pub async fn delete_user(
         "DELETE FROM card_assignees WHERE user_id = $1",
         "DELETE FROM board_prefs WHERE user_id = $1",
         "DELETE FROM sessions WHERE user_id = $1",
+        "DELETE FROM user_identities WHERE user_id = $1",
+        "DELETE FROM api_tokens WHERE user_id = $1",
+        "DELETE FROM card_watchers WHERE user_id = $1",
         "DELETE FROM password_tokens WHERE user_id = $1",
     ] {
         sqlx::query(q).bind(id).execute(&mut *tx).await?;

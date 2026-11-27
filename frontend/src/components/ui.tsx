@@ -149,7 +149,7 @@ export function MenuContent({ children, align = 'end' }: { children: ReactNode; 
         align={align}
         sideOffset={4}
         onCloseAutoFocus={closeAutoFocus}
-        className="z-50 min-w-44 rounded-lg border border-line bg-surface p-1 text-sm shadow-lg"
+        className="z-50 max-h-[min(70vh,var(--radix-dropdown-menu-content-available-height))] min-w-44 overflow-y-auto rounded-lg border border-line bg-surface p-1 text-sm shadow-lg"
       >
         {children}
       </RMenu.Content>

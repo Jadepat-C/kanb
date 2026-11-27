@@ -8,6 +8,7 @@ import { api } from '../lib/api'
 import { fmtDate } from '../lib/prefs'
 import { avatarUrl } from '../lib/user'
 import { Avatar, Spinner } from './ui'
+import { fmtMinutes } from '../lib/time'
 
 interface Data {
   days: number
@@ -53,6 +54,12 @@ interface Data {
   priority: { key: string; open: number }[]
   statuses: { key: string; name: string; color: string; open: number }[]
   flow: { day: string; list_id: string; cards: number }[]
+  time?: {
+    total_minutes: number
+    people: { user_id: string; name: string; color: string; minutes: number }[]
+    cards: { id: string; number: number; title: string; minutes: number; estimate_minutes: number | null }[]
+    estimated: { cards: number; estimate_minutes: number; logged_minutes: number }
+  }
 }
 interface CardRef {
   id: string
@@ -161,6 +168,37 @@ export function Analytics({ boardId, onOpenCard }: { boardId: string; onOpenCard
           <Card title={t('analytics.people')} hint={t('analytics.peopleHint')}>
             <People rows={d.people} unassigned={o.unassigned} />
           </Card>
+          {d.time && (d.time.total_minutes > 0 || d.time.estimated.cards > 0) && (
+            <Card title={t('analytics.timeTitle')} hint={t('analytics.timeHint', { total: fmtMinutes(d.time.total_minutes) })}>
+              <Bars fmt={fmtMinutes} rows={d.time.people.map((p) => ({ key: p.user_id, label: p.name, value: p.minutes }))} />
+              {d.time.estimated.cards > 0 && (
+                <p className="mt-3 text-sm">
+                  {t('analytics.estimateVsLogged', {
+                    count: d.time.estimated.cards,
+                    est: fmtMinutes(d.time.estimated.estimate_minutes),
+                    logged: fmtMinutes(d.time.estimated.logged_minutes),
+                    pct: Math.round((d.time.estimated.logged_minutes / Math.max(1, d.time.estimated.estimate_minutes)) * 100),
+                  })}
+                </p>
+              )}
+              {d.time.cards.length > 0 && (
+                <ul className="mt-3 divide-y divide-[var(--border)] border-t border-line">
+                  {d.time.cards.map((c) => (
+                    <li key={c.id}>
+                      <button onClick={() => onOpenCard(c.id)} className="flex w-full items-center gap-2 py-1.5 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer">
+                        <span className="text-xs text-muted">#{c.number}</span>
+                        <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                        <span className="whitespace-nowrap text-xs tabular-nums">
+                          {fmtMinutes(c.minutes)}
+                          {c.estimate_minutes ? <span className="text-muted"> / {fmtMinutes(c.estimate_minutes)}</span> : null}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          )}
           <Card title={t('analytics.labels')}>
             {d.labels.length === 0 ? (
               <Empty />
@@ -524,7 +562,7 @@ function Flow({ flow, columns }: { flow: Data['flow']; columns: Data['columns'] 
 }
 
 /** Horizontal bars, one hue; an item's own colour (label, status) is a dot beside its name, never the bar. */
-function Bars({ rows }: { rows: { key: string; label: string; value: number; dot?: string; note?: string; limit?: number | null }[] }) {
+function Bars({ rows, fmt = String }: { rows: { key: string; label: string; value: number; dot?: string; note?: string; limit?: number | null }[]; fmt?: (v: number) => string }) {
   const { t } = useTranslation()
   const max = Math.max(1, ...rows.map((r) => Math.max(r.value, r.limit ?? 0)))
   if (rows.length === 0) return <Empty />
@@ -533,7 +571,7 @@ function Bars({ rows }: { rows: { key: string; label: string; value: number; dot
       {rows.map((r) => {
         const over = r.limit != null && r.limit > 0 && r.value > r.limit
         return (
-          <li key={r.key} className="grid grid-cols-[minmax(0,9rem)_1fr_auto] items-center gap-2 text-sm" title={`${r.label}: ${r.value}`}>
+          <li key={r.key} className="grid grid-cols-[minmax(0,9rem)_1fr_auto] items-center gap-2 text-sm" title={`${r.label}: ${fmt(r.value)}`}>
             <span className="flex min-w-0 items-center gap-1.5">
               {r.dot && <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: r.dot }} />}
               <span className="truncate">{r.label}</span>
@@ -554,7 +592,7 @@ function Bars({ rows }: { rows: { key: string; label: string; value: number; dot
               )}
             </span>
             <span className="flex items-center gap-1 whitespace-nowrap text-xs tabular-nums">
-              <span className="font-semibold">{r.value}</span>
+              <span className="font-semibold">{fmt(r.value)}</span>
               {r.limit != null && r.limit > 0 && <span className="text-muted">/ {r.limit}</span>}
               {over && (
                 <span className="flex items-center gap-0.5 text-[var(--text)]">

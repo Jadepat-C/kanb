@@ -30,12 +30,16 @@ mod board_contacts;
 mod board_templates;
 mod contacts;
 mod crypto;
+mod departments;
 mod export;
 mod ical;
 mod setup;
 mod signup;
+mod sso;
 mod templates;
 mod throttle;
+mod timelog;
+mod tokens;
 mod twofa;
 mod tutorial;
 
@@ -170,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.cmd.unwrap_or(Cmd::Serve) {
         Cmd::CreateAdmin { username, display_name, locale } => {
             let pw = read_password()?;
-            let u = admin::insert_user(&db, &username, &display_name, None, &pw, true, true, &locale, false, None)
+            let u = admin::insert_user(&db, &username, &display_name, None, Some(&pw), true, true, &locale, false, None)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("created super admin {} ({})", u.username, u.id);
@@ -300,6 +304,13 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/auth/login/code", post(twofa::login_code))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/options", get(auth::options))
+        .route("/auth/sso/start", get(sso::start))
+        .route("/auth/sso/callback", get(sso::callback))
+        .route("/me/sso", get(sso::mine))
+        .route("/me/sso/link", post(sso::link))
+        .route("/me/sso/{id}", axum::routing::delete(sso::unlink))
+        .route("/admin/sso", get(sso::admin_get).put(sso::admin_save))
+        .route("/admin/sso/test", post(sso::admin_test))
         .route("/auth/forgot", post(auth::forgot))
         .route("/auth/reset/check", post(auth::check_token))
         .route("/auth/reset", post(auth::reset))
@@ -329,6 +340,10 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/me/avatar", post(avatars::upload).delete(avatars::remove).layer(DefaultBodyLimit::max(11 * 1024 * 1024)))
         .route("/avatars/{id}", get(avatars::serve))
         .route("/users", get(admin::directory))
+        .route("/departments", get(departments::list))
+        .route("/admin/departments", post(departments::create))
+        .route("/admin/departments/{id}", patch(departments::update).delete(departments::delete))
+        .route("/admin/departments/{id}/members", put(departments::members))
         .route("/admin/users", get(admin::list_users).post(admin::create_user))
         .route("/admin/users/{id}", patch(admin::update_user).delete(admin::delete_user))
         .route("/admin/users/{id}/delete-preview", get(admin::delete_preview))
@@ -394,6 +409,15 @@ async fn serve(db: PgPool, config: Config) -> anyhow::Result<()> {
         .route("/roles/{id}", patch(boards::update_role).delete(boards::delete_role))
         .route("/cards/{id}", get(cards::get_card).patch(cards::update_card).delete(cards::archive_card))
         .route("/cards/{id}/move", post(cards::move_card))
+        .route("/cards/{id}/watch", put(cards::watch))
+        .route("/cards/{id}/time", get(timelog::list).post(timelog::log))
+        .route("/cards/{id}/time/start", post(timelog::start))
+        .route("/time/{id}", patch(timelog::edit).delete(timelog::delete))
+        .route("/me/timer", get(timelog::mine))
+        .route("/me/tokens", get(tokens::list).post(tokens::create))
+        .route("/me/tokens/{id}", axum::routing::delete(tokens::revoke))
+        .route("/me/timer/stop", post(timelog::stop))
+        .route("/boards/{id}/cards/bulk", post(cards::bulk))
         .route("/cards/{id}/duplicate", post(cards::duplicate_card))
         .route("/cards/{id}/restore", post(cards::restore_card))
         .route("/cards/{id}/permanent", axum::routing::delete(cards::purge_card))

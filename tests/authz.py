@@ -18,13 +18,18 @@ wrong reason. Destructive calls get a fresh throwaway item each time. Afterwards
 cross-board tricks (using one board's IDs from another board), and that refused calls changed nothing.
 """
 
+import base64
+import hashlib
 import http.client
 import http.cookiejar
+import http.server
 import json
 import os
 import re
 import secrets
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -48,9 +53,12 @@ class Client:
         self.jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
         self.id: Optional[str] = None
+        self.bearer: Optional[str] = None  # an API token instead of the session cookie
 
     def call(self, method: str, path: str, body: Any = None, raw: Optional[bytes] = None, ctype: Optional[str] = None):
         data, headers = None, {"Origin": BASE}
+        if self.bearer:
+            headers["Authorization"] = "Bearer " + self.bearer
         if raw is not None:
             data, headers["Content-Type"] = raw, ctype or "application/octet-stream"
         elif body is not None or method not in ("GET", "DELETE"):
@@ -78,6 +86,19 @@ class Client:
             f"Content-Type: {ctype}\r\n\r\n"
         ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
         return self.call("POST", path, raw=raw, ctype=f"multipart/form-data; boundary={boundary}")
+
+    def hop(self, url: str):
+        """GET without following redirects: (status, Location). `url` is an API path or a full URL; cookies kept."""
+        class Stop(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **kw):
+                return None
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar), Stop)
+        full = url if url.startswith("http") else BASE + "/api" + url
+        try:
+            with opener.open(urllib.request.Request(full, headers={"Origin": BASE}), timeout=30) as r:
+                return r.status, r.headers.get("Location")
+        except urllib.error.HTTPError as e:
+            return e.code, e.headers.get("Location")
 
     def download(self, path: str) -> bytes:
         req = urllib.request.Request(BASE + "/api" + path, headers={"Origin": BASE})
@@ -229,6 +250,12 @@ def fresh(w: World, kind: str) -> dict:
         for person, role in (("viewer", "Viewer"), ("commenter", "Commenter"), ("editor", "Editor")):
             o.ok("POST", f"/boards/{bid}/members", {"user_id": w.people[person].id, "role_id": roles[role]})
         return {"board": bid}
+    if kind == "dept":
+        return {"dept": w.admin.ok("POST", "/admin/departments", {"name": "authz dept " + RUN + secrets.token_hex(3)})["id"]}
+    if kind == "time":  # the editor's own entry
+        return {"time": w.people["editor"].ok("POST", f"/cards/{f['card']}/time", {"minutes": 5})["id"]}
+    if kind == "token":  # someone else's API token
+        return {"token": w.extra.ok("POST", "/me/tokens", {"name": "authz", "scope": "read", "expires_days": 1})["info"]["id"]}
     if kind == "archived_board":
         bid = fresh(w, "board")["board"]
         o.ok("DELETE", f"/boards/{bid}")
@@ -353,6 +380,25 @@ CASES = [
     Case("DELETE", "/me/sessions", "outsider", note="sign out my other devices"),
     Case("DELETE", "/me/sessions/{session}", "none", fresh="session", note="someone else's device from my profile"),
     Case("PUT", "/admin/security", "admin", {"require_2fa": False}),
+    Case("GET", "/admin/sso", "admin"),
+    Case("POST", "/admin/sso/test", "admin", {"enabled": False, "issuer": "http://127.0.0.1:9", "client_id": "x"}),
+    Case("PUT", "/admin/sso", "admin", {"enabled": False, "issuer": "", "client_id": ""}),
+    Case("GET", "/me/sso", "outsider"),
+    Case("PUT", "/cards/{card}/watch", "viewer", {"watching": True}),
+    Case("GET", "/departments", "outsider"),
+    Case("POST", "/admin/departments", "admin", {"name": "authz dept " + RUN}),
+    Case("PATCH", "/admin/departments/{dept}", "admin", {"color": "#ff0000"}, fresh="dept"),
+    Case("PUT", "/admin/departments/{dept}/members", "admin", {"add": [], "remove": []}, fresh="dept"),
+    Case("DELETE", "/admin/departments/{dept}", "admin", fresh="dept"),
+    Case("GET", "/cards/{card}/time", "viewer"),
+    Case("POST", "/cards/{card}/time", "editor", {"minutes": 3, "note": "authz"}),
+    Case("PATCH", "/time/{time}", "editor", {"note": "changed"}, fresh="time", note="the editor's own entry; owners manage the board"),
+    Case("DELETE", "/time/{time}", "editor", fresh="time"),
+    Case("GET", "/me/timer", "outsider"),
+    Case("GET", "/me/tokens", "outsider"),
+    Case("POST", "/me/tokens", "outsider", {"name": "authz", "scope": "read", "expires_days": 1}),
+    Case("DELETE", "/me/tokens/{token}", "none", fresh="token", note="someone else's API token"),
+    Case("POST", B + "/cards/bulk", "viewer", {"card_ids": ["{card}"], "action": "watch", "watching": False}),
     Case("GET", "/admin/users/{extra_id}/delete-preview", "admin"),
     Case("PATCH", "/admin/users/{extra_id}", "admin", {"display_name": "authz extra"}),
     Case("POST", "/admin/users", "admin", {"username": "authz_" + RUN + "_nope", "display_name": "", "password": "Nope-12345678", "is_super_admin": True, "can_create_boards": True, "send_invite": False}),
@@ -510,6 +556,22 @@ def main() -> int:
         n, msgs = signup_flow(w)
         checked += n
         problems.extend(msgs)
+
+        # 11. several cards at once
+        n, msgs = bulk_flow(w, f)
+        checked += n
+        problems.extend(msgs)
+
+        # 12. departments, time tracking, API tokens
+        for flow in (departments_flow, time_flow, tokens_flow):
+            n, msgs = flow(w, f)
+            checked += n
+            problems.extend(msgs)
+
+        # 13. single sign-on, against a fake OpenID Connect provider
+        n, msgs = sso_flow(w)
+        checked += n
+        problems.extend(msgs)
     finally:
         if os.environ.get("KEEP") == "1":
             print(f"KEEP=1: left the test users authz_{RUN}_* and their boards in place")
@@ -641,6 +703,37 @@ def notification_choices(w: World, f: dict):
         expect("clear all empties the list", left["items"] == [] and left["unread"] == 0)
     o.ok("PUT", f"/cards/{f['card2']}/assignees", {"ids": []})
     expect("a reminder outside the list is refused", o.call("PATCH", f"/cards/{f['card']}", {"remind_minutes": 99999})[0] == 400)
+
+    # watching a card: notified like its assignees, only while on the board
+    c = w.people["commenter"]
+    v.ok("POST", "/notifications/clear", {"all": True})
+    v.ok("PATCH", "/me", {"notify_events": ["commented", "card_updated"]})
+    v.ok("PUT", f"/cards/{f['card2']}/watch", {"watching": True})
+    expect("the card says I'm watching", v.ok("GET", f"/cards/{f['card2']}").get("watching") is True)
+    expect("so does the board", f["card2"] in v.ok("GET", f"/boards/{f['board']}").get("watching", []))
+    expect("someone else isn't watching", o.ok("GET", f"/cards/{f['card2']}").get("watching") is False)
+    c.ok("POST", f"/cards/{f['card2']}/comments", {"body": "a comment for the watchers"})
+    mine = lambda kind: [n for n in v.ok("GET", "/notifications")["items"] if n["kind"] == kind and n["card_id"] == f["card2"]]
+    expect("a watcher hears about comments", len(mine("commented")) == 1)
+    e.ok("PATCH", f"/cards/{f['card2']}", {"title": "second (edited)"})
+    deadline = time.time() + 25  # card activity is bundled for 8 s and sent every 5 s
+    while time.time() < deadline and not mine("card_updated"):
+        time.sleep(1)
+    expect("a watcher hears about edits", len(mine("card_updated")) == 1)
+    v.ok("PUT", f"/cards/{f['card2']}/watch", {"watching": False})
+    c.ok("POST", f"/cards/{f['card2']}/comments", {"body": "after unwatching"})
+    expect("not after unwatching", len(mine("commented")) == 1)
+    # someone who leaves the board stops watching its cards
+    x = w.extra
+    o.call("POST", f"/boards/{f['board']}/members", {"user_id": x.id, "role_id": f["role_viewer"]})
+    x.ok("PATCH", "/me", {"notify_events": ["commented"]})
+    x.ok("PUT", f"/cards/{f['card2']}/watch", {"watching": True})
+    o.ok("DELETE", f"/boards/{f['board']}/members/{x.id}")
+    c.ok("POST", f"/cards/{f['card2']}/comments", {"body": "after leaving"})
+    expect("a member who left gets nothing", not [n for n in x.ok("GET", "/notifications")["items"] if n["card_id"] == f["card2"]])
+    o.ok("POST", f"/boards/{f['board']}/members", {"user_id": x.id, "role_id": f["role_viewer"]})
+    expect("and isn't watching when added again", f["card2"] not in x.ok("GET", f"/boards/{f['board']}").get("watching", []))
+    v.ok("PATCH", "/me", {"notify_events": ["assigned", "mentioned", "commented", "due_soon", "overdue"]})
     return checked, problems
 
 
@@ -1023,6 +1116,457 @@ def role_limits(w: World, f: dict):
     expect("edit someone else's card after the limit is lifted", st, True, d)
     return checked, problems
 
+def checker(topic: str):
+    problems, count = [], [0]
+
+    def expect(label: str, ok: bool):
+        count[0] += 1
+        if not ok:
+            problems.append(f"{topic}: {label}")
+    return expect, problems, count
+
+
+def departments_flow(w: World, f: dict):
+    expect, problems, n = checker("departments")
+    a, o, v = w.admin, w.people["owner"], w.people["viewer"]
+    name = "authz Sales " + RUN
+    d = a.ok("POST", "/admin/departments", {"name": name, "color": "#2f5bd3"})["id"]
+    st, e = a.call("POST", "/admin/departments", {"name": name.upper()})
+    expect(f"names are unique, ignoring case ({st} {e})", st == 409 and (e or {}).get("error") == "department_exists")
+    expect("a colour must be a colour", a.call("PATCH", f"/admin/departments/{d}", {"color": "red; x"})[0] == 400)
+    a.ok("PUT", f"/admin/departments/{d}/members", {"add": [v.id]})
+    expect("the person is in it", next(u for u in a.ok("GET", "/admin/users") if u["id"] == v.id)["department_id"] == d)
+    expect("the directory shows it", next(u for u in o.ok("GET", "/users") if u["id"] == v.id).get("department_id") == d)
+    expect("board members show it", next(m for m in o.ok("GET", f"/boards/{f['board']}")["members"] if m["user_id"] == v.id).get("department_id") == d)
+    expect("the list counts people", next(x for x in v.ok("GET", "/departments") if x["id"] == d)["members"] == 1)
+    v.call("PATCH", "/me", {"department_id": None})
+    expect("people can't change their own", v.ok("GET", "/me")["department_id"] == d)
+    expect("an unknown department is refused", a.call("PATCH", f"/admin/users/{v.id}", {"department_id": "00000000-0000-0000-0000-000000000000"})[0] == 400)
+    a.ok("PATCH", f"/admin/users/{v.id}", {"department_id": None})
+    expect("an admin can take them out", v.ok("GET", "/me")["department_id"] is None)
+    a.ok("PATCH", f"/admin/users/{v.id}", {"department_id": d})
+    a.ok("DELETE", f"/admin/departments/{d}")
+    expect("deleting it leaves people without one", v.ok("GET", "/me")["department_id"] is None)
+    return n[0], problems
+
+
+def time_flow(w: World, f: dict):
+    expect, problems, n = checker("time")
+    o, e, c, v = w.people["owner"], w.people["editor"], w.people["commenter"], w.people["viewer"]
+    card, card2 = f["card"], f["card2"]
+    e.call("POST", "/me/timer/stop", {})
+    r = e.ok("POST", f"/cards/{card}/time/start")
+    expect("a timer starts", e.ok("GET", "/me/timer")["running"]["card_id"] == card)
+    r = e.ok("POST", f"/cards/{card2}/time/start")
+    expect("starting another stops the first (one runs at a time)", r["stopped"] and r["stopped"]["card_id"] == card and e.ok("GET", "/me/timer")["running"]["card_id"] == card2)
+    expect("its time was logged", any(x["ended_at"] and x["user_id"] == e.id for x in e.ok("GET", f"/cards/{card}/time")["entries"]))
+    st, r = e.call("POST", "/me/timer/stop", {"minutes": 45, "note": "real time"})
+    expect(f"stop, correcting the time ({st} {r})", st == 200 and r["minutes"] == 45)
+    expect("nothing runs after stopping", e.ok("GET", "/me/timer")["running"] is None)
+    expect("stopping twice is refused", e.call("POST", "/me/timer/stop", {})[0] == 400)
+    expect("a commenter can't log time", c.call("POST", f"/cards/{card}/time", {"minutes": 5})[0] == 403)
+    expect("nor start a timer", c.call("POST", f"/cards/{card}/time/start")[0] == 403)
+    for bad in (0, -5, 7 * 24 * 60 + 1):
+        expect(f"{bad} minutes is refused", e.call("POST", f"/cards/{card}/time", {"minutes": bad})[0] == 400)
+    entry = e.ok("POST", f"/cards/{card2}/time", {"minutes": 30, "note": "mine"})["id"]
+    expect("the card counts it", next(k for k in o.ok("GET", f"/boards/{f['board']}")["cards"] if k["id"] == card2)["time_minutes"] >= 75)
+    expect("someone else's entry can't be changed", v.call("PATCH", f"/time/{entry}", {"note": "x"})[0] == 403)
+    expect("its owner can change it", e.call("PATCH", f"/time/{entry}", {"minutes": 40})[0] == 200)
+    expect("a board manager can fix it", o.call("PATCH", f"/time/{entry}", {"note": "fixed"})[0] == 200)
+    expect("the estimate needs card editing", c.call("PATCH", f"/cards/{card2}", {"estimate_minutes": 60})[0] == 403)
+    o.ok("PATCH", f"/cards/{card2}", {"estimate_minutes": 60})
+    t = v.ok("GET", f"/cards/{card2}/time")
+    expect("a viewer sees the total and estimate", t["estimate_minutes"] == 60 and t["total_minutes"] >= 85 and not t["can_log"])
+    csv = o.download(f"/boards/{f['board']}/export?format=csv").decode("utf-8-sig")
+    expect("the CSV export has the time columns", "Time logged (hours)" in csv.splitlines()[0])
+    a = o.ok("GET", f"/boards/{f['board']}/analytics?days=30")
+    expect("analytics shows logged time", a.get("time", {}).get("total_minutes", 0) >= 85)
+    # a timer stops when its owner leaves the board
+    x = w.extra
+    if o.call("POST", f"/boards/{f['board']}/members", {"user_id": x.id, "role_id": f["role_editor"]})[0] == 409:
+        o.ok("PATCH", f"/boards/{f['board']}/members/{x.id}", {"role_id": f["role_editor"]})
+    x.call("POST", "/me/timer/stop", {})
+    x.ok("POST", f"/cards/{card}/time/start")
+    o.ok("DELETE", f"/boards/{f['board']}/members/{x.id}")
+    expect("leaving the board stops your timer there", x.ok("GET", "/me/timer")["running"] is None)
+    o.ok("POST", f"/boards/{f['board']}/members", {"user_id": x.id, "role_id": f["role_viewer"]})
+    # public links don't show it
+    token = o.ok("PUT", f"/boards/{f['board']}/share", {"enabled": True})["url"].rsplit("/p/", 1)[1]
+    pub = Client("anon").ok("GET", f"/public/{token}")
+    expect("a public link shows no time tracking", all(k.get("time_minutes", 0) == 0 and k.get("estimate_minutes") is None for k in pub["cards"]))
+    o.ok("PUT", f"/boards/{f['board']}/share", {"enabled": False})
+    e.ok("DELETE", f"/time/{entry}")
+    return n[0], problems
+
+
+def tokens_flow(w: World, f: dict):
+    expect, problems, n = checker("API tokens")
+    e, v = w.people["editor"], w.people["viewer"]
+    r = e.ok("POST", "/me/tokens", {"name": "authz read", "scope": "read", "expires_days": 30})
+    PASSWORDS.append(r["token"])
+    expect("tokens look like kanb_…", r["token"].startswith("kanb_") and r["info"]["prefix"] in r["token"])
+    expect("the token itself is never listed", r["token"] not in json.dumps(e.ok("GET", "/me/tokens")))
+    read = Client("read token")
+    read.bearer = r["token"]
+    expect("a read token reads", read.call("GET", f"/boards/{f['board']}")[0] == 200 and read.ok("GET", "/me")["id"] == e.id)
+    st, x = read.call("PATCH", f"/cards/{f['card']}", {"priority": 1})
+    expect(f"a read token can't write ({st} {x})", st == 403 and (x or {}).get("error") == "token_read_only")
+    wr = e.ok("POST", "/me/tokens", {"name": "authz write", "scope": "write"})
+    PASSWORDS.append(wr["token"])
+    write = Client("write token")
+    write.bearer = wr["token"]
+    expect("a write token writes", write.call("POST", f"/cards/{f['card']}/comments", {"body": "from a script"})[0] == 200)
+    expect("with its owner's permissions only", write.call("DELETE", f"/boards/{f['board']}/permanent")[0] == 403)
+    for method, path, body in [("GET", "/me/tokens", None), ("POST", "/me/tokens", {"name": "x", "scope": "write"}), ("POST", "/me/password", {"current_password": "x", "new_password": "Hijack-12345678"}),
+                               ("POST", "/me/2fa/setup", {}), ("GET", "/me/sessions", None), ("DELETE", "/me/sessions", None), ("GET", "/me/sso", None),
+                               ("PATCH", "/me", {"email": "attacker@example.com"})]:
+        st, x = write.call(method, path, body)
+        expect(f"a token can't {method} {path} ({st} {x})", st == 403 and (x or {}).get("error") == "token_not_allowed")
+    expect("but may change harmless settings", write.call("PATCH", "/me", {"theme": "dark"})[0] == 200)
+    # a reverse proxy's Basic auth in front of Kanb sends its own Authorization header: the session still counts
+    req = urllib.request.Request(BASE + "/api/me", headers={"Origin": BASE, "Authorization": "Basic dXNlcjpwYXNz"})
+    try:
+        with v.opener.open(req, timeout=30) as resp:
+            st = resp.status
+    except urllib.error.HTTPError as err:
+        st = err.code
+    expect(f"a session with a proxy's Basic auth header still works ({st})", st == 200)
+    write.call("POST", "/auth/logout", {})
+    expect("signing out (a session thing) doesn't touch a token", write.call("GET", "/me")[0] == 200)
+    expect("no live updates with a token", write.websocket(f"/boards/{f['board']}/ws") != 101)
+    st, _ = Client("query").call("GET", "/me?access_token=" + wr["token"])
+    expect("a token in the address is ignored", st == 401)
+    bad = Client("bad")
+    bad.bearer = "kanb_" + "0" * 64
+    expect("an unknown token is refused", bad.call("GET", "/me")[0] == 401)
+    junk = Client("junk")
+    junk.bearer = "not-a-token"
+    expect("a malformed one too", junk.call("GET", "/me")[0] == 401)
+    rid = r["info"]["id"]
+    expect("nobody else can revoke it", v.call("DELETE", f"/me/tokens/{rid}")[0] == 404)
+    e.ok("DELETE", f"/me/tokens/{rid}")
+    expect("a revoked token stops working", read.call("GET", "/me")[0] == 401)
+    expect("a bad expiry is refused", e.call("POST", "/me/tokens", {"name": "x", "scope": "read", "expires_days": 0})[0] == 400)
+    expect("a bad scope is refused", e.call("POST", "/me/tokens", {"name": "x", "scope": "admin"})[0] == 400)
+    # the account's own state applies
+    w.admin.ok("PATCH", f"/admin/users/{e.id}", {"is_active": False})
+    expect("a deactivated account's token is refused", write.call("GET", "/me")[0] == 401)
+    w.admin.ok("PATCH", f"/admin/users/{e.id}", {"is_active": True})
+    expect("and works again when reactivated", write.call("GET", "/me")[0] == 200)
+    # (deactivating also signed the editor out: nothing after this uses their session)
+    w.admin.ok("DELETE", f"/admin/users/{e.id}/sessions")
+    expect("signing someone out everywhere revokes their tokens", write.call("GET", "/me")[0] == 401)
+    log = w.admin.ok("GET", f"/admin/audit?user={e.id}")
+    expect("creating and revoking are in the activity log", {"token_created", "token_revoked"} <= {x["kind"] for x in log["entries"]})
+    expect("the token never is", r["token"] not in json.dumps(log) and wr["token"] not in json.dumps(log))
+    return n[0], problems
+
+
+def bulk_flow(w: World, f: dict):
+    o, v, e, x = w.people["owner"], w.people["viewer"], w.people["editor"], w.people["outsider"]
+    problems, checked = [], 0
+
+    def expect(label: str, ok: bool):
+        nonlocal checked
+        checked += 1
+        if not ok:
+            problems.append("bulk: " + label)
+
+    url = f"/boards/{f['board']}/cards/bulk"
+    a = o.ok("POST", f"/lists/{f['list']}/cards", {"title": "bulk a", "description": ""})["id"]
+    c = o.ok("POST", f"/lists/{f['list']}/cards", {"title": "bulk b", "description": ""})["id"]
+    cards = lambda: {k["id"]: k for k in o.ok("GET", f"/boards/{f['board']}")["cards"]}
+
+    r = e.ok("POST", url, {"card_ids": [a, c], "action": "move", "list_id": f["list2"]})
+    now = cards()
+    expect(f"an editor moves both ({r})", r["done"] == 2 and now[a]["list_id"] == f["list2"] and now[c]["list_id"] == f["list2"])
+    order = [k["id"] for k in sorted(now.values(), key=lambda k: k["position"]) if k["list_id"] == f["list2"]]
+    expect("they keep their order", order.index(a) < order.index(c))
+    r = e.ok("POST", url, {"card_ids": [a, c], "action": "update", "changes": {"priority": 2, "title": "renamed by bulk"}})
+    now = cards()
+    expect("an update changes them all", r["done"] == 2 and now[a]["priority"] == 2 and now[c]["priority"] == 2)
+    expect("but never renames", now[a]["title"] == "bulk a")
+    r = o.ok("POST", url, {"card_ids": [a, c], "action": "labels", "add": [f["label"]]})
+    expect("labels are added", r["done"] == 2 and f["label"] in cards()[c]["label_ids"])
+    o.ok("POST", url, {"card_ids": [a], "action": "labels", "remove": [f["label"]]})
+    now = cards()
+    expect("and removed, from those cards only", f["label"] not in now[a]["label_ids"] and f["label"] in now[c]["label_ids"])
+    r = o.ok("POST", url, {"card_ids": [a], "action": "assignees", "add": [x.id]})
+    expect(f"only board members can be assigned ({r})", x.id not in cards()[a]["assignee_ids"])
+
+    r = v.ok("POST", url, {"card_ids": [a, c], "action": "update", "changes": {"priority": 0}})
+    expect(f"a viewer changes nothing ({r})", r["done"] == 0 and len(r["failed"]) == 2 and cards()[a]["priority"] == 2)
+    r = o.ok("POST", url, {"card_ids": [a, f["x_card"]], "action": "update", "changes": {"priority": 1}})
+    expect(f"another board's card is refused ({r})", r["done"] == 1 and r["failed"] == [{"id": f["x_card"], "error": "not_found"}])
+    xb = x.ok("GET", f"/boards/{f['x_board']}")
+    expect("and left alone", next(k for k in xb["cards"] if k["id"] == f["x_card"])["priority"] == 0)
+    st, _ = x.call("POST", url, {"card_ids": [a], "action": "watch"})
+    expect("an outsider can't use it", st in (403, 404))
+    expect("an unknown action is refused", o.call("POST", url, {"card_ids": [a], "action": "explode"})[0] == 400)
+    expect("too many cards are refused", o.call("POST", url, {"card_ids": [f"00000000-0000-0000-0000-{i:012d}" for i in range(501)], "action": "watch"})[0] == 400)
+    r = v.ok("POST", url, {"card_ids": [a, c], "action": "watch", "watching": True})
+    expect("a viewer may watch them", r["done"] == 2 and {a, c} <= set(v.ok("GET", f"/boards/{f['board']}")["watching"]))
+    v.ok("POST", url, {"card_ids": [a, c], "action": "watch", "watching": False})
+    r = e.ok("POST", url, {"card_ids": [a, c], "action": "archive"})
+    expect("archive takes them off the board", r["done"] == 2 and a not in cards() and c not in cards())
+    return checked, problems
+
+
+# ---------------------------------------------------------------- single sign-on
+
+class FakeIdp:
+    """A tiny OpenID Connect provider on 127.0.0.1: discovery, authorize (no login form: it signs in whoever
+    `next` says), token (checks the client secret, the redirect URI and PKCE) and userinfo. `tamper` changes the
+    next ID token, to check that the server refuses it."""
+
+    def __init__(self, client_id: str, secret: str):
+        self.client_id, self.secret = client_id, secret
+        self.next: dict = {}
+        self.tamper: dict = {}
+        self.codes: dict = {}
+        self.userinfo: dict = {}
+        idp = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def send(self, status: int, body: Any = None, location: Optional[str] = None):
+                self.send_response(status)
+                if location:
+                    self.send_header("Location", location)
+                data = json.dumps(body).encode() if body is not None else b""
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                u = urllib.parse.urlparse(self.path)
+                q = dict(urllib.parse.parse_qsl(u.query))
+                if u.path == "/.well-known/openid-configuration":
+                    return self.send(200, {"issuer": idp.url, "authorization_endpoint": idp.url + "/authorize", "token_endpoint": idp.url + "/token",
+                                           "userinfo_endpoint": idp.url + "/userinfo", "token_endpoint_auth_methods_supported": ["client_secret_basic"]})
+                if u.path == "/authorize":
+                    if q.get("client_id") != idp.client_id or q.get("response_type") != "code" or q.get("code_challenge_method") != "S256":
+                        return self.send(400, {"error": "invalid_request"})
+                    code = secrets.token_hex(16)
+                    idp.codes[code] = (dict(idp.next), q["nonce"], q["code_challenge"], q["redirect_uri"])
+                    sep = "&" if "?" in q["redirect_uri"] else "?"
+                    return self.send(302, location=f"{q['redirect_uri']}{sep}code={code}&state={urllib.parse.quote(q['state'])}")
+                if u.path == "/userinfo":
+                    token = self.headers.get("Authorization", "").removeprefix("Bearer ")
+                    return self.send(200, idp.userinfo.get(token, {})) if token in idp.userinfo else self.send(401, {})
+                self.send(404, {})
+
+            def do_POST(self):
+                if self.path != "/token":
+                    return self.send(404, {})
+                form = dict(urllib.parse.parse_qsl(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()))
+                basic = base64.b64encode(f"{idp.client_id}:{idp.secret}".encode()).decode()
+                if self.headers.get("Authorization") != "Basic " + basic:
+                    return self.send(401, {"error": "invalid_client"})
+                got = idp.codes.pop(form.get("code", ""), None)
+                if got is None:
+                    return self.send(400, {"error": "invalid_grant"})
+                claims, nonce, challenge, redirect = got
+                verifier_hash = base64.urlsafe_b64encode(hashlib.sha256(form.get("code_verifier", "").encode()).digest()).decode().rstrip("=")
+                if verifier_hash != challenge or form.get("redirect_uri") != redirect:
+                    return self.send(400, {"error": "invalid_grant"})
+                now = int(time.time())
+                token = dict({"iss": idp.url, "aud": idp.client_id, "exp": now + 300, "iat": now, "nonce": nonce}, **claims)
+                token.update(idp.tamper)
+                token = {k: v for k, v in token.items() if v is not None}
+                b64 = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+                access = "at-" + secrets.token_hex(8)
+                idp.userinfo[access] = {k: v for k, v in claims.items() if v is not None}
+                id_token = b64({"alg": "RS256", "kid": "test"}) + "." + b64(token) + ".c2lnbmF0dXJl"
+                self.send(200, {"access_token": access, "token_type": "Bearer", "expires_in": 300, "id_token": id_token})
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+
+
+def sso_signin(c: Client, idp: FakeIdp, claims: dict, tamper: Optional[dict] = None, start: str = "/auth/sso/start", mangle=None):
+    """The browser's trip: Kanb → provider → Kanb's callback. Returns (status, Location) of the callback."""
+    idp.next, idp.tamper = claims, tamper or {}
+    if start.startswith("POST "):
+        st, r = c.call("POST", start[5:])
+        if st != 200:
+            return st, None
+        to_idp = r["url"]
+    else:
+        st, to_idp = c.hop(start)
+        if st not in (302, 303, 307) or not to_idp or not to_idp.startswith(idp.url):
+            return st, to_idp
+    st, back = Client("browser at the provider").hop(to_idp)
+    if st != 302 or not back:
+        return st, back
+    # the redirect URI is on PUBLIC_ORIGIN's first address (maybe the dev frontend): call the same path here
+    u = urllib.parse.urlparse(back)
+    path = u.path.removeprefix("/api") + "?" + (mangle(u.query) if mangle else u.query)
+    return c.hop(path)
+
+
+def sso_flow(w: World):
+    problems, checked = [], 0
+
+    def expect(label: str, ok: bool):
+        nonlocal checked
+        checked += 1
+        if not ok:
+            problems.append("single sign-on: " + label)
+
+    secret = "idp-secret-" + RUN
+    PASSWORDS.append(secret)
+    idp = FakeIdp("kanb-" + RUN, secret)
+    prev = w.admin.ok("GET", "/admin/sso")
+    prev_signup = w.admin.ok("GET", "/admin/signups")
+    signup_on = bool(prev.get("signup"))
+    conf = {"enabled": True, "issuer": idp.url, "client_id": idp.client_id, "client_secret": secret, "label": "TestIdP",
+            "allowed_domains": ["allowed.example"], "trust_email": False, "require_sso": False}
+    try:
+        st, e = w.admin.call("PUT", "/admin/sso", dict(conf, issuer="http://idp.example.com"))
+        expect(f"a plain-http provider (not this machine) is refused ({st} {e})", st == 400 and (e or {}).get("error") == "sso_issuer_https")
+        st, e = w.admin.call("PUT", "/admin/sso", dict(conf, client_secret=None, client_id=""))
+        expect("can't be switched on half filled in", st == 400)
+        view = w.admin.ok("PUT", "/admin/sso", conf)
+        expect("saved", view.get("enabled") is True and view.get("has_secret") is True)
+        expect("the secret is never sent back", secret not in json.dumps(w.admin.ok("GET", "/admin/sso")))
+        expect("the check finds the provider", w.admin.ok("POST", "/admin/sso/test", conf).get("ok") is True)
+        expect("the sign-in page shows the button", Client("anon").ok("GET", "/auth/options").get("sso", {}).get("label") == "TestIdP")
+        st, e = w.people["owner"].call("PUT", "/admin/sso", dict(conf, enabled=False))
+        expect("only a super admin can change it", st == 403)
+
+        # an existing account, matched by its verified email address
+        uname = f"authz_{RUN}_sso1"
+        email = f"{uname}@example.com"
+        w.admin.ok("POST", "/admin/users", {"username": uname, "display_name": "authz sso1", "email": email, "password": "Sso1-" + RUN + "-pw",
+                                            "is_super_admin": False, "can_create_boards": True, "locale": "en", "send_invite": False})
+        PASSWORDS.append("Sso1-" + RUN + "-pw")
+        sub1 = "sub-" + secrets.token_hex(4)
+        c = Client("sso1")
+        st, loc = sso_signin(c, idp, {"sub": sub1, "email": email, "email_verified": True, "name": "Somchai"})
+        expect(f"signs in an existing account by verified email ({st} {loc})", st == 303 and loc == "/")
+        me = c.call("GET", "/me")[1] or {}
+        expect("as the right person", me.get("username") == uname)
+        expect("an admin-set password doesn't block an SSO session", c.call("GET", "/boards")[0] == 200)
+        c2 = Client("sso1 again")
+        st, loc = sso_signin(c2, idp, {"sub": sub1, "email": "changed-" + email, "email_verified": True})
+        expect("the provider account stays connected when its email changes", st == 303 and (c2.call("GET", "/me")[1] or {}).get("username") == uname)
+        st, loc = sso_signin(Client("x"), idp, {"sub": "sub-" + secrets.token_hex(4), "email": email, "email_verified": False})
+        expect(f"an unverified email never signs in as that account ({loc})", loc == "/login?sso_error=" + ("email_unverified" if signup_on else "no_account"))
+        sign_ins = w.admin.ok("GET", "/admin/audit?topic=signin")
+        expect("the sign-in is in the activity log as SSO", any(x.get("kind") == "sign_in" and (x.get("data") or {}).get("method") == "sso" for x in (sign_ins or {}).get("entries", [])))
+
+        # forged or broken answers
+        for label, tamper, code in [("another app's token", {"aud": "someone-else"}, "wrong_audience"),
+                                    ("a token from another provider", {"iss": "https://evil.example.com"}, "wrong_issuer"),
+                                    ("an expired token", {"exp": int(time.time()) - 3600}, "expired_token"),
+                                    ("a token for another sign-in", {"nonce": "replayed"}, "bad_nonce")]:
+            st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True}, tamper)
+            expect(f"refuses {label} ({loc})", st == 303 and loc == f"/login?sso_error={code}")
+        st, loc = sso_signin(Client("x"), idp, {"sub": sub1}, mangle=lambda q: re.sub(r"state=[^&]+", "state=forged", q))
+        expect(f"refuses a forged state ({loc})", loc == "/login?sso_error=invalid_state")
+        # the callback only works once, and only in the browser that started it
+        c3 = Client("x")
+        idp.next, idp.tamper = {"sub": sub1, "email": email, "email_verified": True}, {}
+        _, to_idp = c3.hop("/auth/sso/start")
+        _, back = Client("p").hop(to_idp)
+        cb = urllib.parse.urlparse(back)
+        cb_path = cb.path.removeprefix("/api") + "?" + cb.query
+        st, loc = Client("another browser").hop(cb_path)
+        expect(f"another browser can't use the callback ({loc})", loc == "/login?sso_error=expired")
+        st, loc = c3.hop(cb_path)
+        expect(f"the starting browser can ({loc})", loc == "/")
+        st, loc = c3.hop(cb_path)
+        expect(f"but only once ({loc})", loc == "/login?sso_error=expired")
+        # a wrong client secret: the provider refuses the code
+        w.admin.ok("PUT", "/admin/sso", dict(conf, client_secret="wrong-" + RUN))
+        st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True})
+        expect(f"a wrong client secret fails cleanly ({loc})", loc == "/login?sso_error=token_failed")
+        w.admin.ok("PUT", "/admin/sso", conf)
+
+        # a deactivated account
+        uid1 = me.get("id")
+        w.admin.ok("PATCH", f"/admin/users/{uid1}", {"is_active": False})
+        st, loc = sso_signin(Client("x"), idp, {"sub": sub1, "email": email, "email_verified": True})
+        expect(f"a deactivated account can't sign in ({loc})", loc == "/login?sso_error=account_disabled")
+        w.admin.ok("PATCH", f"/admin/users/{uid1}", {"is_active": True})
+        c = Client("sso1 after reactivation")  # deactivating signed it out everywhere
+        sso_signin(c, idp, {"sub": sub1, "email": email, "email_verified": True})
+
+        # connecting from Profile
+        p = w.people["commenter"]
+        sub2 = "sub-" + secrets.token_hex(4)
+        st, loc = sso_signin(p, idp, {"sub": sub1}, start="POST /me/sso/link")
+        expect(f"can't take over a provider account connected to someone else ({loc})", loc == "/profile?tab=security&sso_error=linked_elsewhere")
+        st, loc = sso_signin(p, idp, {"sub": sub2, "email": "commenter@elsewhere.example"}, start="POST /me/sso/link")
+        expect(f"connects ({loc})", loc == "/profile?tab=security&sso=linked")
+        mine = p.ok("GET", "/me/sso")
+        expect("Profile lists the connection", len(mine.get("identities", [])) == 1)
+        other = Client("sso2")
+        st, loc = sso_signin(other, idp, {"sub": sub2})
+        expect("now signs in as that person", loc == "/" and (other.call("GET", "/me")[1] or {}).get("id") == p.id)
+        if mine.get("identities"):
+            ident = mine["identities"][0]["id"]
+            expect("nobody else can disconnect it", w.people["viewer"].call("DELETE", f"/me/sso/{ident}")[0] == 404)
+            expect("its owner can", p.call("DELETE", f"/me/sso/{ident}")[0] == 200)
+
+        # new people
+        if signup_on:
+            w.admin.ok("PUT", "/admin/signups", {"approval": "review", "can_create_boards": True})
+            st, loc = sso_signin(Client("x"), idp, {"sub": "sub-" + secrets.token_hex(4), "email": f"authz_{RUN}_far@other.example", "email_verified": True})
+            expect(f"new accounts only from allowed domains ({loc})", loc == "/login?sso_error=domain_not_allowed")
+            new_email = f"authz_{RUN}_new@allowed.example"
+            sub3 = "sub-" + secrets.token_hex(4)
+            st, loc = sso_signin(Client("x"), idp, {"sub": sub3, "email": new_email, "email_verified": True, "preferred_username": f"authz_{RUN}_new"})
+            expect(f"a new account waits for approval ({loc})", loc == "/login?sso_error=pending_approval")
+            waiting = {x["username"]: x["id"] for x in w.admin.ok("GET", "/admin/signups")["waiting"]}
+            nid = waiting.get(f"authz_{RUN}_new")
+            expect("the admin sees it waiting", nid is not None)
+            if nid:
+                w.admin.ok("POST", "/admin/signups/approve", {"ids": [nid]})
+                n = Client("new")
+                st, loc = sso_signin(n, idp, {"sub": sub3, "email": new_email, "email_verified": True})
+                expect(f"after approval it signs in ({loc})", loc == "/")
+                expect("it has no password", (n.call("GET", "/me")[1] or {}).get("has_password") is False)
+                st, _ = n.call("POST", "/me/password", {"new_password": "First-" + RUN + "-pw"})
+                PASSWORDS.append("First-" + RUN + "-pw")
+                expect("and may set a first one without a current password", st == 200)
+                expect("which then works", Client("new pw").call("POST", "/auth/login", {"username": f"authz_{RUN}_new", "password": "First-" + RUN + "-pw"})[0] == 200)
+                st, _ = n.call("POST", "/me/password", {"new_password": "Second-" + RUN + "-pw"})
+                expect("but changing it needs the current one", st == 400)
+        else:
+            st, loc = sso_signin(Client("x"), idp, {"sub": "sub-" + secrets.token_hex(4), "email": f"authz_{RUN}_nobody@allowed.example", "email_verified": True})
+            expect(f"without ALLOW_SIGNUP, unknown people are refused ({loc})", loc == "/login?sso_error=no_account")
+
+        # requiring single sign-on
+        viewer = w.people["viewer"]
+        w.admin.ok("PUT", "/admin/sso", dict(conf, require_sso=True))
+        expect("password sessions of normal accounts end", viewer.call("GET", "/me")[0] == 401)
+        st, e = Client("x").call("POST", "/auth/login", {"username": uname, "password": "Sso1-" + RUN + "-pw"})
+        expect(f"password sign-in is refused for normal accounts ({st} {e})", st == 403 and (e or {}).get("error") == "sso_required")
+        expect("super admins keep their password", Client("admin").call("POST", "/auth/login", {"username": ADMIN_USER, "password": ADMIN_PASSWORD})[0] == 200)
+        expect("the admin's own session survives", w.admin.call("GET", "/admin/sso")[0] == 200)
+        expect("SSO sessions survive", c.call("GET", "/boards")[0] == 200)
+        expect("can't change a password", c.call("POST", "/me/password", {"current_password": "x", "new_password": "Nope-12345678"})[0] == 403)
+        if signup_on:
+            st, e = Client("x").call("POST", "/auth/register", {"username": f"authz_{RUN}_form", "display_name": "", "email": f"authz_{RUN}_form@allowed.example", "password": "Form-12345678", "locale": "en"})
+            expect(f"the sign-up form is closed ({st})", st == 403 and (e or {}).get("error") == "sso_required")
+        expect("the sign-in page says so", Client("anon").ok("GET", "/auth/options")["sso"].get("required") is True)
+    finally:
+        w.admin.call("PUT", "/admin/sso", {"enabled": False, "issuer": prev.get("issuer", ""), "client_id": prev.get("client_id", ""),
+                                          "label": prev.get("label", ""), "allowed_domains": prev.get("allowed_domains", []),
+                                          "trust_email": prev.get("trust_email", False), "require_sso": False})
+        w.admin.call("PUT", "/admin/signups", {"approval": prev_signup.get("approval", "review"), "can_create_boards": prev_signup.get("can_create_boards", True)})
+        idp.close()
+    return checked, problems
+
 
 def cleanup(w: World, prefix: str = ""):
     """Deleting a user also deletes the boards only they own, with their files."""
@@ -1038,6 +1582,10 @@ def cleanup(w: World, prefix: str = ""):
     waiting = [x["id"] for x in (su or {}).get("waiting", []) if str(x.get("username", "")).startswith(prefix)] if isinstance(su, dict) else []
     if waiting:
         w.admin.call("POST", "/admin/signups/reject", {"ids": waiting})
+    _, deps = w.admin.call("GET", "/departments")
+    for d in deps if isinstance(deps, list) else []:
+        if isinstance(d, dict) and str(d.get("name", "")).startswith("authz dept") and (prefix == "authz_" or RUN in str(d.get("name"))):
+            w.admin.call("DELETE", f"/admin/departments/{d['id']}")
     _, bts = w.admin.call("GET", "/board-templates")
     for t in bts if isinstance(bts, list) else []:
         if isinstance(t, dict) and str(t.get("name", "")).startswith("authz") and (prefix == "authz_" or RUN in str(t.get("name"))):

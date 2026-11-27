@@ -146,6 +146,12 @@ function describe(t: TFunction, e: AuditEntry, names: Map<string, string>) {
   if (e.kind === 'board_owner_added' && typeof d.user_id === 'string') extra.push(t('audit.newOwner', { name: names.get(d.user_id) ?? '?' }))
   if (e.kind === 'user_deleted' && d.username) extra.push(`@${d.username}`)
   if (e.kind === 'sessions_revoked' && typeof d.count === 'number') extra.push(t('audit.devices', { count: d.count }))
+  if (e.kind.startsWith('department_') && d.name) extra.push(`“${String(d.name)}”`)
+  if (e.kind === 'department_renamed' && d.from) extra.push(`“${String(d.from)}” → “${String(d.to)}”`)
+  if ((e.kind === 'sso_linked' || e.kind === 'sso_unlinked') && d.email) extra.push(String(d.email))
+  if ((e.kind === 'token_created' || e.kind === 'token_revoked') && d.name) extra.push(`“${String(d.name)}”` + (d.scope ? ` (${String(d.scope)})` : ''))
+  if (e.kind === 'sessions_revoked' && typeof d.tokens === 'number' && d.tokens > 0) extra.push(t('audit.tokensRevoked', { count: d.tokens }))
+  if (e.kind === 'sso_failed' && d.reason) extra.push(String(d.reason) + (d.email ? ` (${String(d.email)})` : ''))
   return extra.length ? `${base} — ${extra.join(' · ')}` : base
 }
 

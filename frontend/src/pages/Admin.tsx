@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Bell, Copy, Dices, Eye, EyeOff, HardDrive, History, KeyRound, LayoutGrid, Mail, MonitorSmartphone, Pencil, Plus, Search, Send, Server, ShieldCheck, ShieldOff, Trash2, UserMinus, UserPlus, Users } from 'lucide-react'
+import { Bell, Building2, Copy, Dices, Eye, EyeOff, HardDrive, History, KeyRound, LayoutGrid, Mail, MonitorSmartphone, Pencil, Plus, Search, Send, Server, ShieldCheck, ShieldOff, Trash2, UserMinus, UserPlus, Users } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useSearchParams } from 'react-router'
@@ -16,6 +16,9 @@ import { ActivityTab, BoardsTab, BulkInvite, DevicesDialog, matchesActivity, Sig
 import type { User } from '../lib/types'
 import { avatarUrl, label } from '../lib/user'
 import { copyText } from '../lib/clipboard'
+import { SsoAdminTab } from './Sso'
+import { DepartmentsTab } from './Departments'
+import { useDepartments } from '../lib/departments'
 
 const useEmailEnabled = () =>
   useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ email_enabled: boolean }>('/auth/options') }).data?.email_enabled ?? false
@@ -25,7 +28,7 @@ export function Admin() {
   const { t } = useTranslation()
   const { data: me } = useMe()
   const [sp, setSp] = useSearchParams()
-  const tabs = ['users', 'activity', 'boards', 'security', 'email', 'notifications', 'storage', 'system'] as const
+  const tabs = ['users', 'departments', 'activity', 'boards', 'security', 'sso', 'email', 'notifications', 'storage', 'system'] as const
   const tab = tabs.find((k) => k === sp.get('tab')) ?? 'users'
   const waiting = useSignups(!!me?.is_super_admin).data?.waiting.length ?? 0
   const allUsers = useQuery({ queryKey: ['admin-users'], queryFn: () => api.get<User[]>('/admin/users'), enabled: !!me?.is_super_admin }).data ?? []
@@ -47,9 +50,11 @@ export function Admin() {
             {
               {
                 users: <Users size={15} />,
+                departments: <Building2 size={15} />,
                 activity: <History size={15} />,
                 boards: <LayoutGrid size={15} />,
                 security: <ShieldCheck size={15} />,
+                sso: <KeyRound size={15} />,
                 email: <Mail size={15} />,
                 notifications: <Bell size={15} />,
                 storage: <HardDrive size={15} />,
@@ -59,9 +64,11 @@ export function Admin() {
             {t(
               {
                 users: 'admin.title',
+                departments: 'departments.title',
                 activity: 'audit.title',
                 boards: 'adminBoards.title',
                 security: 'security.title',
+                sso: 'sso.tab',
                 email: 'email.title',
                 notifications: 'notifications.title',
                 storage: 'storage.title',
@@ -84,6 +91,10 @@ export function Admin() {
         <StorageTab />
       ) : tab === 'security' ? (
         <SecurityTab me={me} />
+      ) : tab === 'sso' ? (
+        <SsoAdminTab />
+      ) : tab === 'departments' ? (
+        <DepartmentsTab />
       ) : tab === 'activity' ? (
         <ActivityTab users={allUsers} />
       ) : tab === 'boards' ? (
@@ -250,6 +261,8 @@ function UsersTab({ me }: { me: User }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [q, setQ] = useState('')
+  const [dept, setDept] = useState('') // '' = all, 'none' = without one
+  const deps = useDepartments().data ?? []
   const [creating, setCreating] = useState(false)
   const [resetting, setResetting] = useState<User | null>(null)
   const [editing, setEditing] = useState<User | null>(null)
@@ -268,7 +281,10 @@ function UsersTab({ me }: { me: User }) {
   // substring match on name / username / email (works for Thai)
   const f = q.trim().toLowerCase().replace(/^@/, '')
   const users = (list.data ?? []).filter(
-    (u) => (!f || `${u.display_name} ${u.username} ${u.email ?? ''}`.toLowerCase().includes(f)) && matchesActivity(u, activity),
+    (u) =>
+      (!f || `${u.display_name} ${u.username} ${u.email ?? ''}`.toLowerCase().includes(f)) &&
+      matchesActivity(u, activity) &&
+      (!dept || (dept === 'none' ? !u.department_id : u.department_id === dept)),
   )
   const stale = activity.startsWith('inactive')
 
@@ -293,6 +309,22 @@ function UsersTab({ me }: { me: User }) {
           <option value="unrecorded">{t('inactive.unrecorded')}</option>
           <option value="deactivated">{t('inactive.deactivated')}</option>
         </select>
+        {deps.length > 0 && (
+          <select
+            value={dept}
+            onChange={(e) => setDept(e.target.value)}
+            className="h-9 rounded-md border border-line bg-surface px-2 text-sm"
+            aria-label={t('departments.filter')}
+          >
+            <option value="">{t('departments.all')}</option>
+            {deps.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+            <option value="none">{t('departments.none')}</option>
+          </select>
+        )}
         <span className="text-sm text-muted">{t('admin.count', { count: users.length })}</span>
         {stale && users.length > 0 && (
           <Button variant="danger" onClick={() => deactivate(users)}>
@@ -317,6 +349,7 @@ function UsersTab({ me }: { me: User }) {
             <thead>
               <tr className="border-b border-line text-left text-xs text-muted">
                 <th className="p-3 font-medium">{t('admin.displayName')}</th>
+                {deps.length > 0 && <th className="p-3 font-medium">{t('departments.one')}</th>}
                 <th className="p-3 font-medium">{t('admin.superAdmin')}</th>
                 <th className="p-3 font-medium">{t('admin.canCreateBoards')}</th>
                 <th className="p-3 font-medium">{t('admin.active')}</th>
@@ -353,6 +386,23 @@ function UsersTab({ me }: { me: User }) {
                       </div>
                     </div>
                   </td>
+                  {deps.length > 0 && (
+                    <td className="p-3">
+                      <select
+                        value={u.department_id ?? ''}
+                        onChange={(e) => update.mutate({ id: u.id, department_id: e.target.value || null })}
+                        className="h-8 max-w-40 rounded-md border border-line bg-surface px-1.5 text-xs"
+                        aria-label={t('departments.one')}
+                      >
+                        <option value="">—</option>
+                        {deps.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  )}
                   <td className="p-3">
                     <Toggle checked={u.is_super_admin} disabled={u.id === me.id} onChange={(v) => update.mutate({ id: u.id, is_super_admin: v })} />
                   </td>
@@ -402,7 +452,7 @@ function UsersTab({ me }: { me: User }) {
               ))}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="p-6 text-center text-muted">
+                  <td colSpan={deps.length > 0 ? 8 : 7} className="p-6 text-center text-muted">
                     {t('search.noResults')}
                   </td>
                 </tr>
@@ -494,11 +544,13 @@ function CreateUser({ onClose }: { onClose: () => void }) {
     can_create_boards: true,
     locale: i18n.language === 'th' ? 'th' : 'en',
     send_invite: true,
+    department_id: '',
   }))
+  const deps = useDepartments().data ?? []
   const [result, setResult] = useState<CreateResult | null>(null)
   const canInvite = emailEnabled && !!f.email.trim()
   const m = useMutation({
-    mutationFn: () => api.post<CreateResult>('/admin/users', { ...f, send_invite: f.send_invite && canInvite }),
+    mutationFn: () => api.post<CreateResult>('/admin/users', { ...f, department_id: f.department_id || null, send_invite: f.send_invite && canInvite }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['admin-users'] })
       qc.invalidateQueries({ queryKey: ['users'] })
@@ -547,6 +599,18 @@ function CreateUser({ onClose }: { onClose: () => void }) {
             <option value="th">ไทย</option>
           </select>
         </Field>
+        {deps.length > 0 && (
+          <Field label={t('departments.one')}>
+            <select value={f.department_id} onChange={(e) => setF({ ...f, department_id: e.target.value })} className="h-9 w-full rounded-md border border-line bg-surface px-2 text-sm">
+              <option value="">—</option>
+              {deps.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={f.can_create_boards} onChange={(e) => setF({ ...f, can_create_boards: e.target.checked })} className="accent-[var(--color-accent)]" />
           {t('admin.canCreateBoards')}

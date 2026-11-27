@@ -37,6 +37,7 @@ pub const CARDS_LABELS: &str = "cards.labels";
 pub const CARDS_MOVE: &str = "cards.move"; // drag between / within columns, sort a column
 pub const CARDS_ARCHIVE: &str = "cards.archive"; // archive / restore
 pub const CARDS_DELETE: &str = "cards.delete"; // delete permanently
+pub const TIME_LOG: &str = "time.log"; // log time on cards (and edit one's own entries)
 // Comments
 pub const COMMENTS_CREATE: &str = "comments.create";
 pub const COMMENTS_MODERATE: &str = "comments.moderate";
@@ -49,7 +50,7 @@ pub const GROUPS: &[(&str, &[&str])] = &[
     ("board", &[BOARD_MANAGE, STATUSES_MANAGE, LABELS_MANAGE, TEMPLATES_MANAGE, NOTIFICATIONS_MANAGE, ANALYTICS_VIEW, BOARD_ARCHIVE, BOARD_DELETE]),
     ("members", &[MEMBERS_MANAGE, ROLES_MANAGE]),
     ("lists", &[LISTS_CREATE, LISTS_EDIT, LISTS_ARCHIVE, LISTS_DELETE]),
-    ("cards", &[CARDS_CREATE, CARDS_EDIT, CARDS_STATUS, CARDS_DUE, CARDS_DEPENDENCIES, CARDS_ASSIGN, CARDS_LABELS, CARDS_MOVE, CARDS_ARCHIVE, CARDS_DELETE]),
+    ("cards", &[CARDS_CREATE, CARDS_EDIT, CARDS_STATUS, CARDS_DUE, CARDS_DEPENDENCIES, CARDS_ASSIGN, CARDS_LABELS, CARDS_MOVE, CARDS_ARCHIVE, CARDS_DELETE, TIME_LOG]),
     ("comments", &[COMMENTS_CREATE, COMMENTS_MODERATE]),
     ("attachments", &[ATTACHMENTS_UPLOAD, ATTACHMENTS_DELETE]),
 ];
@@ -79,6 +80,7 @@ pub const ALL: &[&str] = &[
     CARDS_MOVE,
     CARDS_ARCHIVE,
     CARDS_DELETE,
+    TIME_LOG,
     COMMENTS_CREATE,
     COMMENTS_MODERATE,
     ATTACHMENTS_UPLOAD,
@@ -106,6 +108,7 @@ pub fn default_roles() -> Vec<(&'static str, bool, Vec<&'static str>)> {
                 CARDS_MOVE,
                 CARDS_ARCHIVE,
                 CARDS_DELETE,
+                TIME_LOG,
                 COMMENTS_CREATE,
                 ATTACHMENTS_UPLOAD,
                 ATTACHMENTS_DELETE,

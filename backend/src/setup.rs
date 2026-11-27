@@ -102,7 +102,7 @@ pub async fn create_first_admin(
         return Err(AppError::SignInFailed("setup_code_invalid"));
     }
     let locale = if r.locale == "th" { "th" } else { "en" };
-    let user = crate::admin::insert_user(&state.db, &r.username, r.display_name.trim(), None, &r.password, true, true, locale, false, None).await?;
+    let user = crate::admin::insert_user(&state.db, &r.username, r.display_name.trim(), None, Some(&r.password), true, true, locale, false, None).await?;
     tracing::info!(user = %user.username, "first admin created in the browser");
     let client = throttle::client_ip(peer, &headers, state.config.trust_proxy).to_string();
     crate::audit::log(&state, Some(user.id), "user_created", Some(user.id), Some(&client), serde_json::json!({ "first_admin": true })).await;

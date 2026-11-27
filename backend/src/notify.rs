@@ -577,7 +577,8 @@ struct Act {
 const ACTIVITY_ORDER: [&str; 6] = ["card_created", "card_moved", "status", "archived", "attachments", "card_updated"];
 
 /// Every 5 s: card activity → personal notifications for people who chose those kinds (Profile → Notifications).
-/// Who hears about a card: its assignees and whoever created it; "card created" goes to every board member who wants
+/// Who hears about a card: its assignees, whoever created it and its watchers (while they're on the board); "card
+/// created" goes to every board member who wants
 /// it. A person's quick successive changes to one card are bundled into one notification.
 pub fn spawn_activity(state: AppState) {
     tokio::spawn(async move {
@@ -641,7 +642,10 @@ async fn activity(state: &AppState) -> anyhow::Result<()> {
              WHERE u.is_active AND u.deleted_at IS NULL AND u.id IS DISTINCT FROM $3 AND u.notify_events && $4
                AND (u.id IN (SELECT user_id FROM card_assignees WHERE card_id = $1)
                     OR u.id = (SELECT created_by FROM cards WHERE id = $1)
-                    OR ($5 AND u.id IN (SELECT user_id FROM board_members WHERE board_id = $2)))",
+                    OR u.id IN (SELECT user_id FROM card_watchers WHERE card_id = $1)
+                    OR ($5 AND u.id IN (SELECT user_id FROM board_members WHERE board_id = $2)))
+               -- only people who can still see the board
+               AND (u.is_super_admin OR u.id IN (SELECT user_id FROM board_members WHERE board_id = $2))",
         )
         .bind(card_id)
         .bind(board_id)

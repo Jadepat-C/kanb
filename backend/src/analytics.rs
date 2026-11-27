@@ -320,8 +320,47 @@ pub async fn board(State(state): State<AppState>, CurrentUser(u): CurrentUser, P
     .bind(&tz)
     .fetch_all(db)
     .await?;
+    // time tracking: what was logged in the period (by when the work started), per person and per card, and how the
+    // estimates of the cards finished in the period compare with the time logged on them
+    let time_people: Vec<(Uuid, String, String, Option<Uuid>, i64)> = sqlx::query_as(
+        "SELECT u.id, u.display_name, u.avatar_color, u.avatar_id, sum(t.minutes)::int8
+         FROM time_entries t JOIN users u ON u.id = t.user_id
+         WHERE t.board_id = $1 AND t.ended_at IS NOT NULL AND t.started_at >= $2
+         GROUP BY u.id ORDER BY sum(t.minutes) DESC, lower(u.display_name)",
+    )
+    .bind(board_id)
+    .bind(since)
+    .fetch_all(db)
+    .await?;
+    let time_cards: Vec<(Uuid, i32, String, i64, Option<i32>)> = sqlx::query_as(
+        "SELECT c.id, c.number, c.title, sum(t.minutes)::int8, c.estimate_minutes
+         FROM time_entries t JOIN cards c ON c.id = t.card_id
+         WHERE t.board_id = $1 AND t.ended_at IS NOT NULL AND t.started_at >= $2
+         GROUP BY c.id ORDER BY sum(t.minutes) DESC LIMIT 10",
+    )
+    .bind(board_id)
+    .bind(since)
+    .fetch_all(db)
+    .await?;
+    let (est_cards, est_minutes, est_logged): (i64, i64, i64) = sqlx::query_as(sqlf!(
+        "{BASE} SELECT count(*), COALESCE(sum(c.estimate_minutes), 0)::int8,
+                COALESCE(sum((SELECT sum(t.minutes) FROM time_entries t WHERE t.card_id = c.id AND t.ended_at IS NOT NULL)), 0)::int8
+         FROM c WHERE c.fin AND c.done_at >= $2 AND c.estimate_minutes > 0"
+    ))
+    .bind(board_id)
+    .bind(since)
+    .fetch_one(db)
+    .await?;
+    let time = json!({
+        "total_minutes": time_people.iter().map(|p| p.4).sum::<i64>(),
+        "people": time_people.iter().map(|(id, name, color, avatar, m)| json!({ "user_id": id, "name": name, "color": color, "avatar_id": avatar, "minutes": m })).collect::<Vec<_>>(),
+        "cards": time_cards.iter().map(|(id, number, title, m, est)| json!({ "id": id, "number": number, "title": title, "minutes": m, "estimate_minutes": est })).collect::<Vec<_>>(),
+        // finished cards that had an estimate: how many, estimated vs logged
+        "estimated": { "cards": est_cards, "estimate_minutes": est_minutes, "logged_minutes": est_logged },
+    });
     crate::json_now(&json!({
         "days": days, "tz": tz, "generated_at": Utc::now(),
+        "time": time,
         "overview": overview,
         "weeks": weeks, "created_before": created_before, "finished_before": finished_before,
         "times": times,

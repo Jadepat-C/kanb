@@ -55,6 +55,9 @@ struct XCard {
     created_by: Option<String>,
     updated_at: DateTime<Utc>,
     archived_at: Option<DateTime<Utc>>,
+    estimate_minutes: Option<i32>,
+    /// time logged (finished entries)
+    logged_minutes: i64,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -117,7 +120,9 @@ async fn collect(state: &AppState, board_id: Uuid) -> AppResult<Export> {
                 COALESCE((SELECT array_agg({dn} ORDER BY u.display_name) FROM card_assignees a JOIN users u ON u.id = a.user_id WHERE a.card_id = c.id), '{{}}') AS assignees,
                 c.start_at, c.due_at,
                 COALESCE((SELECT array_agg(p.number ORDER BY p.number) FROM card_dependencies d JOIN cards p ON p.id = d.depends_on WHERE d.card_id = c.id), '{{}}') AS waits_for,
-                c.created_at, (SELECT {dn} FROM users u WHERE u.id = c.created_by) AS created_by, c.updated_at, c.archived_at
+                c.created_at, (SELECT {dn} FROM users u WHERE u.id = c.created_by) AS created_by, c.updated_at, c.archived_at,
+                c.estimate_minutes,
+                COALESCE((SELECT sum(minutes) FROM time_entries t WHERE t.card_id = c.id AND t.ended_at IS NOT NULL), 0)::int8 AS logged_minutes
          FROM cards c JOIN lists l ON l.id = c.list_id LEFT JOIN board_statuses s ON s.id = c.status_id
          WHERE c.board_id = $1 ORDER BY c.number"
     ))
@@ -193,12 +198,18 @@ fn local(d: &Option<DateTime<Utc>>) -> String {
     d.map(|d| d.with_timezone(&Local).format("%d/%m/%Y %H:%M").to_string()).unwrap_or_default()
 }
 
+/// minutes → "1.5" (hours, at most two decimals)
+fn hours(m: i32) -> String {
+    let h = format!("{:.2}", m as f64 / 60.0);
+    h.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 fn csv(cards: &[XCard]) -> Vec<u8> {
     let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
     let mut out = String::from("\u{feff}");
     let head = [
         "Number", "Title", "Column", "Status", "Done", "Priority", "Labels", "Assignees", "Start", "Due", "Finished", "Waits for", "Created", "Created by", "Archived",
-        "Description",
+        "Estimate (hours)", "Time logged (hours)", "Description",
     ];
     out += &head.iter().map(|h| q(h)).collect::<Vec<_>>().join(",");
     out += "\r\n";
@@ -219,6 +230,8 @@ fn csv(cards: &[XCard]) -> Vec<u8> {
             local(&Some(c.created_at)),
             c.created_by.clone().unwrap_or_default(),
             local(&c.archived_at),
+            c.estimate_minutes.map(hours).unwrap_or_default(),
+            if c.logged_minutes > 0 { hours(c.logged_minutes as i32) } else { String::new() },
             c.description.clone(),
         ];
         out += &row.iter().map(|v| q(v)).collect::<Vec<_>>().join(",");

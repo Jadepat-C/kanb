@@ -7,6 +7,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
+    // docs/api.md (one level up) is shown in the app at /help/api
+    fs: { allow: ['..'] },
     proxy: {
       '/api': { target: process.env.KANB_API ?? 'http://127.0.0.1:8080', ws: true },
     },

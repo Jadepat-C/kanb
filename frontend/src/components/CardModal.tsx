@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Check,
   Download,
+  Eye,
   FileText,
   History,
   Image as ImageIcon,
@@ -33,6 +34,7 @@ import type { Attachment, CardDetail, CardSummary, Label, TimelineItem } from '.
 import { CardContextMenu } from './CardMenu'
 import { Stars } from './CardTile'
 import { useCalendarPick } from './CalendarFeed'
+import { TimeSection } from './TimeTracking'
 import { DateTimeInput } from './DateInput'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ask } from './dialogs'
@@ -74,6 +76,14 @@ export function CardModal({
     qc.invalidateQueries({ queryKey: ['timeline', cardId] })
     qc.invalidateQueries({ queryKey: ['board', boardId] })
   }
+  const watch = useMutation({
+    mutationFn: (watching: boolean) => api.put(`/cards/${cardId}/watch`, { watching }),
+    onSuccess: (_r, watching) => {
+      qc.setQueryData<CardDetail>(['card', cardId], (d) => d && { ...d, watching })
+      qc.invalidateQueries({ queryKey: ['board', boardId] })
+    },
+    onError: toastError,
+  })
   const patch = useMutation({
     mutationFn: (p: Record<string, unknown>) => api.patch(`/cards/${cardId}`, p),
     onSuccess: refresh,
@@ -182,6 +192,21 @@ export function CardModal({
                           : t('presence.here')}
                       </span>
                     </div>
+                  )}
+                  {q.data && (
+                    <button
+                      className={clsx(
+                        'flex shrink-0 items-center gap-1 rounded px-1.5 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer',
+                        q.data.watching ? 'text-accent' : 'text-muted',
+                      )}
+                      aria-pressed={!!q.data.watching}
+                      title={q.data.watching ? t('watch.stopHint') : t('watch.hint')}
+                      disabled={watch.isPending}
+                      onClick={() => watch.mutate(!q.data!.watching)}
+                    >
+                      <Eye size={18} />
+                      <span className="hidden sm:inline">{q.data.watching ? t('watch.watching') : t('watch.start')}</span>
+                    </button>
                   )}
                   {summary && (
                     <CardContextMenu dropdown card={{ ...summary, board_id: boardId }} b={b} onOpen={() => {}} onGone={onClose}>
@@ -783,6 +808,8 @@ function Sidebar({
           </select>
         </Prop>
       )}
+
+      <TimeSection cardId={cardId} canEditEstimate={canEdit} patch={patch} />
 
       <CalendarPickButton cardId={cardId} />
 

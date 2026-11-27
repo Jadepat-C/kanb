@@ -21,6 +21,7 @@ import { toast, toastError, toastSuccess } from './toast'
 import { copyText } from '../lib/clipboard'
 import { DROP, MItem, MSep } from './menu'
 import { Avatar, Button, ColorPicker, Dialog, Field, Input, Menu, MenuContent, MenuTrigger, Toggle } from './ui'
+import { useDepartmentName } from '../lib/departments'
 
 type Tab = 'general' | 'members' | 'roles' | 'statuses' | 'labels' | 'templates' | 'notifications' | 'share' | 'archive'
 
@@ -216,6 +217,7 @@ function Members({ b, boardId }: { b: BoardHelpers; boardId: string }) {
     onError: toastError,
   })
   const memberIds = new Set(data.members.map((m) => m.user_id))
+  const deptName = useDepartmentName()
   const candidates = (users.data ?? []).filter((u) => !memberIds.has(u.id))
 
   return (
@@ -226,7 +228,10 @@ function Members({ b, boardId }: { b: BoardHelpers; boardId: string }) {
             <Avatar name={label(m)} color={m.avatar_color} src={avatarUrl(m.avatar_id)} size={28} />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{m.display_name}</div>
-              <div className="text-xs text-muted">@{m.username}</div>
+              <div className="text-xs text-muted">
+                @{m.username}
+                {deptName(m.department_id) && ` · ${deptName(m.department_id)}`}
+              </div>
             </div>
             <select
               value={m.role_id}

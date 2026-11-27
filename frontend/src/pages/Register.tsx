@@ -9,6 +9,7 @@ import { api } from '../lib/api'
 import { useMe } from '../lib/auth'
 import { errorText } from '../lib/i18n'
 import { AuthCard } from './AuthPages'
+import { SsoButton, type SsoInfo } from './Sso'
 
 type Outcome = 'confirm_email' | 'review' | 'active'
 
@@ -32,13 +33,14 @@ export function Register() {
   const { data: me } = useMe()
   const qc = useQueryClient()
   const nav = useNavigate()
-  const options = useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ signup?: boolean }>('/auth/options') })
+  const options = useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ signup?: boolean; sso?: SsoInfo }>('/auth/options') })
   const [f, setF] = useState({ username: '', display_name: '', email: '', password: '', confirm: '', website: '' })
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<Outcome | null>(null)
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value })
   const mismatch = f.confirm.length > 0 && f.password !== f.confirm
+  const sso = options.data?.sso ?? null
 
   if (me) return <Navigate to="/" replace />
   if (options.isLoading)
@@ -83,6 +85,26 @@ export function Register() {
   }
   return (
     <AuthCard title={t('signup.title')} subtitle={t('signup.subtitle')}>
+      {sso && (
+        <div className="mb-4 space-y-4">
+          <SsoButton info={sso} signUp />
+          {!sso.required && (
+            <div className="flex items-center gap-3 text-xs text-muted">
+              <span className="h-px flex-1 bg-[var(--border)]" />
+              {t('sso.or')}
+              <span className="h-px flex-1 bg-[var(--border)]" />
+            </div>
+          )}
+        </div>
+      )}
+      {sso?.required ? (
+        <p className="text-center text-sm text-muted">
+          {t('signup.haveAccount')}{' '}
+          <Link to="/login" className="text-accent hover:underline">
+            {t('auth.signIn')}
+          </Link>
+        </p>
+      ) : (
       <form onSubmit={submit} className="space-y-4">
         <Field label={t('auth.username')} hint={t('errors.invalid_username')}>
           <Input value={f.username} onChange={set('username')} autoComplete="username" autoFocus required minLength={2} maxLength={40} />
@@ -122,6 +144,7 @@ export function Register() {
           </Link>
         </p>
       </form>
+      )}
     </AuthCard>
   )
 }

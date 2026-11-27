@@ -186,6 +186,9 @@ pub async fn board(State(state): State<AppState>, Path(token): Path<String>) -> 
     for c in &mut cards {
         // who created a card is not a visitor's business; counts of hidden things aren't either
         c.created_by = None;
+        // time tracking is for the team
+        c.estimate_minutes = None;
+        c.time_minutes = 0;
         if !b.public_comments {
             c.comment_count = 0;
         }

@@ -246,6 +246,7 @@ pub struct Member {
     pub avatar_color: String,
     pub avatar_id: Option<Uuid>,
     pub role_id: Uuid,
+    pub department_id: Option<Uuid>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -291,6 +292,8 @@ pub struct BoardDetail {
     members: Vec<Member>,
     roles: Vec<Role>,
     templates: Vec<crate::templates::Template>,
+    /// cards I watch
+    watching: Vec<Uuid>,
 }
 
 pub async fn get_board(
@@ -324,7 +327,7 @@ pub async fn get_board(
             .fetch_all(db)
             .await?;
     let members: Vec<Member> = sqlx::query_as(
-        "SELECT u.id AS user_id, u.username, u.display_name, u.avatar_color, u.avatar_id, m.role_id
+        "SELECT u.id AS user_id, u.username, u.display_name, u.avatar_color, u.avatar_id, m.role_id, u.department_id
          FROM board_members m JOIN users u ON u.id = m.user_id WHERE m.board_id = $1 ORDER BY lower(u.display_name)",
     )
     .bind(id)
@@ -350,6 +353,11 @@ pub async fn get_board(
         members,
         roles,
         templates: crate::templates::for_board(db, id).await?,
+        watching: sqlx::query_scalar("SELECT w.card_id FROM card_watchers w JOIN cards c ON c.id = w.card_id WHERE c.board_id = $1 AND w.user_id = $2")
+            .bind(id)
+            .bind(u.id)
+            .fetch_all(db)
+            .await?,
     })
 }
 
@@ -1119,6 +1127,13 @@ pub async fn remove_member(
         return Err(AppError::Conflict("last_owner"));
     }
     sqlx::query("DELETE FROM board_members WHERE board_id = $1 AND user_id = $2")
+        .bind(board_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+    // a timer left running on this board stops now
+    crate::timelog::stop_running(&state.db, user_id, Some(board_id)).await?;
+    sqlx::query("DELETE FROM card_watchers w USING cards c WHERE w.card_id = c.id AND c.board_id = $1 AND w.user_id = $2")
         .bind(board_id)
         .bind(user_id)
         .execute(&state.db)

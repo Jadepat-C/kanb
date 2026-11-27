@@ -9,6 +9,7 @@ import { useMe } from '../lib/auth'
 import { errorText, setLocale } from '../lib/i18n'
 import { isDark, setTheme } from '../lib/prefs'
 import type { User } from '../lib/types'
+import { SsoButton, useSsoError, type SsoInfo } from './Sso'
 
 export function Login() {
   const { t, i18n } = useTranslation()
@@ -25,7 +26,15 @@ export function Login() {
   const [ticket, setTicket] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [useRecovery, setUseRecovery] = useState(false)
-  const options = useQuery({ queryKey: ['auth-options'], queryFn: () => api.get<{ email_enabled: boolean; needs_setup?: boolean; signup?: boolean }>('/auth/options') })
+  const options = useQuery({
+    queryKey: ['auth-options'],
+    queryFn: () => api.get<{ email_enabled: boolean; needs_setup?: boolean; signup?: boolean; sso?: SsoInfo }>('/auth/options'),
+  })
+  const sso = options.data?.sso ?? null
+  const ssoErr = useSsoError(sso?.label)
+  // single sign-on required: the password form is only for super admins, behind a link
+  const [passwordOpen, setPasswordOpen] = useState(false)
+  const showPassword = !sso?.required || passwordOpen
 
   if (me) return <Navigate to="/" replace />
   const from = (loc.state as { from?: string } | null)?.from ?? '/'
@@ -138,24 +147,52 @@ export function Login() {
             </>
           ) : (
             <>
-              <Field label={t('auth.usernameOrEmail')}>
-                <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" required />
-              </Field>
-              <Field label={t('auth.password')}>
-                <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
-              </Field>
-              {err && <p className="text-sm text-red-600">{err}</p>}
-              <Button variant="primary" className="w-full" disabled={busy}>
-                {t('auth.signIn')}
-              </Button>
+              {ssoErr && <p className="rounded-md bg-red-500/10 p-2.5 text-sm text-red-700 dark:text-red-400">{ssoErr}</p>}
+              {sso && (
+                <>
+                  <SsoButton info={sso} />
+                  {sso.required ? (
+                    <>
+                      <p className="text-center text-xs text-muted">{t('sso.requiredHint')}</p>
+                      {!passwordOpen && (
+                        <button type="button" className="block w-full text-center text-xs text-muted hover:underline cursor-pointer" onClick={() => setPasswordOpen(true)}>
+                          {t('sso.passwordToggle')}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-3 text-xs text-muted">
+                      <span className="h-px flex-1 bg-[var(--border)]" />
+                      {t('sso.or')}
+                      <span className="h-px flex-1 bg-[var(--border)]" />
+                    </div>
+                  )}
+                </>
+              )}
+              {showPassword && (
+                <>
+                  <Field label={t('auth.usernameOrEmail')}>
+                    <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus={!sso || passwordOpen} autoComplete="username" required />
+                  </Field>
+                  <Field label={t('auth.password')}>
+                    <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+                  </Field>
+                  {err && <p className="text-sm text-red-600">{err}</p>}
+                  <Button variant="primary" className="w-full" disabled={busy}>
+                    {t('auth.signIn')}
+                  </Button>
+                </>
+              )}
             </>
           )}
-          {!ticket && options.data?.email_enabled && (
+          {!ticket && showPassword && options.data?.email_enabled && (
             <Link to="/forgot-password" className="block text-center text-sm text-accent hover:underline">
               {t('auth.forgot')}
             </Link>
           )}
-          {options.data?.signup ? (
+          {options.data?.signup && sso?.required ? (
+            <p className="text-center text-xs text-muted">{t('sso.signupHint', { label: sso.label })}</p>
+          ) : options.data?.signup ? (
             <p className="text-center text-sm text-muted">
               {t('signup.noAccount')}{' '}
               <Link to="/register" className="text-accent hover:underline">

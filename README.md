@@ -20,6 +20,12 @@ It works in English and Thai, in light and dark, and on phones, tablets and desk
 - Dependencies between cards ("waits for"), with warnings when a card is scheduled before the one it waits for.
 - In-app preview for images, PDF, Word, Excel, PowerPoint, Markdown, text, audio and video. Files never leave your server.
 - Archive and restore for cards, columns and boards; permanent delete when you mean it.
+- Swimlanes: split the board into rows by assignee, label, priority, status or department (each person picks their
+  own); drag a card to another lane to reassign, relabel or reprioritise it.
+- Time tracking: an estimate per card, a timer (one at a time, shown in the header) or time entered by hand, with
+  totals on the card, per person in Analytics and in the CSV export.
+- Select several cards (Ctrl/⌘- or Shift-click, or *Select* in a card's menu on phones) and move, label, assign,
+  date, prioritise, watch or archive them all at once.
 
 **Views**
 - Board, calendar (month and week) and Gantt chart for every board, plus a calendar across all your boards.
@@ -36,6 +42,7 @@ It works in English and Thai, in light and dark, and on phones, tablets and desk
   Telegram, LINE, ntfy, Gotify or any webhook, chosen by each person. Each person ticks what they want to hear about
   (assignments, @mentions, comments, due dates, and moves, status changes, edits, files or archiving of their cards).
   Boards can also post their activity to a team channel. The bell can clear notifications one by one or all at once.
+- Watch any card you can see to hear about it as if it were yours, without being assigned.
 - A "due soon" reminder per card: from 15 minutes to a week before the due date, or none (1 day by default).
 - A read-only public link for a board, for people without an account. The board's managers choose whether visitors
   also see comments and may download attachments, and can replace or turn off the link at any time.
@@ -51,11 +58,19 @@ It works in English and Thai, in light and dark, and on phones, tablets and desk
 - No public sign-up by default: admins create accounts. Set `ALLOW_SIGNUP=true` to let people register themselves,
   with email confirmation and, if you want, an admin's approval for each new account (waiting sign-ups arrive as one
   bundled notification).
+- Departments (Admin → Departments): put people in a department; it shows next to their name, and boards can be
+  split into lanes by department.
 - Super admins manage users; each board has its own roles (Owner, Admin, Editor, Commenter, Viewer, or your own)
   built from a permission matrix. A role can be limited to the cards its members created, and to the columns they
   may add cards to (pick one column to send every new card there).
 - Sign in with username or email, two-factor sign-in with an authenticator app (optional, or required for everyone
   under Admin → Security), password reset by email.
+- Single sign-on with Google, Microsoft Entra ID, Authentik, Keycloak, Authelia or any OpenID Connect provider
+  (Admin → Single sign-on). Existing accounts are matched by verified email address; with `ALLOW_SIGNUP` on, new people
+  get an account under the sign-up rules (optionally only from your email domains). Passwords keep working unless
+  you require single sign-on, and super admins always keep theirs, so a broken provider can't lock you out.
+- Personal API tokens (Profile → API) for scripts, read-only or read-write, with an expiry; the API reference is in
+  the app (Profile → API → API reference) and in [docs/api.md](docs/api.md).
 - Every file download is permission-checked by the app; the file store is never exposed to the internet.
 - Stored secrets (SMTP password, webhook tokens, 2FA secrets) are encrypted with a key only you hold.
 
@@ -94,7 +109,7 @@ docker compose up -d
 ```
 
 Open <http://localhost:8080>, enter the setup code, and create your admin account. It starts with a
-"👋 Getting started" board that walks through every feature.
+"👋 Getting started" board that walks through the main features.
 
 The first `docker compose up` downloads the ready-made image (x86-64 and ARM64, e.g. a Raspberry Pi). If it can't,
 it builds the app from this checkout instead, which takes a few minutes.
@@ -167,7 +182,7 @@ name: kanb
 
 services:
   app:
-    image: ghcr.io/jadepat-c/kanb:0.2          # 0.2.x updates; :latest for every release
+    image: ghcr.io/jadepat-c/kanb:0.4          # 0.4.x updates; :latest for every release
     restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
@@ -323,21 +338,26 @@ tar czf ~/kanb-backup-$(date +%F).tar.gz data .env      # sudo may be needed: th
 docker compose start
 ```
 
-To back up without stopping, dump the database and copy the files folder:
+To back up while Kanb keeps running, dump the database, then copy the files folder with only the file store
+paused for those few seconds (copied while it runs, files uploaded shortly before can be missing from the copy):
 
 ```bash
 docker compose exec -T db pg_dump -U kanb -Fc kanb > kanb-$(date +%F).dump
-tar czf kanb-files-$(date +%F).tar.gz data/files
+docker compose stop s3 && tar czf kanb-files-$(date +%F).tar.gz data/files; docker compose start s3
 ```
 
-To restore a dump into a fresh install (same `.env`), start only the database, load the dump, put `data/files`
-back, then start everything:
+To restore into a fresh install (same `.env`): put `data/files` back first (before anything has started, so the
+`data` folder is still yours to write to), start only the database, load the dump, then start everything:
 
 ```bash
-docker compose up -d db
+tar xzf kanb-files-2026-01-31.tar.gz
+docker compose up -d db --wait
 docker compose exec -T db pg_restore -U kanb -d kanb --clean --if-exists < kanb-2026-01-31.dump
 docker compose up -d
 ```
+
+`dev/upgrade-test.sh` and `tests/upgrade.py` in this repository check the same thing automatically: data, files,
+the stored SMTP password and two-factor sign-in all work after a restore or an upgrade.
 
 ## Upgrading
 
@@ -353,7 +373,9 @@ Admin → System shows the running version and the newest release. It asks GitHu
 admin has that page open (at most every 6 hours) and sends nothing about your server.
 
 Database changes are applied automatically when the app starts. To stay on a release, set `KANB_IMAGE` to a version
-tag such as `ghcr.io/jadepat-c/kanb:0.2`. Releases are listed on the [releases page](https://github.com/Jadepat-C/kanb/releases).
+tag such as `ghcr.io/jadepat-c/kanb:0.4` (fixes only) or an exact version such as `:0.4.0`. From 1.0 on, Kanb follows
+semantic versioning, and `:1` will follow every 1.x update safely. What changed in each release is in
+[CHANGELOG.md](CHANGELOG.md) and on the [releases page](https://github.com/Jadepat-C/kanb/releases).
 
 ## Admin commands
 
@@ -431,6 +453,16 @@ npm run dev                                   # http://localhost:5173, with live
   emails; usernames appear only where someone wrote an @mention), are marked `noindex`, and stop working when the board is archived, the link is replaced or turned off, or an
   admin turns public links off. The token is stored as is, so board managers can copy the link again later (anyone who
   can read the database can read the board anyway).
+- Single sign-on uses the authorization code flow with PKCE, `state` and `nonce`, bound to the browser by a
+  short-lived cookie, so a sign-in can't be replayed or finished in another browser. The ID token comes straight
+  from the provider's token endpoint over TLS (which is why the provider must use https); its issuer, audience,
+  expiry and nonce are checked. Accounts are tied to the provider's permanent user id; an email address links an
+  existing account only when the provider says it's verified. The client secret is encrypted like the SMTP password.
+- API tokens are random 256-bit values starting with `kanb_` (so secret scanners recognise leaked ones); only a hash is
+  stored. They act as their owner with the owner's board permissions, read-only tokens may only read, and no token
+  can manage tokens, passwords, two-factor sign-in, devices, single sign-on or the account's email address. A reset
+  password, an admin's "sign out everywhere", and turning on "Require single sign-on" (except for super admins)
+  revoke them. Other `Authorization` headers (a reverse proxy's Basic auth) are ignored.
 - Signing someone out (or deactivating them) also ends the live updates in tabs they already have open, within a
   minute. Sign-ins, failed sign-ins and admin actions are recorded in the activity log (Admin → Activity).
 

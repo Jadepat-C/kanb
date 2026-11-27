@@ -32,6 +32,8 @@ export function useBoard(boardId: string) {
     const createIn = d?.my_card_list_ids ? new Set(d.my_card_list_ids) : null
     const limited = (p: string) => own && OWN_SCOPED.has(p)
     return {
+      /** cards I watch */
+      watching: new Set(d?.watching ?? []),
       labels,
       members,
       statuses,
@@ -144,6 +146,7 @@ export function useBoardSocket(boardId: string, onChange?: (ev: ChangeEvent) => 
           if (ev.card_id) {
             qc.invalidateQueries({ queryKey: ['card', ev.card_id] })
             qc.invalidateQueries({ queryKey: ['timeline', ev.card_id] })
+            qc.invalidateQueries({ queryKey: ['time', ev.card_id] })
           }
           if (ev.kind === 'list') qc.invalidateQueries({ queryKey: ['archived-lists', boardId] })
           if (ev.kind === 'board' || ev.kind === 'board_deleted') qc.invalidateQueries({ queryKey: ['boards'] })
