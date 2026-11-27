@@ -63,8 +63,12 @@ def seed(path: str) -> None:
     st, sso = admin.call("GET", "/admin/sso")
     if st == 200 and isinstance(sso, dict):
         s["sso_secret"] = "sso-" + secrets.token_hex(8)
-        admin.ok("PUT", "/admin/sso", {"enabled": False, "issuer": "https://accounts.google.com", "client_id": "upgrade-client",
-                                       "client_secret": s["sso_secret"], "label": "Google", "allowed_domains": [], "trust_email": False, "require_sso": False})
+        provider = {"enabled": False, "issuer": "https://accounts.google.com", "client_id": "upgrade-client",
+                    "client_secret": s["sso_secret"], "label": "Google", "allowed_domains": [], "trust_email": False}
+        if "providers" in sso:  # 0.4.2 on: a list of providers
+            admin.ok("POST", "/admin/sso/providers", provider)
+        else:  # 0.4.0–0.4.1: one provider
+            admin.ok("PUT", "/admin/sso", dict(provider, require_sso=False))
 
     # a second person with two-factor sign-in (its secret is stored encrypted too)
     s["user"], s["password"] = "upgrade_" + secrets.token_hex(3), "Upgrade-" + secrets.token_hex(8)
