@@ -59,7 +59,9 @@ def seed(path: str) -> None:
                                      "from_name": "Kanb", "public_url": ""})
 
     # single sign-on as 0.4 stored it (one provider; versions before 0.4 have none)
-    if admin.call("GET", "/admin/sso")[0] == 200:
+    # (older versions answer unknown addresses with the web page, so look for a real answer)
+    st, sso = admin.call("GET", "/admin/sso")
+    if st == 200 and isinstance(sso, dict):
         s["sso_secret"] = "sso-" + secrets.token_hex(8)
         admin.ok("PUT", "/admin/sso", {"enabled": False, "issuer": "https://accounts.google.com", "client_id": "upgrade-client",
                                        "client_secret": s["sso_secret"], "label": "Google", "allowed_domains": [], "trust_email": False, "require_sso": False})
